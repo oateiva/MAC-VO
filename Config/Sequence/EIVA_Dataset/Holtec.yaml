@@ -1,0 +1,10 @@
+type: EIVA_NoIMU
+name: abf001
+args:
+  root: D:\Datasets\mac-vio\Holtec\Holtec_20250314T135422
+  # Controls optional data sources
+  gtDepth: false
+  gtFlow: false
+  gtPose: true
+
+  compressed: true

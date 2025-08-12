@@ -1,0 +1,10 @@
+type: EIVA_NoIMU
+name: abf001
+args:
+  root: D:\Datasets\mac-vio\OREC_CPS\OREC_CPS
+  # Controls optional data sources
+  gtDepth: false
+  gtFlow: false
+  gtPose: true
+
+  compressed: true

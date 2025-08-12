@@ -12,7 +12,7 @@ def mean(data: Iterable[float]) -> float:
     data = list(data)  # Convert iterable to list to allow multiple passes
     if not data:
         raise ValueError("mean() arg is an empty sequence")  # Handle empty input
-    
+
     return sum(data) / len(data)  # Compute mean
 
 
@@ -21,9 +21,15 @@ NEED_ALIGN_SCALE: dict[str, Literal["Dynamic"] | float] = {
     "droid"        : "Dynamic",
     "tartanvo_mono": "Dynamic",
     "mast3r"       : "Dynamic",
+
 }
 
-def EvaluateSequences(spaces: list[str], correct_scale=False):
+def EvaluateSequences(
+        spaces: list[str],
+        correct_scale=False,
+        align_origin=True,
+        align=True
+        ):
     eval_results = []
     DECORATOR = "[S]" if correct_scale else ""
 
@@ -50,10 +56,10 @@ def EvaluateSequences(spaces: list[str], correct_scale=False):
                 else: est_traj.data = est_traj.data.scale(scale)
                 break
 
-            ate_res = evaluateATE(gt_traj.data.as_evo, est_traj.data.as_evo, correct_scale=correct_scale)
-            rte_res = evaluateRTE(gt_traj.data.as_evo, est_traj.data.as_evo, correct_scale=correct_scale)
-            roe_res = evaluateROE(gt_traj.data.as_evo, est_traj.data.as_evo, correct_scale=correct_scale)
-            rpe_res = evaluateRPE(gt_traj.data.as_evo, est_traj.data.as_evo, correct_scale=correct_scale)
+            ate_res = evaluateATE(gt_traj.data.as_evo, est_traj.data.as_evo, correct_scale=correct_scale, align_origin=align_origin, align=align)
+            rte_res = evaluateRTE(gt_traj.data.as_evo, est_traj.data.as_evo, correct_scale=correct_scale, align_origin=align_origin, align=align)
+            roe_res = evaluateROE(gt_traj.data.as_evo, est_traj.data.as_evo, correct_scale=correct_scale, align_origin=align_origin, align=align)
+            rpe_res = evaluateRPE(gt_traj.data.as_evo, est_traj.data.as_evo, correct_scale=correct_scale, align_origin=align_origin, align=align)
             eval_results.append(
                 [
                     est_traj.name,
@@ -97,10 +103,12 @@ if __name__ == "__main__":
     args = argparse.ArgumentParser()
     args.add_argument("--spaces", type=str, nargs="+", default=[])
     args.add_argument("--correctScale", action="store_true")
+    args.add_argument("--alignOrigin", action="store_true", help="Align origin of estimated trajectory to ground truth.")
+    args.add_argument("--align", action="store_true", help="Align estimated trajectory to ground truth.")
     args.add_argument("--recursive", action="store_true", help="Find and evaluate on leaf sandboxes only.")
     args.add_argument("--csv", type=str, default=None, required=False)
     args = args.parse_args()
-    
+
     if args.recursive:
         spaces = []
         for space in args.spaces:
@@ -110,9 +118,10 @@ if __name__ == "__main__":
         spaces = args.spaces
 
     eval_header, eval_results = EvaluateSequences(
-        spaces, correct_scale=args.correctScale
+        spaces, correct_scale=args.correctScale,
+        align_origin=args.alignOrigin, align=args.align
     )
-    
+
     print_as_table(eval_header, eval_results, sort_rows=lambda row: row[0])
 
     if args.csv is not None:

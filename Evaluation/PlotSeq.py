@@ -2,7 +2,8 @@ import argparse
 from pathlib import Path
 from typing import Literal
 
-from Utility.Plot import getColor, AnalyzeRotation, AnalyzeTranslation, PlotTrajectory, AnalyzeRTE_cdf, AnalyzeROE_cdf
+from Utility.Plot import getColor, AnalyzeRotation, AnalyzeTranslation, \
+      PlotTrajectory, AnalyzeRTE_cdf, AnalyzeROE_cdf
 from Utility.PrettyPrint import ColoredTqdm, Logger
 from Utility.Sandbox import Sandbox
 from Utility.Trajectory import Trajectory
@@ -12,10 +13,16 @@ NEED_ALIGN_SCALE: dict[str, Literal["Dynamic"] | float] = {
     "droid"        : "Dynamic",
     "tartanvo_mono": "Dynamic",
     "mast3r"       : "Dynamic",
+    "macvo"        : "Dynamic",
 }
 
 
-def plot_separately(spaces: list[str]):
+def plot_separately(
+        spaces: list[str],
+        correct_scale: bool = False,
+        align_origin: bool = True,
+        align: bool = False
+        ):
     for spaceid in ColoredTqdm(spaces, desc="Plotting"):
         exp_space = Sandbox.load(spaceid)
         config = exp_space.config
@@ -28,16 +35,20 @@ def plot_separately(spaces: list[str]):
                 return
 
             gt_traj.plot_kwargs  |= {"linewidth": 3, "linestyle": ":"}
-            
+
             for key, scale in NEED_ALIGN_SCALE.items():
                 if key not in est_traj.name.lower(): continue
-                
+
                 Logger.write("info", f"{est_traj} --[align_scale={scale}]-> {gt_traj}")
-                if scale == "Dynamic": est_traj.data = est_traj.data.align_scale(gt_traj.data)
+                if scale == "Dynamic" and correct_scale and not align:
+                    est_traj.data = est_traj.data.align_scale(gt_traj.data, correct_scale=correct_scale, align=align)
+                elif scale == "Dynamic" and align:
+                    est_traj.data = est_traj.data.evo_align(gt_traj.data, correct_scale=correct_scale)
                 else: est_traj.data = est_traj.data.scale(scale)
                 break
 
-            est_traj.data = est_traj.data.align_origin(gt_traj.data)
+            if align_origin:
+                est_traj.data = est_traj.data.align_origin(gt_traj.data)
             name = config.Project if hasattr(config, "Project") else est_traj.name
             AnalyzeTranslation(
                 [(gt_traj.apply(lambda traj: traj.as_motion), est_traj.apply(lambda traj: traj.as_motion))],
@@ -47,62 +58,76 @@ def plot_separately(spaces: list[str]):
                 [(gt_traj.apply(lambda traj: traj.as_motion), est_traj.apply(lambda traj: traj.as_motion))],
                 Path("Results", f"{name}_RotationErr.png")
             )
-            PlotTrajectory([gt_traj, est_traj], Path("Results", f"{name}_Trajectory.png"))
+            PlotTrajectory([gt_traj, est_traj], Path(spaces[0], f"{name}_Trajectory.png"))
         except Exception as e:
             Logger.show_exception()
 
 
-def plot_jointly(spaces: list[str]):
+def plot_jointly(
+        spaces: list[str],
+        correct_scale: bool = False,
+        align_origin: bool = True,
+        align: bool = False
+        ):
     trajs = [Trajectory.from_sandbox(Sandbox.load(space)) for space in spaces]
 
     for idx, (gt_traj, est_traj) in enumerate(trajs):
         est_traj.plot_kwargs |= {"color": getColor("-", (idx * 2) % 7, 0)}
         gt_traj.plot_kwargs  |= {"linewidth": 4, "linestyle": "--"}
-        
+
         for key, scale in NEED_ALIGN_SCALE.items():
             if key not in est_traj.name.lower(): continue
-            
+
             Logger.write("info", f"{est_traj} --[align_scale={scale}]-> {gt_traj}")
-            if scale == "Dynamic": est_traj.data = est_traj.data.align_scale(gt_traj.data)
+            if scale == "Dynamic" and correct_scale and not align:
+                est_traj.data = est_traj.data.align_scale(gt_traj.data)
+            elif scale == "Dynamic" and align:
+                est_traj.data = est_traj.data.evo_align(gt_traj.data, correct_scale=correct_scale)
             else: est_traj.data = est_traj.data.scale(scale)
             break
-        
-        est_traj.data = est_traj.data.align_origin(gt_traj.data)
+        if align_origin:
+            est_traj.data = est_traj.data.align_origin(gt_traj.data)
 
     gt_traj, est_trajs = trajs[0][0], [est for _, est in trajs]
-    PlotTrajectory([gt_traj] + est_trajs, Path("Results", f"{gt_traj.name}_Compare.png"))
-    
+    for space in spaces:
+        PlotTrajectory([gt_traj] + est_trajs, Path(space, f"{gt_traj.name}_Compare.png"))
+
     trajs_motion = [
         (gt_traj.apply(lambda x: x.as_motion), est_traj.apply(lambda x: x.as_motion))
         for (gt_traj, _), est_traj in zip(trajs, est_trajs)
     ]
-    
-    AnalyzeTranslation(
-        trajs_motion,
-        Path("Results", f"Combined_trel.png")
-    )
-    AnalyzeRotation(
-        trajs_motion,
-        Path("Results", f"Combined_rrel.png")
-    )
-    AnalyzeRTE_cdf(
-        trajs_motion,
-        None,
-        Path("Results", f"Combined_RTEcdf.png")
-    )
-    AnalyzeROE_cdf(
-        trajs_motion,
-        None,
-        Path("Results", f"Combined_ROEcdf.png")
-    )
+
+    for space in spaces:
+
+        AnalyzeTranslation(
+            trajs_motion,
+            Path(space, f"Combined_trel.png")
+        )
+        AnalyzeRotation(
+            trajs_motion,
+            Path(space, f"Combined_rrel.png")
+        )
+        AnalyzeRTE_cdf(
+            trajs_motion,
+            None,
+            Path(space, f"Combined_RTEcdf.png")
+        )
+        AnalyzeROE_cdf(
+            trajs_motion,
+            None,
+            Path(space, f"Combined_ROEcdf.png")
+        )
 
 
 if __name__ == "__main__":
-    args = argparse.ArgumentParser()
-    args.add_argument("--spaces", type=str, nargs="+", default=[])
-    args.add_argument("--recursive", action="store_true", help="Find and evaluate on leaf sandboxes only.")
-    args = args.parse_args()
-    
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--spaces", type=str, nargs="+", default=[])
+    parser.add_argument("--correctScale", action="store_true")
+    parser.add_argument("--alignOrigin", action="store_true", help="Align origin of estimated trajectory to ground truth.")
+    parser.add_argument("--align", action="store_true", help="Align estimated trajectory to ground truth.")
+    parser.add_argument("--recursive", action="store_true", help="Find and evaluate on leaf sandboxes only.")
+    args = parser.parse_args()
+
     if args.recursive:
         spaces = []
         for space in args.spaces:
@@ -110,5 +135,5 @@ if __name__ == "__main__":
         Logger.write("info", f"Found {len(spaces)} spaces to plot.")
     else:
         spaces = args.spaces
-    plot_separately(spaces)
-    plot_jointly(spaces)
+    plot_separately(spaces, args.correctScale, args.alignOrigin, args.align)
+    plot_jointly(spaces, args.correctScale, args.alignOrigin, args.align)

@@ -107,13 +107,12 @@ class Trajectory:
         gt_traj.time  = gt_traj.time - gt_traj.time[0]   #FIXME: this is only fore debugging purpose
         est_traj.time = est_traj.time - est_traj.time[0] #FIXME: this is only fore debugging purpose
         
-        match align_time:
-            case "est->gt":
-                est_traj = est_traj.align_time(gt_traj.time)
-            case "gt->est":
-                gt_traj  = gt_traj.align_time(est_traj.time)
-            case None:
-                pass
+        if align_time == "est->gt":
+            est_traj = est_traj.align_time(gt_traj.time)
+        elif align_time == "gt->est":
+            gt_traj  = gt_traj.align_time(est_traj.time)
+        elif align_time is None:
+            pass
 
         est_name = box.config.Project if hasattr(box.config, "Project") else box.folder.parent.name
         return Plotable(gt_traj, "Ref",  dict()), Plotable(est_traj, est_name, dict())
@@ -180,9 +179,14 @@ class Trajectory:
         result = self_evo.align(ref_evo, correct_scale=False)
         return Trajectory.from_evo(self_evo, self.frame_status)
 
+    def evo_align(self, ref_traj: Trajectory, correct_scale=False) -> Trajectory:
+        self_evo, ref_evo = self.as_evo, ref_traj.as_evo
+        self_evo.align(ref_evo, correct_scale=correct_scale)
+        return Trajectory.from_evo(self_evo)
+
     def align_scale(self, ref_traj: Trajectory) -> Trajectory:
         self_evo, ref_evo = self[~self.frame_status].as_evo, ref_traj[~self.frame_status].as_evo
-        _, _, scale = self_evo.align(ref_evo, correct_scale=True, correct_only_scale=True)
+        _, _, scale = self_evo.align(ref_evo, correct_scale=True, correct_only_scale=False)
         return self.scale(scale)
     
     def align_origin(self, ref_traj: Trajectory) -> Trajectory:
