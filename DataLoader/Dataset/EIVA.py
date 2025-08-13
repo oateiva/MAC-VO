@@ -118,6 +118,8 @@ class EIVA_StereoSequence(SequenceBase[StereoFrame]):
         else:
             self.gt_poses = None
 
+        length = len(self.lcam_loader)
+
         super().__init__(length)
 
     def __getitem__(self, local_index: int) -> StereoFrame:
