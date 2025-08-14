@@ -16,3 +16,12 @@ VBR_Stereo:
       height: 640
       width : 640
       interp: nearest
+EIVA_NoIMU:
+  - type: SmartResizeFrame
+    args: 
+      height: 480
+      width : 640
+      interp: nearest
+  # - type: AddImageNoise
+  #   args:
+  #     stdv: 150
