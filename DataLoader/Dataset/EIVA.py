@@ -8,10 +8,112 @@ from typing import Any, cast
 from pathlib import Path
 from torch.utils.data import Dataset
 from Utility.PrettyPrint import Logger
+from django.db.models import QuerySet, OuterRef, Subquery
 
-from DataLoader.Transform import IDataTransform
 from ..SequenceBase import SequenceBase
 from ..Interface    import StereoFrame, StereoData
+from ..Django_Sequence import DjangoORMSequence, ensure_django
+
+
+
+
+class EIVA_StereoSequenceORM(DjangoORMSequence[StereoFrame]):
+    def __init__(self, config: dict | Any):
+        # Metadata
+        self.lcam_T_BS = pp.identity_SE3(1)
+        self.lcam_K    = torch.tensor([
+            [1847.5905420747683, 0.0, 1391.3],
+            [0.0, 1847.5905420747683, 1407.177],
+            [0.0, 0.0, 1.0]]).unsqueeze(0)
+        self.baseline  = 0.17007674086397787
+        self.width     = 2816
+        self.height    = 2816
+
+        super().__init__(config)
+
+    # ---------- queryset definition ----------
+    def build_queryset(self, config: dict | Any) -> QuerySet:
+        """
+        Returns rows that uniquely define a stereo pair in order.
+        """
+        ensure_django()
+        from annotationserver.sequence_data.models import SequenceImage
+
+        seq_names = getattr(config, "sequence_camera_names", None)
+        nav_names = getattr(config, "navigation_names", None)
+
+        qs: QuerySet = SequenceImage.objects.all()
+
+        if nav_names:
+            qs = qs.filter(sequence__navigation__name__in=nav_names)
+        if seq_names:
+            # qs = qs.filter(sequence__name__in=seq_names)
+            qs_left = qs.filter(sequence__name__in=[seq_names[0]]).order_by("datetime", "pk")
+            qs_right = qs.filter(sequence__name__in=[seq_names[1]]).order_by("datetime", "pk") if len(seq_names) > 1 else None
+
+        # Make sure your model relates left/right images or you can derive a pair
+        # qs = qs.exclude(image__isnull=True).order_by("datetime", "pk")
+        if qs_left is not None and qs_right is not None:
+            # Annotate each left image with all right images having the same timestamp
+            paired_qs = (
+                qs_left
+                .annotate(
+                    right_id=Subquery(
+                        qs_right.filter(datetime=OuterRef("datetime")).values("pk")[:1]
+                    ),
+                    right_image_path=Subquery(
+                        qs_right.filter(datetime=OuterRef("datetime")).values("image__path")[:1]
+                    ),
+                )
+                .filter(right_id__isnull=False)
+                .order_by("datetime", "pk")
+            )
+            qs = paired_qs
+        return qs
+
+    def default_ordering(self) -> str:
+        return "datetime"
+
+    def optimize_fetch(self, queryset: QuerySet) -> QuerySet:
+        # Pull only what you need and follow FKs in one query
+        return (queryset
+                .select_related("image")
+                .only("pk", "datetime", "image__path"))
+
+    # ---------- mapping ----------
+    def record_to_frame(self, row: "SequenceImage", *, local_index: int, original_index: int) -> StereoFrame:
+        # timestamps (ensure ns)
+        t = row.datetime  # datetime.time
+        ns = ((t.hour * 3600) + (t.minute * 60) + t.second) * int(1e9) + t.microsecond * 1000
+
+        imgL = self._read_path_to_tensor(row.image.path)
+        imgR = self._read_path_to_tensor(row.right_image_path)
+
+        B, C, H, W = imgL.shape
+        return StereoFrame(
+            idx=[local_index],
+            stereo=StereoData(
+                T_BS=self.lcam_T_BS,
+                K=self.lcam_K,
+                baseline=torch.tensor([self.baseline], dtype=torch.float32),
+                time_ns=[ns],
+                height=H, width=W,
+                imageL=imgL,  # (1,C,H,W)
+                imageR=imgR,
+                gt_depth=None, gt_flow=None, flow_mask=None,
+            ),
+            time_ns=[ns],
+            gt_pose=None,  # fill from your pose table if available
+        )
+
+    # ---------- helpers ----------
+    @staticmethod
+    def _read_path_to_tensor(path: str) -> torch.Tensor:
+        img = cv2.imread(path, cv2.IMREAD_COLOR)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        ten = torch.tensor(img, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0)
+        ten /= 255.
+        return ten
 
 
 class EIVA_StereoSequence(SequenceBase[StereoFrame]):

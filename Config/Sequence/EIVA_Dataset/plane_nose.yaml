@@ -1,4 +1,4 @@
-type: EIVA_NoIMU
+type: EIVA_StereoSequenceORM
 name: abf001
 args:
   root: D:\Datasets\mac-vio\plane_nose
@@ -6,5 +6,7 @@ args:
   gtDepth: false
   gtFlow: false
   gtPose: true
+  navigation_names: [plane_nose]
+  sequence_camera_names: [left, right]
 
   compressed: true

@@ -169,10 +169,10 @@ class DataFrame(Collatable):
     idx: list[int]
     # Ground truth pose under body frame
     gt_pose  : pp.LieTensor | None = None   # pp.SE3 of shape Bx7
-    
+
     # Time in nanoseconds
     time_ns  : list[int]
-    
+
     @property
     def frame_idx(self) -> int:
         assert len(self.idx) == 1, "frame_idx property is only valid on unbatched data"

@@ -78,7 +78,7 @@ class SequenceBase(IterableDataset[T_Data], ABC, ConfigTestableSubclass):
 class PreloadedSequence(SequenceBase[T_Data]):
     def __init__(self, generic_seq: SequenceBase[T_Data]):
         self.sequence = generic_seq
-        
+
         Logger.write("info", f"Preloading {self.sequence}")
         with ThreadPoolExecutor(max_workers=2 * mp.cpu_count()) as exc:
             frames = list(exc.map(self.sequence.__getitem__, [_ for _ in range(len(self.sequence))]))
@@ -88,7 +88,7 @@ class PreloadedSequence(SequenceBase[T_Data]):
     def __getitem__(self, local_index: int) -> T_Data:
         index = self.get_index(local_index)
         return self._framebuffer[index]
-    
+
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
         raise KeyError("This sequence class should never be called in config directly. It is meant to be"
