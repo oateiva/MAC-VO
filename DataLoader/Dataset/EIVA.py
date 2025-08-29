@@ -1,8 +1,10 @@
 import cv2
+import re
 import torch
 import numpy as np
 import pypose as pp
 import roma
+import datetime
 from types import SimpleNamespace
 from typing import Any, cast
 from pathlib import Path
@@ -15,6 +17,28 @@ from ..Interface    import StereoFrame, StereoData
 from ..Django_Sequence import DjangoORMSequence, ensure_django
 
 
+def zephyr_filename_to_ns(filename):
+    # Extract timestamp from filename
+    match1 = re.search(r'(\d{4}-\d{2}-\d{2}T\d{6}\.\d+)', filename)
+    match2 = re.search(r'(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d+)', filename)
+    if match1:
+        timestamp_str = match1.group(0)
+        timestamp_dt = datetime.datetime.strptime(
+            timestamp_str,
+            '%Y-%m-%dT%H%M%S.%f'
+        )
+        nanoseconds = float(timestamp_dt.timestamp() * 1e9)
+    elif match2:
+        timestamp_str = match2.group(0)
+        timestamp_dt = datetime.datetime.strptime(
+            timestamp_str,
+            '%Y-%m-%dT%H-%M-%S-%f'
+        )
+        nanoseconds = float(timestamp_dt.timestamp() * 1e9)
+    else:
+        raise ValueError(f"Could not extract timestamp from filename: {filename}")  # noqa
+
+    return nanoseconds
 
 
 class EIVA_StereoSequenceORM(DjangoORMSequence[StereoFrame]):
@@ -26,8 +50,6 @@ class EIVA_StereoSequenceORM(DjangoORMSequence[StereoFrame]):
             [0.0, 1847.5905420747683, 1407.177],
             [0.0, 0.0, 1.0]]).unsqueeze(0)
         self.baseline  = 0.17007674086397787
-        self.width     = 2816
-        self.height    = 2816
 
         super().__init__(config)
 
@@ -115,7 +137,6 @@ class EIVA_StereoSequenceORM(DjangoORMSequence[StereoFrame]):
         ten /= 255.
         return ten
 
-
 class EIVA_StereoSequence(SequenceBase[StereoFrame]):
     @classmethod
     def name(cls) -> str: return "EIVA_NoIMU"
@@ -138,12 +159,11 @@ class EIVA_StereoSequence(SequenceBase[StereoFrame]):
         self.lcam_loader = EIVAMonocularDataset(Path(cfg.root, "processed", "left"))
         self.rcam_loader = EIVAMonocularDataset(Path(cfg.root, "processed", "right"))
 
-        cam_time_file_path = Path(cfg.root, "imu", "cam_time.npy")
-        if cam_time_file_path.exists():
-            self.lcam_time = (np.load(str(cam_time_file_path)) * 1_000_000_000).astype(np.int64)
-        else:
-            # Fake data, assume 10Hz image
-            self.lcam_time = (np.arange(len(self.lcam_loader)) * 0.1 * 1_000_000_000).astype(np.int64)
+        cam_time_file_path = Path(cfg.root, "processed", "left")
+        # list all files in dir
+        cam_files = list(cam_time_file_path.glob("*.jpg"))
+        cam_files.sort()
+        self.lcam_time = [zephyr_filename_to_ns(f.name) for f in cam_files]
 
         # Pose Loader
         if cfg.gtPose:
@@ -164,7 +184,7 @@ class EIVA_StereoSequence(SequenceBase[StereoFrame]):
                 T_BS      = self.lcam_T_BS,
                 K         = self.lcam_K,
                 baseline  = torch.tensor([self.baseline]),
-                time_ns   = [self.lcam_time[index].item()],  # Fake data, assume 10Hz image
+                time_ns   = [self.lcam_time[index]],
                 height    = 2816,
                 width     = 2816,
                 imageL    = self.lcam_loader[index],
@@ -175,7 +195,7 @@ class EIVA_StereoSequence(SequenceBase[StereoFrame]):
                 gt_flow   = None,
                 flow_mask = None,
             ),
-            time_ns   = [self.lcam_time[index].item()],  # Fake data, assume 10Hz image
+            time_ns   = [self.lcam_time[index]],
             gt_pose   = cast(pp.LieTensor, self.gt_poses[index].unsqueeze(0)) if (self.gt_poses is not None) else None,
         )
 
