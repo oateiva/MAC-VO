@@ -4,6 +4,8 @@ import typing as T
 import pypose as pp
 import numpy  as np
 import torch
+from flow_vis import flow_to_color
+from Module.Map.Template import MatchObs
 
 try:
     import rerun as rr
@@ -18,11 +20,11 @@ T_Output  = T.TypeVar("T_Output")
 
 # NOTE: Since rerun does not ensure compatibilty between different versions,
 #       We explicitly constrain the version of rerun sdk
-if (rr is not None) and (rr.__version__ <= "0.20.0"):
-    Logger.write("warn", f"Please re-install rerun_sdk to have version of 0.20.0. Current version is {rr.__version__}")
+if (rr is not None) and (rr.__version__ <= "0.24.0"):
+    Logger.write("warn", f"Please re-install rerun_sdk to have version of 0.24.0. Current version is {rr.__version__}")
     rr = None
 
-class Rerun_Visualizer:    
+class Rerun_Visualizer:
     func_mode: T.ClassVar[dict[str, T_Mode | T.Literal["default"]]] = dict()
     default_mode: T.ClassVar[T_Mode] = "none"
     
@@ -30,7 +32,6 @@ class Rerun_Visualizer:
     def init_connect(application_id: str):
         assert rr is not None, "Can't initialize rerun since rerun is not installed or have incorrect version."
         rr.init(application_id, spawn=True)
-        rr.connect_tcp()
         rr.log("/", rr.ViewCoordinates(xyz=rr.ViewCoordinates.FRD), static=True)
     
     @staticmethod
@@ -161,3 +162,49 @@ class Rerun_Visualizer:
         if np_image.dtype != np.uint8:
             np_image = (np_image * 255).astype(np.uint8)
         rr.log(rerun_path, rr.Image(np_image).compress())
+
+    @register
+    @staticmethod
+    def log_flow(rerun_path: str, flow: torch.Tensor | np.ndarray):
+        assert rr is not None
+        if isinstance(flow, torch.Tensor): np_flow = flow.cpu().numpy()
+        else: np_flow = flow
+        # Convert flow to color for visualization
+        # We use the standard flow visualization method where hue represents 
+        # the flow direction,
+        # and saturation represents the flow magnitude.
+        # The color wheel corresponds to the one in
+        # http://vision.middlebury.edu/flow/flowEval-iccv07.pdf
+        flow_img = flow_to_color(np_flow, convert_to_bgr=False)
+        rr.log(rerun_path, rr.Image(flow_img).compress())
+
+    @register
+    @staticmethod
+    def log_flow_covar(rerun_path: str, flow_cov: torch.Tensor):
+        assert rr is not None
+        # To visualize the covariance of the optical flow, we compute the determinant of the covariance matrix
+        # and take the logarithm to enhance visibility. The determinant gives a measure of the uncertainty
+        # associated with the flow vectors.
+        # We then use a colormap to represent the uncertainty visually.
+        flow_cov_det = (flow_cov[:, 0] * flow_cov[:, 1] - flow_cov[:, 2].square())[0].log10()
+        rr.log(rerun_path, rr.DepthImage(flow_cov_det, colormap=4))
+
+    @register
+    @staticmethod
+    def log_keypoints(rerun_path: str, match_obs: MatchObs):
+        assert rr is not None
+        # Generate the radii based on the uncertainty (covariance) of the keypoints
+        # The radii size is inversely proportional to the uncertainty
+        # radii = 1 / (cov_u**2 + cov_v**2), normalized to [0, 4]
+        radii = 1 / \
+            (match_obs.data["pixel2_uv_cov"][:, 0]**2+match_obs.data["pixel2_uv_cov"][:, 1]**2)
+        if radii.numel() > 0:
+            radii = 4 * radii / radii.max(dim=0).values
+        rr.log(
+            rerun_path,
+            rr.Points2D(
+                match_obs.data["pixel2_uv"],
+                colors=match_obs.data["pixel2_uv_cov"]*255,
+                radii=radii
+            )
+        )

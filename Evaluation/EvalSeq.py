@@ -21,7 +21,8 @@ NEED_ALIGN_SCALE: dict[str, Literal["Dynamic"] | float] = {
     "droid"        : "Dynamic",
     "tartanvo_mono": "Dynamic",
     "mast3r"       : "Dynamic",
-
+    "macvo"        : "Dynamic",
+    "eiva"         : "Dynamic",
 }
 
 def EvaluateSequences(

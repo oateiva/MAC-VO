@@ -1,4 +1,6 @@
 import torch
+import rerun as rr
+from Utility.Visualize import rr_plt
 import pypose as pp
 import typing as T
 from types import SimpleNamespace
@@ -292,6 +294,11 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         self.graph.match2frame2.set(match_idx    , torch.empty((num_match_kp,), dtype=torch.long).fill_(frame_idx.item()     ))    # Associate match -> frame2
 
         # Visualization #################################################################
+        rr.set_time("frame_idx", sequence=int(frame_idx.cpu().item()))
+        rr_plt.log_flow(
+            "/world/macvo/cam_left/optical_flow",
+            match01.flow[0].detach().permute(1, 2, 0))
+        rr_plt.log_flow_covar("/world/macvo/cam_left/optical_flow_covar", match01.cov)
         fig_plt.plot_imatcher("matching", match01, frame0, frame1)
         fig_plt.plot_istereo ("stereo_d", depth1 , frame1)
         fig_plt.plot_macvo   ("macvo_kp", match_obs, depth1, match01, frame0, frame1)
@@ -309,14 +316,14 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
             self.Optimizer.start_optimize(
                 self.Optimizer.get_graph_data(self.graph, frame_idx)
             )
-        
+
         # Add (dense) mapping points to the map #########################################
         if self.mapping:
             map0_uv       = self.MappointSelector.select_point(frame0.stereo, 2000, depth0, depth1, match01)
             num_kp        = map0_uv.size(0)
             map0_d        = self.Frontend.retrieve_pixels(map0_uv, depth0.depth).squeeze(0)
             map0_Tc       = pixel2point_NED(map0_uv, map0_d, frame0.stereo.frame_K).cpu()
-            
+
             map0_sigma_dd = self.Frontend.retrieve_pixels(map0_uv, depth0.cov)
             map0_sigma_dd = map0_sigma_dd.squeeze(0) if (map0_sigma_dd is not None) else None
             map0_sigma_uv = torch.ones((num_kp, 3), device=self.device) * self.match_cov_default

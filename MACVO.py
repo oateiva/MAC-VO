@@ -17,23 +17,25 @@ from Utility.Timer import Timer
 
 
 def VisualizeRerunCallback(frame: StereoFrame, system: MACVO, pb: ColoredTqdm):
-    rr.set_time_sequence("frame_idx", frame.frame_idx)
-    
+    rr.set_time("frame_idx", sequence=frame.frame_idx)
+
     # Non-key frame does not need visualization
     if system.graph.frames.data["need_interp"][-1]: return
-    
+
     if frame.frame_idx > 0:    
         rr_plt.log_trajectory("/world/est", pp.SE3(system.graph.frames.data["pose"].tensor))
-    
+
     rr_plt.log_camera("/world/macvo/cam_left", pp.SE3(system.graph.frames.data["pose"][-1]), system.graph.frames.data["K"][-1])
-    rr_plt.log_image ("/world/macvo/cam_left", frame.stereo.imageL[0].permute(1, 2, 0))
-    
+    rr_plt.log_image ("/world/macvo/cam_left/rgb", frame.stereo.imageL[0].permute(1, 2, 0))
+    match_obs = system.graph.get_frame2match(system.graph.frames[-1:])
+    rr_plt.log_keypoints("/world/macvo/cam_left/kpts", match_obs)
+
     map_points = system.graph.get_frame2map(system.graph.frames[-1:])
     rr_plt.log_points("/world/point_cloud", map_points.data["pos_Tw"], map_points.data["color"], map_points.data["cov_Tw"], "sphere")
-    
+
     vo_points  = system.graph.get_match2point(system.graph.get_frame2match(system.graph.frames[-1:]))
     rr_plt.log_points("/world/vo_tracking", vo_points.data["pos_Tw"], vo_points.data["color"], vo_points.data["cov_Tw"], "sphere")
-    
+
 
 def VisualizeVRAMUsage(frame: StereoFrame, system: MACVO, pb: ColoredTqdm):
     if torch.cuda.is_available():
@@ -43,6 +45,7 @@ def VisualizeVRAMUsage(frame: StereoFrame, system: MACVO, pb: ColoredTqdm):
         allocated_memory = "N/A"
     
     pb.set_description(desc=f"{system.graph}, VRAM={allocated_memory}")
+
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -120,7 +123,7 @@ if __name__ == "__main__":
     if args.useRR:
         rr_plt.default_mode = "rerun"
         rr_plt.init_connect(project_name)
-    
+
     Timer.setup(active=args.timing)
     fig_plt.default_mode = "image" if args.saveplt else "none"
 
@@ -133,26 +136,26 @@ if __name__ == "__main__":
         SequenceBase[StereoFrame].instantiate(datacfg.type, datacfg.args).clip(args.seq_from, args.seq_to),
         cfg.Preprocess
     )
-    
+
     if args.preload:
         sequence = sequence.preload()
-    
+
     system = MACVO[StereoFrame].from_config(asNamespace(exp_space.config))
     system.receive_frames(sequence, exp_space, on_frame_finished=onFrameFinished)
-    
+
     rr_plt.log_trajectory("/world/est"  , torch.tensor(np.load(exp_space.path("poses.npy"))[:, 1:]))
     try:
-        rr_plt.log_points    ("/world/point_cloud", 
+        rr_plt.log_points    ("/world/point_cloud",
                                 system.get_map().map_points.data["pos_Tw"].tensor,
                                 system.get_map().map_points.data["color"].tensor,
                                 system.get_map().map_points.data["cov_Tw"].tensor,
                                 "color")
     except RuntimeError:
         Logger.write("warn", "Unable to log full pointcloud - is mapping mode on?")
-    
+
     Timer.report()
     Timer.save_elapsed(exp_space.path("elapsed_time.json"))
 
     if not args.noeval:
-        header, result = EvaluateSequences([str(exp_space.folder)], correct_scale=False)
+        header, result = EvaluateSequences([str(exp_space.folder)], align=True, align_origin=False)
         print_as_table(header, result)
