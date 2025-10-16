@@ -1,7 +1,7 @@
 type: EIVA_NoIMU
-name: abf001
+name: plane_tail2
 args:
-  root: D:\Datasets\mac-vio\plane_tail1
+  root: D:\Datasets\EIVA\Voyis\plane_tail2
   # Controls optional data sources
   gtDepth: false
   gtFlow: false

@@ -1,5 +1,5 @@
-type: EIVA_StereoSequenceORM
-name: abf001
+type: EIVA_NoIMU
+name: plane_nose
 args:
   root: D:\Datasets\mac-vio\plane_nose
   # Controls optional data sources

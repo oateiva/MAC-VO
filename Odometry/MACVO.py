@@ -294,7 +294,7 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         self.graph.match2frame2.set(match_idx    , torch.empty((num_match_kp,), dtype=torch.long).fill_(frame_idx.item()     ))    # Associate match -> frame2
 
         # Visualization #################################################################
-        rr.set_time("frame_idx", sequence=int(frame_idx.cpu().item()))
+        rr.set_time("frame_idx", sequence=int(frame_idx.cpu().item())-1)
         rr_plt.log_flow(
             "/world/macvo/cam_left/optical_flow",
             match01.flow[0].detach().permute(1, 2, 0))

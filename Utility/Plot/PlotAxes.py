@@ -75,7 +75,7 @@ def plot_scalarmap(ax: Axes, data: torch.Tensor | np.ndarray | None, vmin: float
     return ax
 
 @as_chain_func
-@IgnoreException
+# @IgnoreException
 def plot_flow(ax: Axes, flow: torch.Tensor | None | np.ndarray) -> Axes:
     """
     Expect Shape and range:

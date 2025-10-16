@@ -1,7 +1,7 @@
 type: EIVA_NoIMU
-name: Holtec
+name: Welland
 args:
-  root: D:\Datasets\mac-vio\Holtec\Holtec_20250314T135422
+  root: D:\Datasets\EIVA\Voyis\Welland_test_first_dive
   # Controls optional data sources
   gtDepth: false
   gtFlow: false

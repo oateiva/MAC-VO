@@ -1,7 +1,7 @@
 type: EIVA_NoIMU
-name: Holtec
+name: long_ladder
 args:
-  root: D:\Datasets\mac-vio\Holtec\Holtec_20250314T135422
+  root: D:\Datasets\EIVA\Voyis\long ladder scan
   # Controls optional data sources
   gtDepth: false
   gtFlow: false

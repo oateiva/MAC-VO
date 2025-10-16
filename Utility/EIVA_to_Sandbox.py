@@ -5,6 +5,8 @@ import argparse
 import numpy as np
 import datetime
 from typing import List, Optional, Tuple
+from scipy.spatial.transform import Rotation as R
+import matplotlib.pyplot as plt
 
 
 def detect_delimiter(sample_line: str) -> str | None:
@@ -44,15 +46,23 @@ def to_time_ns(x: float, unit: str) -> int:
     raise ValueError(f"Unsupported time unit: {unit}")
 
 
-def rotation_to_quaternion(R: np.ndarray) -> np.ndarray:
+def inverse_transform(T: np.ndarray) -> np.ndarray:
+    """Convert a 4x4 transformation matrix to its inverse."""
+    R = T[:3, :3]
+    t = T[:3, 3]
+    R_inv = R.T
+    t_inv = -R_inv @ t
+    T_inv = np.eye(4)
+    T_inv[:3, :3] = R_inv
+    T_inv[:3, 3] = t_inv
+    return T_inv
+
+
+def rotation_to_quaternion(Rot: np.ndarray) -> np.ndarray:
     """Convert 3x3 rotation matrix to quaternion (w,x,y,z)."""
-    qw = np.sqrt(1 + R[0,0] + R[1,1] + R[2,2]) / 2
-    if qw < 1e-8:  # handle degenerate cases
-        qw = 0
-    qx = (R[2,1] - R[1,2]) / (4*qw) if abs(qw) > 1e-8 else 0
-    qy = (R[0,2] - R[2,0]) / (4*qw) if abs(qw) > 1e-8 else 0
-    qz = (R[1,0] - R[0,1]) / (4*qw) if abs(qw) > 1e-8 else 0
-    return np.array([qw, qx, qy, qz])
+    r = R.from_matrix(Rot)
+    q = r.as_quat(scalar_first=False)  # (w,x,y,z)
+    return np.array(q, dtype=np.float64)
 
 
 def zephyr_filename_to_ns( filename):
@@ -98,20 +108,37 @@ def main():
             if not line or (args.comment and line.startswith(args.comment)):
                 continue
             parts = line.split()
-            filename = parts[args.time_col]
-            nanoseconds = zephyr_filename_to_ns(filename)
-            t_ns = to_time_ns(nanoseconds, args.time_unit)
+            # filename = parts[args.time_col]
+            # nanoseconds = zephyr_filename_to_ns(filename)
+            # t_ns = to_time_ns(nanoseconds, args.time_unit)
+            t_ns = parts[0]
 
-            tx, ty, tz = map(float, parts[1:4])
-            R_vals = list(map(float, parts[4:13]))
-            R = np.array(R_vals).reshape(3,3)
+            # tx, ty, tz = map(float, parts[1:4])
+            # R_vals = list(map(float, parts[4:13]))
+            # R = np.array(R_vals).reshape(3,3)
+            # T = np.eye(4)
+            # T[:3, :3] = R
+            # T[:3, 3] = [tx, ty, tz]
+            T = np.array(list(map(float, parts[1:17]))).reshape(4, 4)
+            T_inv = inverse_transform(T)
 
-            quat = rotation_to_quaternion(R)  # [qw,qx,qy,qz]
-            poses.append([t_ns, tx, ty, tz, *quat])
+            R_inv = T_inv[:3, :3]
+            t_inv = T_inv[:3, 3]
+
+            quat = rotation_to_quaternion(R_inv)  # [qw,qx,qy,qz]
+            poses.append([t_ns, *t_inv, *quat])
 
     poses = np.array(poses, dtype=np.float64)
     np.save(args.out, poses)
     print(f"Saved poses with shape {poses.shape} to {args.out}")
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    ax.plot(poses[:,1], poses[:,2], poses[:,3], marker='o')
+    ax.set_xlabel('tx')
+    ax.set_ylabel('ty')
+    plt.title('Trajectory: tx, ty, tz')
+    plt.show()
 
 
 if __name__ == "__main__":

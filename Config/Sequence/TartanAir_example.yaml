@@ -1,10 +1,10 @@
 type: TartanAir_NoIMU
 name: abf001
 args:
-  root: /data/abf001_select/P001_select
+  root: D:\Datasets\tartanair\abandonedfactory_sample_P001\P001
   # Controls optional data sources
   gtDepth: false
-  gtFlow: false
+  gtFlow: true
   gtPose: true
 
-  compressed: true
+  compressed: false
