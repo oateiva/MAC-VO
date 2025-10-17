@@ -138,27 +138,34 @@ class EIVA_StereoSequenceORM(DjangoORMSequence[Frame]):
         return ten
 
 
-class EIVA_StereoSequence(SequenceBase[Frame]):
+class EIVASequence(SequenceBase[Frame]):
     @classmethod
     def name(cls) -> str: return "EIVA_NoIMU"
 
     def __init__(self, config: SimpleNamespace | dict[str, Any]):
         cfg = self.config_dict2ns(config)
 
-        # Metadata
+        # Metadata (common)
         self.lcam_T_BS = pp.identity_SE3(1)
         self.lcam_K    = torch.tensor([
             [1847.5905420747683, 0.0, 1391.3],
             [0.0, 1847.5905420747683, 1407.177],
             [0.0, 0.0, 1.0]]).unsqueeze(0)
-        self.baseline  = 0.17007674086397787
         self.width     = 2816
         self.height    = 2816
         # End
 
-        # Stereo Loader
+        self.is_stereo = True
+
+        # Loaders
         self.lcam_loader = EIVAMonocularDataset(Path(cfg.root, "processed", "left"))
-        self.rcam_loader = EIVAMonocularDataset(Path(cfg.root, "processed", "right"))
+
+        if self.is_stereo:
+            self.baseline  = 0.17007674086397787
+            self.rcam_loader = EIVAMonocularDataset(Path(cfg.root, "processed", "right"))
+        else:
+            self.rcam_loader = None
+            self.baseline    = None
 
         cam_time_file_path = Path(cfg.root, "processed", "left")
         # list all files in dir
