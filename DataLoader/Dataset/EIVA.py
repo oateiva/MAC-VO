@@ -186,26 +186,46 @@ class EIVASequence(SequenceBase[Frame]):
 
     def __getitem__(self, local_index: int) -> Frame:
         index   = self.get_index(local_index)
-        return Frame(
-            idx=[local_index],
-            camera=CameraData.from_stereo(
-                T_BS      = self.lcam_T_BS,
-                K         = self.lcam_K,
-                baseline  = torch.tensor([self.baseline]),
-                time_ns   = [self.lcam_time[index]],
-                height    = 2816,
-                width     = 2816,
-                imageL    = self.lcam_loader[index],
-                imageR    = self.rcam_loader[index],
 
-                # Ground truth and labels
-                gt_depth  = None,
-                gt_flow   = None,
-                flow_mask = None,
-            ),
-            time_ns   = [self.lcam_time[index]],
-            gt_pose   = cast(pp.LieTensor, self.gt_poses[index].unsqueeze(0)) if (self.gt_poses is not None) else None,
-        )
+        if self.is_stereo is True:
+            return Frame(
+                idx=[local_index],
+                camera=CameraData.from_stereo(
+                    T_BS      = self.lcam_T_BS,
+                    K         = self.lcam_K,
+                    baseline  = torch.tensor([self.baseline]),
+                    time_ns   = [self.lcam_time[index]],
+                    height    = 2816,
+                    width     = 2816,
+                    imageL    = self.lcam_loader[index],
+                    imageR    = self.rcam_loader[index],
+
+                    # Ground truth and labels
+                    gt_depth  = None,
+                    gt_flow   = None,
+                    flow_mask = None,
+                ),
+                time_ns   = [self.lcam_time[index]],
+                gt_pose   = cast(pp.LieTensor, self.gt_poses[index].unsqueeze(0)) if (self.gt_poses is not None) else None,
+            )
+        else:
+            return Frame(
+                idx=[local_index],
+                camera=CameraData.from_mono(
+                    T_BS      = self.lcam_T_BS,
+                    K         = self.lcam_K,
+                    time_ns   = [self.lcam_time[index]],
+                    height    = 2816,
+                    width     = 2816,
+                    image    = self.lcam_loader[index],
+                    # Ground truth and labels
+                    gt_depth  = None,
+                    gt_flow   = None,
+                    flow_mask = None,
+                ),
+                time_ns   = [self.lcam_time[index]],
+                gt_pose   = cast(pp.LieTensor, self.gt_poses[index].unsqueeze(0)) if (self.gt_poses is not None) else None,
+            )
 
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
