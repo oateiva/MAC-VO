@@ -155,7 +155,7 @@ class EIVASequence(SequenceBase[Frame]):
         self.height    = 2816
         # End
 
-        self.is_stereo = True
+        self.is_stereo = cfg.is_stereo
 
         # Loaders
         self.lcam_loader = EIVAMonocularDataset(Path(cfg.root, "processed", "left"))
