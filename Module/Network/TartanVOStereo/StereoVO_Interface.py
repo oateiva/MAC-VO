@@ -8,7 +8,7 @@ from .Utility import (
     Compose, DownscaleFlow, Normalize, ToTensor, CropCenter,
     make_device_intrinsic_layer, make_intrinsics_layer
 )
-from DataLoader import StereoData, StereoFrame
+from DataLoader import StereoData, Frame
 from Utility.Utils import centerCropTo
 
 
@@ -171,8 +171,8 @@ class TartanStereoVOMotion(TartanStereoVONetInterface):
         return x
     
     @torch.inference_mode()
-    def inference(self, frame0: StereoFrame, flow: torch.Tensor, depth: torch.Tensor) -> torch.Tensor:        
-        meta = frame0.stereo
+    def inference(self, frame0: Frame, flow: torch.Tensor, depth: torch.Tensor) -> torch.Tensor:        
+        meta = frame0.camera
         tensor_intrinsic = make_device_intrinsic_layer(
             meta.height, meta.width, meta.fx, meta.fy, meta.cx, meta.cy, torch.device(self.device)
         ).unsqueeze(0).permute(0, 3, 1, 2)

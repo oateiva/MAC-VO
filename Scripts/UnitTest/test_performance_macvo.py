@@ -2,7 +2,7 @@ import pytest
 from pathlib import Path
 
 from Odometry.MACVO import MACVO
-from DataLoader import TartanAirV2_StereoSequence, StereoFrame
+from DataLoader import TartanAirV2_StereoSequence, Frame
 from Evaluation.EvalSeq import EvaluateSequences
 from Utility.Config import load_config
 from Utility.Sandbox  import Sandbox
@@ -22,7 +22,7 @@ def test_macvo_performance(file_name: str, data: str, expect_ate: float, expect_
     result.set_autoremove()
     result.config = cfg_dict | {"Project": "MACVO_Test"}
     
-    system = MACVO[StereoFrame].from_config(cfg)
+    system = MACVO[Frame].from_config(cfg)
     system.receive_frames(seq, result)
     
     headers, metrics = EvaluateSequences([str(result.folder)], False)

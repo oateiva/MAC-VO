@@ -1,6 +1,6 @@
 import torch
 
-from DataLoader import SequenceBase, StereoFrame, ScaleFrame, NoTransform
+from DataLoader import SequenceBase, Frame, ScaleFrame, NoTransform
 from Module.Frontend.Matching import IMatcher
 from Utility.PrettyPrint import ColoredTqdm, Logger
 from Utility.Math import MahalanobisDist
@@ -11,26 +11,26 @@ from Utility.Extensions import GridRecorder
 
 
 @torch.inference_mode()
-def evaluate_flow(matcher: IMatcher, seq: SequenceBase[StereoFrame], max_flow: float, huge_epe_warn: float | None = None, use_gt_mask: bool=False) -> FlowPerformance:
-    prev_frame: StereoFrame | None = None
+def evaluate_flow(matcher: IMatcher, seq: SequenceBase[Frame], max_flow: float, huge_epe_warn: float | None = None, use_gt_mask: bool=False) -> FlowPerformance:
+    prev_frame: Frame | None = None
     results   : list[FlowPerformance]  = []
     
-    frame: StereoFrame
+    frame: Frame
     for frame in ColoredTqdm(seq, desc="Evaluating FlowModel"):
         if prev_frame is None:
             prev_frame = frame
             continue
-        assert prev_frame.stereo.gt_flow is not None, "To evaluate flow quality, must use sequence with ground truth flow."
+        assert prev_frame.camera.gt_flow is not None, "To evaluate flow quality, must use sequence with ground truth flow."
         
-        match_out   = matcher.estimate(prev_frame.stereo, frame.stereo)
+        match_out   = matcher.estimate(prev_frame.camera, frame.camera)
         est_flow    = match_out.flow
-        gt_flow     = prev_frame.stereo.gt_flow.to(est_flow.device)
+        gt_flow     = prev_frame.camera.gt_flow.to(est_flow.device)
         
         error       = (est_flow - gt_flow).square_()
         epe         = torch.sum(error, dim=1, keepdim=True).sqrt()
         
         if use_gt_mask:
-            mask        = prev_frame.stereo.flow_mask
+            mask        = prev_frame.camera.flow_mask
             assert mask is not None
         else:
             mask        = est_flow < max_flow
@@ -57,33 +57,33 @@ def evaluate_flow(matcher: IMatcher, seq: SequenceBase[StereoFrame], max_flow: f
 
 
 @torch.inference_mode()
-def evaluate_flowcov(matcher: IMatcher, seq: SequenceBase[StereoFrame], max_flow: float, use_gt_mask: bool=False) -> FlowCovPerformance:
+def evaluate_flowcov(matcher: IMatcher, seq: SequenceBase[Frame], max_flow: float, use_gt_mask: bool=False) -> FlowCovPerformance:
     assert matcher.provide_cov, f"Cannot evaluate covariance for {matcher} since no cov is provided by the module."
     
-    prev_frame: StereoFrame | None = None
+    prev_frame: Frame | None = None
     cov_u_recorder = GridRecorder((0., 25., .25), (0., 25., .25))
     cov_v_recorder = GridRecorder((0., 25., .25), (0., 25., .25))
     results: list[FlowCovPerformance] = []
     
-    frame: StereoFrame
+    frame: Frame
     for frame in ColoredTqdm(seq, desc="Evaluate FlowCov"):
         if prev_frame is None:
             prev_frame = frame
             continue
-        assert prev_frame.stereo.gt_flow is not None, "To evaluate flow quality, must use sequence with ground truth flow."
+        assert prev_frame.camera.gt_flow is not None, "To evaluate flow quality, must use sequence with ground truth flow."
         
-        est_out = matcher.estimate(prev_frame.stereo, frame.stereo)
+        est_out = matcher.estimate(prev_frame.camera, frame.camera)
         est_flow, est_cov = est_out.flow, est_out.cov
         assert est_cov is not None
         est_cov = est_cov[:, :2]    #FIXME: we ignore the model's prediction on off-diagonal matching uncertainty here.
         
-        gt_flow           = prev_frame.stereo.gt_flow.to(est_flow.device)
+        gt_flow           = prev_frame.camera.gt_flow.to(est_flow.device)
         
         error       = est_flow - gt_flow
         error2      = error.square()
         
         if use_gt_mask:
-            mask = prev_frame.stereo.flow_mask
+            mask = prev_frame.camera.flow_mask
         else:
             mask        = est_flow < max_flow
             mask        = torch.logical_and(mask[:, :1], mask[:, 1:])
@@ -161,7 +161,7 @@ if __name__ == "__main__":
     
     for data_path in args.data:
         data_cfg, _ = load_config(Path(data_path))
-        seq         = SequenceBase[StereoFrame].instantiate(data_cfg.type, data_cfg.args).preload()
+        seq         = SequenceBase[Frame].instantiate(data_cfg.type, data_cfg.args).preload()
         seq         = seq.transform(transform_fn)
         
         print(evaluate_flow(matcher, seq, max_flow=args.max_flow, huge_epe_warn=None, use_gt_mask=args.gt_mask))

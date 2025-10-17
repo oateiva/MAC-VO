@@ -20,7 +20,7 @@ from Utility.Extensions import Chain
 from Utility.PrettyPrint import Logger
 
 if T.TYPE_CHECKING:
-    from DataLoader import StereoFrame
+    from DataLoader import Frame
     from Module.Map import MatchObs
     from Module.Frontend.Matching import IMatcher
     from Module.Frontend.StereoDepth import IStereoDepth
@@ -111,18 +111,18 @@ class Matplotlib_Visualizer:
 
     @register
     @staticmethod
-    def plot_imatcher(output:IMatcher.Output, frame0: StereoFrame, frame1: StereoFrame) -> Figure:
+    def plot_imatcher(output:IMatcher.Output, frame0: Frame, frame1: Frame) -> Figure:
         """ Plot the IMatcher module output in various subplots. Show mask, covariance and flow as much as possible.
         """    
-        if frame0.stereo.gt_flow is not None:
-            plot_epe = (output.flow.detach().cpu() - frame0.stereo.gt_flow).abs()
+        if frame0.camera.gt_flow is not None:
+            plot_epe = (output.flow.detach().cpu() - frame0.camera.gt_flow).abs()
         else:
             plot_epe = None
         
         plot_args = [
             # Row 1
             # Plot image 0
-            Plot.plot_image(frame0.stereo.imageL.detach().cpu().permute(0, 2, 3, 1)[0])
+            Plot.plot_image(frame0.camera.imageL.detach().cpu().permute(0, 2, 3, 1)[0])
                 >> Plot.plot_no_border()
                 >> Chain.side_effect(lambda ax: ax.set_title(f"Frame {frame0.frame_idx}", loc="left")),
             
@@ -133,7 +133,7 @@ class Matplotlib_Visualizer:
             
             # Plot predicted flow masked by gt mask
             Plot.plot_flow(output.flow[0].detach().cpu())
-                >> Plot.plot_mask(None if frame0.stereo.flow_mask is None else frame0.stereo.flow_mask.detach().cpu()[0, 0])
+                >> Plot.plot_mask(None if frame0.camera.flow_mask is None else frame0.camera.flow_mask.detach().cpu()[0, 0])
                 >> Plot.plot_no_border()
                 >> Chain.side_effect(lambda ax: ax.set_title(f"Predict flow (GTMask)", loc="left")),
             
@@ -145,23 +145,23 @@ class Matplotlib_Visualizer:
             
             # Row 2
             # Plot image 1
-            Plot.plot_image(frame1.stereo.imageL.detach().cpu().permute(0, 2, 3, 1)[0])
+            Plot.plot_image(frame1.camera.imageL.detach().cpu().permute(0, 2, 3, 1)[0])
                 >> Plot.plot_no_border()
                 >> Chain.side_effect(lambda ax: ax.set_title(f"Frame {frame1.frame_idx}", loc="left")),
             
             # Plot gtFlow
-            Plot.plot_flow(None if frame0.stereo.gt_flow is None else frame0.stereo.gt_flow[0].detach().cpu())
+            Plot.plot_flow(None if frame0.camera.gt_flow is None else frame0.camera.gt_flow[0].detach().cpu())
                 >> Plot.plot_no_border()
                 >> Chain.side_effect(lambda ax: ax.set_title(f"Ground truth flow", loc="left")),
             
             # Plot gtFlow masked by gt mask
-            Plot.plot_flow(None if frame0.stereo.gt_flow is None else frame0.stereo.gt_flow[0].detach().cpu())
-                >> Plot.plot_mask(None if frame0.stereo.flow_mask is None else frame0.stereo.flow_mask.detach().cpu()[0, 0])
+            Plot.plot_flow(None if frame0.camera.gt_flow is None else frame0.camera.gt_flow[0].detach().cpu())
+                >> Plot.plot_mask(None if frame0.camera.flow_mask is None else frame0.camera.flow_mask.detach().cpu()[0, 0])
                 >> Plot.plot_no_border()
                 >> Chain.side_effect(lambda ax: ax.set_title(f"Predict flow (GTMask)", loc="left")),
             
             # Plot gtFlow masked by pred mask
-            Plot.plot_flow(None if frame0.stereo.gt_flow is None else frame0.stereo.gt_flow[0].detach().cpu())
+            Plot.plot_flow(None if frame0.camera.gt_flow is None else frame0.camera.gt_flow[0].detach().cpu())
                 >> Plot.plot_mask(None if output.mask is None else output.mask.detach().cpu()[0, 0])
                 >> Plot.plot_no_border()
                 >> Chain.side_effect(lambda ax: ax.set_title(f"Predict flow (Pred Mask)", loc="left")),
@@ -218,23 +218,23 @@ class Matplotlib_Visualizer:
 
     @register
     @staticmethod
-    def plot_istereo(output: IStereoDepth.Output, frame: StereoFrame) -> Figure:
+    def plot_istereo(output: IStereoDepth.Output, frame: Frame) -> Figure:
         """Plot the IStereoDepth output in various subplots. Plot depth, gtdepth, cov and mask as much as possible.
         """
-        if frame.stereo.gt_depth is not None:
-            depth_err = (output.depth.detach().cpu() - frame.stereo.gt_depth).abs()
+        if frame.camera.gt_depth is not None:
+            depth_err = (output.depth.detach().cpu() - frame.camera.gt_depth).abs()
         else:
             depth_err = None
         
         plot_args = [
             # Row 1
             # Plot left camera
-            Plot.plot_image(frame.stereo.imageL.detach().cpu().permute(0, 2, 3, 1)[0])
+            Plot.plot_image(frame.camera.imageL.detach().cpu().permute(0, 2, 3, 1)[0])
                 >> Plot.plot_no_border()
                 >> Chain.side_effect(lambda ax: ax.set_title(f"Frame {frame.frame_idx} L", loc="left")),
             
             # Plot right camera
-            Plot.plot_image(frame.stereo.imageR.detach().cpu().permute(0, 2, 3, 1)[0])
+            Plot.plot_image(frame.camera.imageR.detach().cpu().permute(0, 2, 3, 1)[0])
                 >> Plot.plot_no_border()
                 >> Chain.side_effect(lambda ax: ax.set_title(f"Frame {frame.frame_idx} R", loc="left")),
             
@@ -259,7 +259,7 @@ class Matplotlib_Visualizer:
             
             # Row 3
             # Plot gt Depth
-            Plot.plot_scalarmap(None if frame.stereo.gt_depth is None else frame.stereo.gt_depth.detach().cpu()[0, 0], colorbar=True)
+            Plot.plot_scalarmap(None if frame.camera.gt_depth is None else frame.camera.gt_depth.detach().cpu()[0, 0], colorbar=True)
                 >> Plot.plot_no_border()
                 >> Chain.side_effect(lambda ax: ax.set_title(f"GT Depth", loc="left")),
                 
@@ -281,7 +281,7 @@ class Matplotlib_Visualizer:
 
     @register
     @staticmethod
-    def plot_macvo(obs: MatchObs, depth: IStereoDepth.Output, match: IMatcher.Output, frame0: StereoFrame, frame1: StereoFrame) -> Figure:
+    def plot_macvo(obs: MatchObs, depth: IStereoDepth.Output, match: IMatcher.Output, frame0: Frame, frame1: Frame) -> Figure:
         if match.cov is not None:
             flow_det = (match.cov[:, 0] * match.cov[:, 1] - match.cov[:, 2].square())[0]
         else:
@@ -289,12 +289,12 @@ class Matplotlib_Visualizer:
         
         plot_args = [
             # Plot left camera at frame 0
-            Plot.plot_image(frame0.stereo.imageL[0].permute(1, 2, 0))
+            Plot.plot_image(frame0.camera.imageL[0].permute(1, 2, 0))
                 >> Plot.plot_no_border()
                 >> Chain.side_effect(lambda ax: ax.set_title(f"Frame {frame0.frame_idx} Left", loc="left")),
             
             # Plot left camera at frame 1, with keypoints overlayed on it
-            Plot.plot_whiten_image(frame1.stereo.imageL[0].permute(1, 2, 0), whiten=0.75)
+            Plot.plot_whiten_image(frame1.camera.imageL[0].permute(1, 2, 0), whiten=0.75)
                 >> Plot.plot_no_border()
                 >> Plot.plot_flow_cov(obs.data["pixel2_uv"], obs.data["pixel2_uv_cov"])
                 >> Plot.plot_keypoints(obs.data["pixel2_uv"], obs.data["pixel2_d_cov"], s=2, marker='.')
@@ -315,9 +315,9 @@ class Matplotlib_Visualizer:
 
     @register
     @staticmethod
-    def plot_reprojerr(proj_kp1: torch.Tensor, kp2: torch.Tensor, cov2x2: torch.Tensor, frame1: StereoFrame) -> Figure:
+    def plot_reprojerr(proj_kp1: torch.Tensor, kp2: torch.Tensor, cov2x2: torch.Tensor, frame1: Frame) -> Figure:
         plot_args = [
-            Plot.plot_whiten_image(frame1.stereo.imageL[0].permute(1, 2, 0))
+            Plot.plot_whiten_image(frame1.camera.imageL[0].permute(1, 2, 0))
                 >> Plot.plot_no_border()
                 >> Plot.plot_flow_cov(kp2, cov2x2, scale=1.)
                 >> Plot.plot_keypoints(proj_kp1, None, s=0.5)

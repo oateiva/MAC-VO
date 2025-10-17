@@ -23,10 +23,10 @@ def test_matching(config: str):
     
     frameA         = seq[0]
     stereo_depth   = IStereoDepth.instantiate(cfg.type, cfg.args)
-    depth_output   = stereo_depth.estimate(frameA.stereo)
+    depth_output   = stereo_depth.estimate(frameA.camera)
 
     assert depth_output.depth is not None
-    B, C, H, W = seq[0].stereo.imageL.shape
+    B, C, H, W = seq[0].camera.imageL.shape
     
     # Check flow shape validity
     assert depth_output.depth.shape == torch.Size([B, 1, H, W])

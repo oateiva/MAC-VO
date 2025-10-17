@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 
 from dataclasses import dataclass
 
-from DataLoader import StereoData
+from DataLoader import CameraData
 from Utility.Utils import padTo, reflect_torch_dtype
 from Utility.Extensions import ConfigTestableSubclass
 from Utility.Config import build_dynamic_config
@@ -42,7 +42,7 @@ class IMatcher(ABC, ConfigTestableSubclass):
     """
     Estimate the optical flow map between two frames. (Use left-frame of stereo pair)
     
-    `IMatcher.estimate(frame_t1: StereoData, frame_t2: StereoData) -> IMatcher.Output`
+    `IMatcher.estimate(frame_t1: CameraData, frame_t2: CameraData) -> IMatcher.Output`
 
     Given a frame with imageL, imageR being Bx3xHxW, return `output` where    
 
@@ -63,9 +63,9 @@ class IMatcher(ABC, ConfigTestableSubclass):
     def provide_cov(self) -> bool: ...
     
     @abstractmethod
-    def forward(self, frame_t1: StereoData, frame_t2: StereoData) -> IMatcher.Output: ...
+    def forward(self, frame_t1: CameraData, frame_t2: CameraData) -> IMatcher.Output: ...
 
-    def estimate(self, frame_t1: StereoData, frame_t2: StereoData) -> IMatcher.Output:
+    def estimate(self, frame_t1: CameraData, frame_t2: CameraData) -> IMatcher.Output:
         with torch.no_grad(), torch.inference_mode():
             return self.forward(frame_t1, frame_t2)
 
@@ -107,7 +107,7 @@ class GTMatcher(IMatcher):
     @property
     def provide_cov(self) -> bool: return False
     
-    def forward(self, frame_t1: StereoData, frame_t2: StereoData) -> IMatcher.Output:
+    def forward(self, frame_t1: CameraData, frame_t2: CameraData) -> IMatcher.Output:
         assert frame_t1.gt_flow is not None
         
         gt_flow = padTo(frame_t1.gt_flow, (frame_t1.height, frame_t1.width), (-2, -1), float('nan'))
@@ -139,7 +139,7 @@ class FlowFormerMatcher(IMatcher):
     @property
     def provide_cov(self) -> bool: return False
     
-    def forward(self, frame_t1: StereoData, frame_t2: StereoData) -> IMatcher.Output:
+    def forward(self, frame_t1: CameraData, frame_t2: CameraData) -> IMatcher.Output:
         flow, _ = self.model.inference(
             frame_t1.imageL.to(self.config.device),
             frame_t2.imageL.to(self.config.device),
@@ -179,7 +179,7 @@ class FlowFormerCovMatcher(IMatcher):
     @property
     def provide_cov(self) -> bool: return True
 
-    def forward(self, frame_t1: StereoData, frame_t2: StereoData) -> IMatcher.Output:
+    def forward(self, frame_t1: CameraData, frame_t2: CameraData) -> IMatcher.Output:
         flow, flow_cov = self.model.inference(
             frame_t1.imageL.to(self.config.device),
             frame_t2.imageL.to(self.config.device),
@@ -210,7 +210,7 @@ class TartanVOMatcher(IMatcher):
     @property
     def provide_cov(self) -> bool: return False        
 
-    def forward(self, frame_t1: StereoData, frame_t2: StereoData) -> IMatcher.Output:
+    def forward(self, frame_t1: CameraData, frame_t2: CameraData) -> IMatcher.Output:
         flow = self.model.inference(frame_t1, frame_t1.imageL, frame_t2.imageL).unsqueeze(0)
         
         mask = torch.zeros_like(flow[:, :1], dtype=torch.bool)
@@ -254,7 +254,7 @@ class TartanVOCovMatcher(IMatcher):
     @property
     def provide_cov(self) -> bool: return True
     
-    def forward(self, frame_t1: StereoData, frame_t2: StereoData) -> IMatcher.Output:
+    def forward(self, frame_t1: CameraData, frame_t2: CameraData) -> IMatcher.Output:
         flow, flow_cov = self.model.inference(frame_t1.imageL, frame_t2.imageL)
         
         mask = torch.zeros_like(flow[:, :1], dtype=torch.bool)
@@ -299,7 +299,7 @@ class ApplyGTMatchCov(IMatcher):
     @property
     def provide_cov(self) -> bool: return True
     
-    def forward(self, frame_t1: StereoData, frame_t2: StereoData) -> IMatcher.Output:
+    def forward(self, frame_t1: CameraData, frame_t2: CameraData) -> IMatcher.Output:
         assert frame_t1.gt_flow is not None
         out = self.internal_module.estimate(frame_t1, frame_t2)
         
@@ -333,7 +333,7 @@ class ApplyGTMatchMask(IMatcher):
     @property
     def provide_cov(self) -> bool: return self.internal_module.provide_cov
     
-    def forward(self, frame_t1: StereoData, frame_t2: StereoData) -> IMatcher.Output:
+    def forward(self, frame_t1: CameraData, frame_t2: CameraData) -> IMatcher.Output:
         assert frame_t1.flow_mask is not None
         out = self.internal_module.estimate(frame_t1, frame_t2)
         out.mask = frame_t1.flow_mask

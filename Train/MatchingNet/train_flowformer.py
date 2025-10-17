@@ -10,7 +10,7 @@ from typing import get_args
 from pathlib import Path
 from torch.amp.grad_scaler import GradScaler
 from torch.utils.data import ConcatDataset, DataLoader
-from DataLoader import TrainDataset, DataFramePair, StereoFrame, CenterCropFrame, CastDataType, AddImageNoise, ScaleFrame
+from DataLoader import TrainDataset, DataFramePair, Frame, CenterCropFrame, CastDataType, AddImageNoise, ScaleFrame
 from Train.MatchingNet.loss import sequence_loss, sequence_metric
 from Utility.Config import load_config, namespace_to_cfgnode
 from Utility.PrettyPrint import ColoredTqdm, Logger
@@ -44,7 +44,7 @@ def merge_matrices(matrices):
     return _matric
 
 
-def train(modelcfg, cfg, loader: DataLoader[DataFramePair[StereoFrame]], eval_loader=None):
+def train(modelcfg, cfg, loader: DataLoader[DataFramePair[Frame]], eval_loader=None):
     from Module.Network.FlowFormerCov import build_flowformer
     train_mode: T_TrainType = modelcfg.training_mode
     AssertLiteralType(train_mode, T_TrainType)
@@ -84,14 +84,14 @@ def train(modelcfg, cfg, loader: DataLoader[DataFramePair[StereoFrame]], eval_lo
     total_steps = 0
     should_keep_training = True
     while should_keep_training:
-        frameData: DataFramePair[StereoFrame]
+        frameData: DataFramePair[Frame]
         for frameData in ColoredTqdm(loader):
-            assert frameData.cur.stereo.gt_flow   is not None
-            assert frameData.cur.stereo.flow_mask is not None
+            assert frameData.cur.camera.gt_flow   is not None
+            assert frameData.cur.camera.flow_mask is not None
             optimizer.zero_grad()
-            img1, img2 = frameData.cur.stereo.imageL.cuda(), frameData.nxt.stereo.imageL.cuda()
-            gt_flow = frameData.cur.stereo.gt_flow.cuda()
-            flow_mask = frameData.cur.stereo.flow_mask.cuda()
+            img1, img2 = frameData.cur.camera.imageL.cuda(), frameData.nxt.camera.imageL.cuda()
+            gt_flow = frameData.cur.camera.gt_flow.cuda()
+            flow_mask = frameData.cur.camera.flow_mask.cuda()
             
             flow, cov = model(img1, img2)
             loss, _ = sequence_loss(cfg=modlecfg, preds=flow, gt=gt_flow, flow_mask=flow_mask, cov_preds=cov)
@@ -152,8 +152,8 @@ if __name__ == "__main__":
                   AddImageNoise(dict(stdv=5.0)),
                   ScaleFrame(dict(scale_u=cfg.Model.image_scale, scale_v=cfg.Model.image_scale, interp='nearest'))]
     
-    traindatasets = TrainDataset[StereoFrame].mp_instantiation(datacfg.data, 0, -1, lambda cfg: cfg.type in {"TartanAir_NoIMU", "TartanAirv2_NoIMU"})
-    trainloader = DataLoader[DataFramePair[StereoFrame]](
+    traindatasets = TrainDataset[Frame].mp_instantiation(datacfg.data, 0, -1, lambda cfg: cfg.type in {"TartanAir_NoIMU", "TartanAirv2_NoIMU"})
+    trainloader = DataLoader[DataFramePair[Frame]](
         ConcatDataset([
             ds.transform_source(transforms)
             for ds in traindatasets

@@ -2,18 +2,18 @@ import pypose as pp
 from pathlib import Path
 
 from Odometry.MACVO import MACVO
-from DataLoader import SequenceBase, StereoFrame
+from DataLoader import SequenceBase, Frame
 from Utility.Config import load_config
 from Utility.Visualize import fig_plt
 from Utility.PrettyPrint import Logger
 
 
 
-def run_frame(cfg: Path, frame1: StereoFrame, frame2: StereoFrame) -> dict[str, float]:
+def run_frame(cfg: Path, frame1: Frame, frame2: Frame) -> dict[str, float]:
     assert frame1.gt_pose is not None
     assert frame2.gt_pose is not None
     
-    odometry = MACVO[StereoFrame].from_config(load_config(cfg)[0])
+    odometry = MACVO[Frame].from_config(load_config(cfg)[0])
     odometry.run(frame1)
     odometry.run(frame2)
     odometry.terminate()
@@ -41,7 +41,7 @@ if __name__ == "__main__":
     parser.add_argument("--odom", type=str, required=True)
     args = parser.parse_args()
     
-    data = SequenceBase[StereoFrame].instantiate("TartanAir_NoIMU", {
+    data = SequenceBase[Frame].instantiate("TartanAir_NoIMU", {
         "root": "/project/learningvo/tartanair_v1_5/westerndesert/Data/P000/",
         "compressed": True,
         "gtDepth": True,

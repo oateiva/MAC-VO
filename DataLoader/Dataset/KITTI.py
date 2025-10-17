@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from torch.utils.data import Dataset
 
-from ..Interface import StereoFrame, StereoData
+from ..Interface import Frame, CameraData
 from ..SequenceBase import SequenceBase
 
 EDN2NED = pp.from_matrix(torch.tensor([
@@ -19,7 +19,7 @@ EDN2NED = pp.from_matrix(torch.tensor([
 NED2EDN = EDN2NED.Inv()
 
 
-class KITTI_StereoSequence(SequenceBase[StereoFrame]):
+class KITTI_StereoSequence(SequenceBase[Frame]):
     @classmethod
     def name(cls) -> str: return "KITTI"
     
@@ -59,11 +59,11 @@ class KITTI_StereoSequence(SequenceBase[StereoFrame]):
         
         super().__init__(len(self.imageL))
 
-    def __getitem__(self, local_index: int) -> StereoFrame:
+    def __getitem__(self, local_index: int) -> Frame:
         index = self.get_index(local_index)
         imageL = self.imageL[index]
-        return StereoFrame(
-            stereo=StereoData(
+        return Frame(
+            camera=StereoData(
                 T_BS    = cast(pp.LieTensor, self.T_BS),
                 K       = self.cam2_K,
                 baseline= torch.tensor([self.baseline]),

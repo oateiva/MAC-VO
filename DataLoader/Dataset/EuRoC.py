@@ -13,7 +13,7 @@ from Utility.PrettyPrint import Logger
 from Utility.Config import load_config
 from Utility.Math import qinterp, interpolate_pose
 
-from ..Interface import StereoData, IMUData, StereoFrame, StereoInertialFrame, AttitudeData
+from ..Interface import StereoData, IMUData, Frame, StereoInertialFrame, AttitudeData
 from ..SequenceBase import SequenceBase
 
 
@@ -51,7 +51,7 @@ class EuRoC_Sequence(SequenceBase[StereoInertialFrame]):
             idx=[local_index],
             time_ns=stereo_frame.time_ns,
             gt_pose=stereo_frame.gt_pose,
-            stereo=stereo_frame.stereo,
+            camera=stereo_frame.camera,
             imu=imu, gt_attitude=attitude
         )
     
@@ -63,7 +63,7 @@ class EuRoC_Sequence(SequenceBase[StereoInertialFrame]):
         })
 
 
-class EuRoC_StereoSequence(SequenceBase[StereoFrame]):
+class EuRoC_StereoSequence(SequenceBase[Frame]):
     @classmethod
     def name(cls) -> str: return "EuRoC_NoIMU"
 
@@ -121,13 +121,13 @@ class EuRoC_StereoSequence(SequenceBase[StereoFrame]):
         
         super().__init__(len(self.ImageL))
 
-    def __getitem__(self, local_index: int) -> StereoFrame:
+    def __getitem__(self, local_index: int) -> Frame:
         index = self.get_index(local_index)
 
-        return StereoFrame(
+        return Frame(
             idx=[local_index],
             time_ns=[int(self.cam_timestamps[index].item())], 
-            stereo=StereoData(
+            camera=StereoData(
                 T_BS=self.T_BS_lcam,
                 K   =self.K,
                 baseline=torch.tensor([self.baseline]),

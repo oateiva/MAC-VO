@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from typing_extensions import LiteralString
 
 from Module.Map import TensorBundle
-from DataLoader import StereoData
+from DataLoader import CameraData
 from Utility.Extensions import ConfigTestableSubclass
 from Utility.PrettyPrint import Logger
 
@@ -24,7 +24,7 @@ class IObservationFilter(ABC, ConfigTestableSubclass):
     
     def verify_shape(self, value: TensorBundle): return all([k in value.data.keys() for k in self.required_keys])
     
-    def set_meta(self, meta: StereoData):
+    def set_meta(self, meta: CameraData):
         """
         This method is used to receive meta info (e.g. camera intrinsic, image shape, etc.) on the first frame received by MAC-VO.
         The filter can then initialize some behavior dyanmically based on these information.
@@ -56,7 +56,7 @@ class FilterCompose(IObservationFilter):
           for k in f.required_keys
     }
 
-    def set_meta(self, meta: StereoData):
+    def set_meta(self, meta: CameraData):
         for f in self.filters:
             f.set_meta(meta)
 
@@ -104,7 +104,7 @@ class CovarianceSanityFilter(IObservationFilter):
 
 
 class SimpleDepthFilter(IObservationFilter):
-    def set_meta(self, meta: StereoData):
+    def set_meta(self, meta: CameraData):
         if self.config.max_depth == "auto":
             self.config.max_depth = meta.fx * meta.frame_baseline
     

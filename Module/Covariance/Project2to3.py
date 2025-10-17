@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 import torch
 from types import SimpleNamespace
 
-from DataLoader import StereoData
+from DataLoader import CameraData
 from ..Frontend.StereoDepth import IStereoDepth
 
 from Utility.Math import gaussian_mixture_mean_var, gaussain_full_kernels
@@ -20,7 +20,7 @@ class ICovariance2to3(ABC, ConfigTestableSubclass):
     @abstractmethod
     def estimate(
         self,
-        frame: StereoData,
+        frame: CameraData,
         kp: torch.Tensor,
         depth_est: IStereoDepth.Output,
         depth_cov: torch.Tensor | None,
@@ -49,7 +49,7 @@ class NoCovariance(ICovariance2to3):
     """
     Returns identity covariance matrix for all observations.
     """
-    def estimate(self, frame: StereoData, kp: torch.Tensor, depth_est: IStereoDepth.Output, depth_cov: torch.Tensor | None, flow_cov: torch.Tensor | None) -> torch.Tensor:
+    def estimate(self, frame: CameraData, kp: torch.Tensor, depth_est: IStereoDepth.Output, depth_cov: torch.Tensor | None, flow_cov: torch.Tensor | None) -> torch.Tensor:
         N = kp.size(0)
         return torch.eye(3).unsqueeze(0).repeat(N, 1, 1).double()
     
@@ -73,7 +73,7 @@ class DepthCovariance(ICovariance2to3):
                 f"DepthCovariance model set regularization constant to {self.config.regularization} by default"
             )
 
-    def estimate(self, frame: StereoData, kp: torch.Tensor, depth_est: IStereoDepth.Output, depth_cov: torch.Tensor | None, flow_cov: torch.Tensor | None) -> torch.Tensor:
+    def estimate(self, frame: CameraData, kp: torch.Tensor, depth_est: IStereoDepth.Output, depth_cov: torch.Tensor | None, flow_cov: torch.Tensor | None) -> torch.Tensor:
         assert depth_est.cov is not None
         assert depth_cov is not None
         
@@ -121,7 +121,7 @@ class MatchCovariance(ICovariance2to3):
 
     @Timer.cpu_timeit("Cov Model")
     @Timer.gpu_timeit("Cov Model")
-    def estimate(self, frame: StereoData, kp: torch.Tensor, depth_est: IStereoDepth.Output, depth_cov: torch.Tensor | None, flow_cov: torch.Tensor | None) -> torch.Tensor:        
+    def estimate(self, frame: CameraData, kp: torch.Tensor, depth_est: IStereoDepth.Output, depth_cov: torch.Tensor | None, flow_cov: torch.Tensor | None) -> torch.Tensor:        
         n_sample = kp.size(0)
 
         kp_long = kp.clone().long()
@@ -202,7 +202,7 @@ class GaussianMixtureCovariance(ICovariance2to3):
 
     @Timer.cpu_timeit("Cov Model")
     @Timer.gpu_timeit("Cov Model")
-    def estimate(self, frame: StereoData, kp: torch.Tensor, depth_est: IStereoDepth.Output, depth_cov: torch.Tensor | None, flow_cov: torch.Tensor | None) -> torch.Tensor:
+    def estimate(self, frame: CameraData, kp: torch.Tensor, depth_est: IStereoDepth.Output, depth_cov: torch.Tensor | None, flow_cov: torch.Tensor | None) -> torch.Tensor:
         assert depth_est.cov is not None
         
         n_sample = kp.size(0)
@@ -289,7 +289,7 @@ class Modifier_Diagonalize(ICovariance2to3):
         super().__init__(config)
         self.submodule = ICovariance2to3.instantiate(config.type, config.args)
     
-    def estimate(self, frame: StereoData, kp: torch.Tensor, depth_est: IStereoDepth.Output, depth_cov: torch.Tensor | None, flow_cov: torch.Tensor | None) -> torch.Tensor:
+    def estimate(self, frame: CameraData, kp: torch.Tensor, depth_est: IStereoDepth.Output, depth_cov: torch.Tensor | None, flow_cov: torch.Tensor | None) -> torch.Tensor:
         covs = self.submodule.estimate(frame, kp, depth_est, depth_cov, flow_cov)
         for i in range(3):
             for j in range(3):
@@ -313,7 +313,7 @@ class Modifier_Normalize(ICovariance2to3):
         super().__init__(config)
         self.submodule = ICovariance2to3.instantiate(config.type, config.args)
     
-    def estimate(self, frame: StereoData, kp: torch.Tensor, depth_est: IStereoDepth.Output, depth_cov: torch.Tensor | None, flow_cov: torch.Tensor | None) -> torch.Tensor:
+    def estimate(self, frame: CameraData, kp: torch.Tensor, depth_est: IStereoDepth.Output, depth_cov: torch.Tensor | None, flow_cov: torch.Tensor | None) -> torch.Tensor:
         covs = self.submodule.estimate(frame, kp, depth_est, depth_cov, flow_cov)
         covs /= torch.det(covs).unsqueeze(-1).unsqueeze(-1)
         return covs

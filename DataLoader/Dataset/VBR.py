@@ -14,7 +14,7 @@ from Utility.PrettyPrint import Logger
 from Utility.Config import load_config
 from Utility.Math import qinterp, interpolate_pose
 
-from ..Interface import StereoData, IMUData, StereoFrame, StereoInertialFrame, AttitudeData
+from ..Interface import StereoData, IMUData, Frame, StereoInertialFrame, AttitudeData
 from ..SequenceBase import SequenceBase
 
 EDN2NED = pp.from_matrix(torch.tensor([
@@ -62,7 +62,7 @@ class VBRMonocularDataset(Dataset):
             undistorted_image = cv2.remap(image, self.undistort_map[0], self.undistort_map[1], cv2.INTER_LINEAR)
         return undistorted_image
 
-class VBR_StereoSequence(SequenceBase[StereoFrame]):
+class VBR_StereoSequence(SequenceBase[Frame]):
     @classmethod
     def name(cls) -> str: return "VBR_Stereo"
     
@@ -123,11 +123,11 @@ class VBR_StereoSequence(SequenceBase[StereoFrame]):
         
         super().__init__(self.imageL.length)
 
-    def __getitem__(self, local_index: int) -> StereoFrame:
+    def __getitem__(self, local_index: int) -> Frame:
         index = self.get_index(local_index)
         imageL = self.imageL[index]
-        return StereoFrame(
-            stereo=StereoData(
+        return Frame(
+            camera=StereoData(
                 T_BS    = cast(pp.LieTensor, self.T_BS),
                 K       = self.cam_l_K,
                 baseline= torch.tensor([self.baseline]),

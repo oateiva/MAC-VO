@@ -5,7 +5,7 @@ import numpy as np
 import pypose as pp
 from pathlib import Path
 
-from DataLoader import SequenceBase, StereoFrame, smart_transform
+from DataLoader import SequenceBase, Frame, smart_transform
 from Evaluation.EvalSeq import EvaluateSequences
 from Odometry.MACVO import MACVO
 
@@ -16,7 +16,7 @@ from Utility.Visualize import fig_plt, rr_plt
 from Utility.Timer import Timer
 
 
-def VisualizeRerunCallback(frame: StereoFrame, system: MACVO, pb: ColoredTqdm):
+def VisualizeRerunCallback(frame: Frame, system: MACVO, pb: ColoredTqdm):
     rr.set_time("frame_idx", sequence=frame.frame_idx)
 
     # Non-key frame does not need visualization
@@ -26,7 +26,7 @@ def VisualizeRerunCallback(frame: StereoFrame, system: MACVO, pb: ColoredTqdm):
         rr_plt.log_trajectory("/world/est", pp.SE3(system.graph.frames.data["pose"].tensor))
 
     rr_plt.log_camera("/world/macvo/cam_left", pp.SE3(system.graph.frames.data["pose"][-1]), system.graph.frames.data["K"][-1])
-    rr_plt.log_image ("/world/macvo/cam_left/rgb", frame.stereo.imageL[0].permute(1, 2, 0))
+    rr_plt.log_image ("/world/macvo/cam_left/rgb", frame.camera.imageL[0].permute(1, 2, 0))
     match_obs = system.graph.get_frame2match(system.graph.frames[-1:])
     rr_plt.log_keypoints("/world/macvo/cam_left/kpts", match_obs)
 
@@ -37,7 +37,7 @@ def VisualizeRerunCallback(frame: StereoFrame, system: MACVO, pb: ColoredTqdm):
     rr_plt.log_points("/world/vo_tracking", vo_points.data["pos_Tw"], vo_points.data["color"], vo_points.data["cov_Tw"], "sphere")
 
 
-def VisualizeVRAMUsage(frame: StereoFrame, system: MACVO, pb: ColoredTqdm):
+def VisualizeVRAMUsage(frame: Frame, system: MACVO, pb: ColoredTqdm):
     if torch.cuda.is_available():
         allocated_memory = torch.cuda.memory_reserved(0) / 1e9  # Convert to GB
         allocated_memory = f"{round(allocated_memory, 3)} GB"
@@ -127,20 +127,20 @@ if __name__ == "__main__":
     Timer.setup(active=args.timing)
     fig_plt.default_mode = "image" if args.saveplt else "none"
 
-    def onFrameFinished(frame: StereoFrame, system: MACVO, pb: ColoredTqdm):
+    def onFrameFinished(frame: Frame, system: MACVO, pb: ColoredTqdm):
         VisualizeRerunCallback(frame, system, pb)
         VisualizeVRAMUsage(frame, system, pb)
 
     # Initialize data source
     sequence = smart_transform(
-        SequenceBase[StereoFrame].instantiate(datacfg.type, datacfg.args).clip(args.seq_from, args.seq_to),
+        SequenceBase[Frame].instantiate(datacfg.type, datacfg.args).clip(args.seq_from, args.seq_to),
         cfg.Preprocess
     )
 
     if args.preload:
         sequence = sequence.preload()
 
-    system = MACVO[StereoFrame].from_config(asNamespace(exp_space.config))
+    system = MACVO[Frame].from_config(asNamespace(exp_space.config))
     system.receive_frames(sequence, exp_space, on_frame_finished=onFrameFinished)
 
     rr_plt.log_trajectory("/world/est"  , torch.tensor(np.load(exp_space.path("poses.npy"))[:, 1:]))

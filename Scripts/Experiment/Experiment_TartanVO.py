@@ -1,7 +1,7 @@
 import argparse
 from pathlib import Path
 
-from DataLoader import SequenceBase, StereoFrame, smart_transform
+from DataLoader import SequenceBase, Frame, smart_transform
 from Evaluation.EvalSeq import EvaluateSequences
 from Odometry.BaselineTartanVO import TartanVO
 from Utility.Config import build_dynamic_config, load_config
@@ -15,7 +15,7 @@ def execute_experiment(name, cfg, cfg_dict, root_box: Sandbox) -> str:
     exp_space.config = cfg_dict
     
     sequence = smart_transform(
-        SequenceBase[StereoFrame].instantiate(cfg.Data.type, cfg.Data.args),
+        SequenceBase[Frame].instantiate(cfg.Data.type, cfg.Data.args),
         cfg.Preprocess
     ).preload()
     system = TartanVO.from_config(cfg, sequence)

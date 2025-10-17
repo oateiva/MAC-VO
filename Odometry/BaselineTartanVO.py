@@ -1,5 +1,5 @@
 import torch
-from DataLoader import SequenceBase, StereoFrame
+from DataLoader import SequenceBase, Frame
 from Module.Map import VisualMap, FrameNode
 from types import SimpleNamespace
 
@@ -9,7 +9,7 @@ from Module.MotionModel import TartanMotionNet
 from Utility.Extensions import ConfigTestableSubclass
 
 
-class TartanVO(IOdometry[StereoFrame], ConfigTestableSubclass):
+class TartanVO(IOdometry[Frame], ConfigTestableSubclass):
     def __init__(self, match_estimator: IMatcher, depth_estimator: IStereoDepth, kf_selector: IKeyframeSelector, tvo_cfg):
         super().__init__()
         self.gmap = VisualMap()
@@ -23,7 +23,7 @@ class TartanVO(IOdometry[StereoFrame], ConfigTestableSubclass):
         self.prev_frame = None
     
     @classmethod
-    def from_config(cls: type["TartanVO"], cfg: SimpleNamespace, seq: SequenceBase[StereoFrame]) -> "TartanVO":
+    def from_config(cls: type["TartanVO"], cfg: SimpleNamespace, seq: SequenceBase[Frame]) -> "TartanVO":
         match_estimator   = IMatcher.instantiate(cfg.match.type, cfg.match.args)
         depth_estimator   = IStereoDepth.instantiate(cfg.depth.type, cfg.depth.args)
         keyframe_selector = IKeyframeSelector.instantiate(cfg.keyframe.type, cfg.keyframe.args)
@@ -33,33 +33,33 @@ class TartanVO(IOdometry[StereoFrame], ConfigTestableSubclass):
     
     @torch.no_grad()
     @torch.inference_mode()
-    def run(self, frame: StereoFrame) -> None:
+    def run(self, frame: Frame) -> None:
         if not self.keyframe_select.isKeyframe(frame):
             self.gmap.frames.push(FrameNode.init({
-                "K"          : frame.stereo.K,
-                "baseline"   : frame.stereo.baseline,
+                "K"          : frame.camera.K,
+                "baseline"   : frame.camera.baseline,
                 "need_interp": torch.tensor([1], dtype=torch.bool),
-                "time_ns"    : torch.tensor(frame.stereo.time_ns, dtype=torch.long),
+                "time_ns"    : torch.tensor(frame.camera.time_ns, dtype=torch.long),
                 "pose"       : self.gmap.frames.data["pose"][-1:],
                 "T_BS"       : self.gmap.frames.data["T_BS"][-1:],
             }))
             return
         
         if self.prev_frame is not None:
-            match_output = self.match_estimator.estimate(self.prev_frame.stereo, frame.stereo)
+            match_output = self.match_estimator.estimate(self.prev_frame.camera, frame.camera)
             flow_map     = match_output.flow
         else:
             flow_map = None
         
-        est_depth = self.depth_estimator.estimate(frame.stereo)
+        est_depth = self.depth_estimator.estimate(frame.camera)
         est_pose = self.tartanvo.predict(frame, flow_map, est_depth.depth)
         self.gmap.frames.push(FrameNode.init({
-            "K"          : frame.stereo.K,
-            "baseline"   : frame.stereo.baseline,
+            "K"          : frame.camera.K,
+            "baseline"   : frame.camera.baseline,
             "need_interp": torch.tensor([0], dtype=torch.bool),
-            "time_ns"    : torch.tensor(frame.stereo.time_ns, dtype=torch.long),
+            "time_ns"    : torch.tensor(frame.camera.time_ns, dtype=torch.long),
             "pose"       : est_pose,
-            "T_BS"       : frame.stereo.T_BS,
+            "T_BS"       : frame.camera.T_BS,
         }))
         self.tartanvo.update(est_pose)
         self.prev_frame = frame
