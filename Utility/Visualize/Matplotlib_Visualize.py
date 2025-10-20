@@ -23,7 +23,7 @@ if T.TYPE_CHECKING:
     from DataLoader import Frame
     from Module.Map import MatchObs
     from Module.Frontend.Matching import IMatcher
-    from Module.Frontend.StereoDepth import IStereoDepth
+    from Module.Frontend.StereoDepth import IDepth
 
 
 
@@ -218,7 +218,7 @@ class Matplotlib_Visualizer:
 
     @register
     @staticmethod
-    def plot_istereo(output: IStereoDepth.Output, frame: Frame) -> Figure:
+    def plot_istereo(output: IDepth.Output, frame: Frame) -> Figure:
         """Plot the IStereoDepth output in various subplots. Plot depth, gtdepth, cov and mask as much as possible.
         """
         if frame.camera.gt_depth is not None:
@@ -281,7 +281,7 @@ class Matplotlib_Visualizer:
 
     @register
     @staticmethod
-    def plot_macvo(obs: MatchObs, depth: IStereoDepth.Output, match: IMatcher.Output, frame0: Frame, frame1: Frame) -> Figure:
+    def plot_macvo(obs: MatchObs, depth: IDepth.Output, match: IMatcher.Output, frame0: Frame, frame1: Frame) -> Figure:
         if match.cov is not None:
             flow_det = (match.cov[:, 0] * match.cov[:, 1] - match.cov[:, 2].square())[0]
         else:

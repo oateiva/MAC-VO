@@ -31,7 +31,7 @@ from Utility.Timer import Timer
 from Utility.Extensions import ConfigTestableSubclass
 from Utility.Utils import reflect_torch_dtype
 
-from .StereoDepth import IStereoDepth, disparity_to_depth, disparity_to_depth_cov
+from .StereoDepth import IDepth, disparity_to_depth, disparity_to_depth_cov
 from .Matching    import IMatcher
 
 # Frontend interface ###
@@ -59,7 +59,7 @@ class IFrontend(ABC, ConfigTestableSubclass):
     def provide_cov(self) -> tuple[bool, bool]: ...
     
     @abstractmethod
-    def estimate_pair(self, frame_t1: CameraData, frame_t2: CameraData) -> tuple[IStereoDepth.Output, IMatcher.Output]:
+    def estimate_pair(self, frame_t1: CameraData, frame_t2: CameraData) -> tuple[IDepth.Output, IMatcher.Output]:
         """
         Given two frames with imageL, imageR with shape of Bx3xHxW, return `output` of
         -   [0] - IStereoDepth output of stereo frame from time t2
@@ -70,7 +70,7 @@ class IFrontend(ABC, ConfigTestableSubclass):
         ...
 
     @abstractmethod
-    def estimate_depth(self, frame: CameraData) -> IStereoDepth.Output:
+    def estimate_depth(self, frame: CameraData) -> IDepth.Output:
         """
         Given stereo frames with imageL, imageR with shape of Bx3xHxW, return IStereoDepth `output` of stereo frame
         
@@ -78,7 +78,7 @@ class IFrontend(ABC, ConfigTestableSubclass):
         """
         ...
 
-    def estimate_triplet(self, frame_t1: CameraData, frame_t2: CameraData) -> tuple[IStereoDepth.Output, IStereoDepth.Output, IMatcher.Output]:
+    def estimate_triplet(self, frame_t1: CameraData, frame_t2: CameraData) -> tuple[IDepth.Output, IDepth.Output, IMatcher.Output]:
         """
         Given two frames with imageL, imageR with shape of Bx3xHxW, return `output` of
         -   [0] - IStereoDepth output of stereo frame from time t1
@@ -131,7 +131,7 @@ class CUDAGraphHandler:
 class FrontendCompose(IFrontend):
     def __init__(self, config: SimpleNamespace):
         super().__init__(config)
-        self.depth = IStereoDepth.instantiate(self.config.depth.type, self.config.depth.args)
+        self.depth = IDepth.instantiate(self.config.depth.type, self.config.depth.args)
         self.match = IMatcher.instantiate(self.config.match.type, self.config.match.args)
 
     @property
@@ -140,20 +140,20 @@ class FrontendCompose(IFrontend):
     
     @Timer.cpu_timeit("Frontend.estimate")
     @Timer.gpu_timeit("Frontend.estimate")
-    def estimate_pair(self, frame_t1: CameraData, frame_t2: CameraData) -> tuple[IStereoDepth.Output, IMatcher.Output]:
+    def estimate_pair(self, frame_t1: CameraData, frame_t2: CameraData) -> tuple[IDepth.Output, IMatcher.Output]:
         return (
             self.depth.estimate(frame_t2),
             self.match.estimate(frame_t1, frame_t2)
         )
     
-    def estimate_depth(self, frame: CameraData) -> IStereoDepth.Output:
+    def estimate_depth(self, frame: CameraData) -> IDepth.Output:
         return self.depth.estimate(frame)
 
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
         assert config is not None
         IMatcher.is_valid_config(config.match)
-        IStereoDepth.is_valid_config(config.depth)
+        IDepth.is_valid_config(config.depth)
 
 
 class FlowFormerCovFrontend(IFrontend):
@@ -181,7 +181,7 @@ class FlowFormerCovFrontend(IFrontend):
         return True, True
     
     @staticmethod
-    def inference_2_depth(flow_12: torch.Tensor, cov_12: torch.Tensor, frame: CameraData, enforce_positive_disparity: bool) -> IStereoDepth.Output:
+    def inference_2_depth(flow_12: torch.Tensor, cov_12: torch.Tensor, frame: CameraData, enforce_positive_disparity: bool) -> IDepth.Output:
         disparity, disparity_cov = flow_12[:, :1].abs(), cov_12[:, :1]
         depth_map = disparity_to_depth(disparity, frame.frame_baseline, frame.fx)
         depth_cov = disparity_to_depth_cov(disparity, disparity_cov, frame.frame_baseline, frame.fx)
@@ -191,7 +191,7 @@ class FlowFormerCovFrontend(IFrontend):
         else:
             bad_mask = None
         
-        return IStereoDepth.Output(depth=depth_map, cov=depth_cov, disparity=disparity, disparity_uncertainty=disparity_cov, mask=bad_mask)
+        return IDepth.Output(depth=depth_map, cov=depth_cov, disparity=disparity, disparity_uncertainty=disparity_cov, mask=bad_mask)
 
     @staticmethod
     def inference_2_match(flow_12: torch.Tensor, cov_12: torch.Tensor) -> IMatcher.Output:
@@ -200,7 +200,7 @@ class FlowFormerCovFrontend(IFrontend):
         return IMatcher.Output.from_partial_cov(flow=match_map, cov=match_cov, mask=match_mask)
 
     @torch.inference_mode()
-    def estimate_depth(self, frame: CameraData) -> IStereoDepth.Output:
+    def estimate_depth(self, frame: CameraData) -> IDepth.Output:
         input_A, input_B = frame.imageL, frame.imageR
         input_A = input_A.to(device=self.config.device)
         input_B = input_B.to(device=self.config.device)
@@ -215,7 +215,7 @@ class FlowFormerCovFrontend(IFrontend):
     @Timer.cpu_timeit("Frontend.estimate")
     @Timer.gpu_timeit("Frontend.estimate")
     @torch.inference_mode()
-    def estimate_pair(self, frame_t1: CameraData, frame_t2: CameraData) -> tuple[IStereoDepth.Output, IMatcher.Output]:
+    def estimate_pair(self, frame_t1: CameraData, frame_t2: CameraData) -> tuple[IDepth.Output, IMatcher.Output]:
         input_A = torch.cat([frame_t2.imageL, frame_t1.imageL], dim=0)
         input_B = torch.cat([frame_t2.imageR, frame_t2.imageL], dim=0)
         
@@ -232,7 +232,7 @@ class FlowFormerCovFrontend(IFrontend):
         )
     
     @torch.inference_mode()
-    def estimate_triplet(self, frame_t1: CameraData, frame_t2: CameraData) -> tuple[IStereoDepth.Output, IStereoDepth.Output, IMatcher.Output]:
+    def estimate_triplet(self, frame_t1: CameraData, frame_t2: CameraData) -> tuple[IDepth.Output, IDepth.Output, IMatcher.Output]:
         input_A = torch.cat([frame_t1.imageL, frame_t2.imageL, frame_t1.imageL], dim=0)
         input_B = torch.cat([frame_t1.imageL, frame_t2.imageR, frame_t2.imageL], dim=0)
 
@@ -279,7 +279,7 @@ class CUDAGraph_FlowFormerCovFrontend(FlowFormerCovFrontend):
        
     @Timer.cpu_timeit("Frontend.estimate")
     @Timer.gpu_timeit("Frontend.estimate")
-    def estimate_pair(self, frame_t1: CameraData, frame_t2: CameraData) -> tuple[IStereoDepth.Output, IMatcher.Output]:
+    def estimate_pair(self, frame_t1: CameraData, frame_t2: CameraData) -> tuple[IDepth.Output, IMatcher.Output]:
         # Joint inference
         input_A = torch.cat([frame_t2.imageL, frame_t1.imageL], dim=0)
         input_B = torch.cat([frame_t2.imageR, frame_t2.imageL], dim=0)

@@ -2,7 +2,7 @@ import argparse
 from pathlib import Path
 
 from DataLoader import SequenceBase
-from Module.Frontend.StereoDepth import IStereoDepth
+from Module.Frontend.StereoDepth import IDepth
 from Utility.Config import build_dynamic_config, load_config
 
 
@@ -20,7 +20,7 @@ depth_cfg, _ = build_dynamic_config({   # For simplicity of editing config
 }})
 
 sequence = SequenceBase.instantiate(**vars(datacfg))
-module = IStereoDepth.instantiate(depth_cfg.type, depth_cfg.args)
+module = IDepth.instantiate(depth_cfg.type, depth_cfg.args)
 
 for frame in sequence:
     assert frame.gtDepth is not None

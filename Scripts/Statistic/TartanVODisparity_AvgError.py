@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import torch
 
 from DataLoader import SequenceBase, Frame
-from Module.Frontend.StereoDepth import IStereoDepth
+from Module.Frontend.StereoDepth import IDepth
 from Utility.Config import load_config
 from Utility.Plot import getColor
 from Utility.Utils import cropToMultiple
@@ -15,7 +15,7 @@ def main(args):
     depth_cfg, _ = load_config(Path(args.depthcfg))
 
     sequence = SequenceBase.instantiate(**vars(sequence_cfg))
-    depth_est = IStereoDepth.instantiate(depth_cfg.type, depth_cfg.args)
+    depth_est = IDepth.instantiate(depth_cfg.type, depth_cfg.args)
 
     avg_err_percentage = []
     avg_errs = []

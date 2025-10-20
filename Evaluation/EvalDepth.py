@@ -2,7 +2,7 @@ import torch
 from types import SimpleNamespace
 
 from DataLoader import SequenceBase, Frame, ScaleFrame, NoTransform
-from Module.Frontend.StereoDepth import IStereoDepth
+from Module.Frontend.StereoDepth import IDepth
 from Utility.PrettyPrint import ColoredTqdm, Logger
 from Utility.Math import MahalanobisDist
 from Utility.Datatypes import DepthPerformance, DepthCovPerformance
@@ -10,7 +10,7 @@ from Utility.Extensions import GridRecorder
 
 
 @torch.inference_mode()
-def evaluate_depth(depth: IStereoDepth, seq: SequenceBase[Frame], max_depth: float = 80.) -> DepthPerformance:
+def evaluate_depth(depth: IDepth, seq: SequenceBase[Frame], max_depth: float = 80.) -> DepthPerformance:
     results : list[DepthPerformance] = []
     frame   : Frame
     for frame in ColoredTqdm(seq, desc="Evaluating DepthModel"):
@@ -40,7 +40,7 @@ def evaluate_depth(depth: IStereoDepth, seq: SequenceBase[Frame], max_depth: flo
 
 
 @torch.inference_mode()
-def evaluate_depthcov(depth: IStereoDepth, seq: SequenceBase[Frame], max_depth: float = 80.) -> DepthCovPerformance:
+def evaluate_depthcov(depth: IDepth, seq: SequenceBase[Frame], max_depth: float = 80.) -> DepthCovPerformance:
     assert depth.provide_cov, f"Cannot evaluate covariance for {depth} since no cov is provided by the module."
     
     cov_performance_recorder = GridRecorder((0., 50., .5), (0., 50., .5))
@@ -102,7 +102,7 @@ if __name__ == "__main__":
     args = args.parse_args()
     
     depth_cfg, _ = load_config(Path(args.depth_estimator))
-    depth_estimator = IStereoDepth.instantiate(depth_cfg.type, depth_cfg.args)
+    depth_estimator = IDepth.instantiate(depth_cfg.type, depth_cfg.args)
     
     if args.scale_image != 1.0:
         scale = args.scale_image

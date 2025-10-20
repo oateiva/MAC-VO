@@ -4,13 +4,13 @@ from Module.Map import VisualMap, FrameNode
 from types import SimpleNamespace
 
 from .Interface import IOdometry
-from Module import IMatcher, IStereoDepth, IKeyframeSelector, IMapProcessor
+from Module import IMatcher, IDepth, IKeyframeSelector, IMapProcessor
 from Module.MotionModel import TartanMotionNet
 from Utility.Extensions import ConfigTestableSubclass
 
 
 class TartanVO(IOdometry[Frame], ConfigTestableSubclass):
-    def __init__(self, match_estimator: IMatcher, depth_estimator: IStereoDepth, kf_selector: IKeyframeSelector, tvo_cfg):
+    def __init__(self, match_estimator: IMatcher, depth_estimator: IDepth, kf_selector: IKeyframeSelector, tvo_cfg):
         super().__init__()
         self.gmap = VisualMap()
         
@@ -25,7 +25,7 @@ class TartanVO(IOdometry[Frame], ConfigTestableSubclass):
     @classmethod
     def from_config(cls: type["TartanVO"], cfg: SimpleNamespace, seq: SequenceBase[Frame]) -> "TartanVO":
         match_estimator   = IMatcher.instantiate(cfg.match.type, cfg.match.args)
-        depth_estimator   = IStereoDepth.instantiate(cfg.depth.type, cfg.depth.args)
+        depth_estimator   = IDepth.instantiate(cfg.depth.type, cfg.depth.args)
         keyframe_selector = IKeyframeSelector.instantiate(cfg.keyframe.type, cfg.keyframe.args)
         
         return cls(match_estimator=match_estimator, depth_estimator=depth_estimator, kf_selector=keyframe_selector,
@@ -75,6 +75,6 @@ class TartanVO(IOdometry[Frame], ConfigTestableSubclass):
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
         assert config is not None
         IMatcher.is_valid_config(config.match)
-        IStereoDepth.is_valid_config(config.depth)
+        IDepth.is_valid_config(config.depth)
         IKeyframeSelector.is_valid_config(config.keyframe)
         TartanMotionNet.is_valid_config(config.tartanvo)
