@@ -19,8 +19,8 @@ VBR_Stereo:
 EIVA_NoIMU:
   - type: SmartResizeFrame
     args: 
-      height: 480
-      width : 640
+      height: 700
+      width : 700
       interp: nearest
 EIVA_StereoSequenceORM:
   - type: SmartResizeFrame
