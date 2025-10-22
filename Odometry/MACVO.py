@@ -298,6 +298,7 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         rr_plt.log_flow(
             "/world/macvo/cam_left/optical_flow",
             match01.flow[0].detach().permute(1, 2, 0))
+        rr_plt.log_depth("/world/macvo/cam_left/depth", depth1.depth[0])
         rr_plt.log_flow_covar("/world/macvo/cam_left/optical_flow_covar", match01.cov)
         fig_plt.plot_imatcher("matching", match01, frame0, frame1)
         fig_plt.plot_istereo ("stereo_d", depth1 , frame1)

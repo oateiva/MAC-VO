@@ -191,6 +191,12 @@ class Rerun_Visualizer:
 
     @register
     @staticmethod
+    def log_depth(rerun_path: str, depth: torch.Tensor):
+        assert rr is not None
+        rr.log(rerun_path, rr.DepthImage(depth, colormap=4))
+
+    @register
+    @staticmethod
     def log_keypoints(rerun_path: str, match_obs: MatchObs):
         assert rr is not None
         # Generate the radii based on the uncertainty (covariance) of the keypoints
