@@ -21,7 +21,7 @@ import torch
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import overload, Literal
+from typing import overload, Literal, Dict
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -351,3 +351,72 @@ class CUDAGraph_FlowFormerCovFrontend(FlowFormerCovFrontend):
             result_cov = g_context.static_ouput["flow_cov"].clone()
             
         return result_val, result_cov
+
+
+class MonocularFrontend(IFrontend):
+    def __init__(self, config: SimpleNamespace):
+        super().__init__(config)
+        from ..Network.FlowFormer.configs.submission import get_cfg
+        from ..Network.FlowFormerCov import build_flowformer
+        cfg = get_cfg()
+        cfg.latentcostformer.decoder_depth = self.config.decoder_depth
+        flow_model = build_flowformer(cfg, reflect_torch_dtype(config.enc_dtype), reflect_torch_dtype(config.dec_dtype))
+        flow_model.eval()
+        flow_model.to(self.config.device)
+        ckpt  = torch.load(self.config.flow.weight, map_location=self.config.device, weights_only=True)
+        flow_model.load_ddp_state_dict(ckpt)
+
+        from ..Network.DepthAnythingV2 import build_depth_anything_v2
+        monodepth_model = build_depth_anything_v2(config.monodepth.model_configs)
+        ## TODO: float16, 32 etc?
+        ckpt  = torch.load(self.config.monodepth.weight, weights_only=True)
+        monodepth_model.load_state_dict(ckpt)
+        monodepth_model.to(self.config.device)
+        monodepth_model.eval()
+
+        # Dict of models: keys are strings, values are torch.nn.Module instances
+        self.model: Dict[str, torch.nn.Module] = {
+            "flow_model": flow_model,
+            "monodepth_model": monodepth_model,
+        }
+
+    @Timer.cpu_timeit("Frontend.estimate")
+    @Timer.gpu_timeit("Frontend.estimate")
+    @torch.inference_mode()
+    def estimate_pair(self, frame_t1: CameraData, frame_t2: CameraData) -> tuple[IDepth.Output, IMatcher.Output]:
+        return (
+            self.estimate_depth(frame_t2),
+            self.estimate_flowcov(frame_t1, frame_t2)
+        )
+
+    def estimate_depth(self, frame: CameraData) -> IDepth.Output:
+        mono_frame = frame.imageL.to(self.config.device)
+        depth = self.model["monodepth_model"].forward(mono_frame)
+        # TODO: dont hack this
+        # ones_tensor = torch.ones_like(depth)*0.1
+        return IDepth.Output(
+            depth=depth.unsqueeze(0),
+            disparity=None,
+            cov=None,
+            disparity_uncertainty=None
+            )
+
+    def estimate_flowcov(self, frame_t1: CameraData, frame_t2: CameraData)-> IMatcher.Output:
+        image_t1_left = frame_t1.imageL.to(self.config.device)
+        image_t2_left = frame_t2.imageL.to(self.config.device)
+        est_flow, est_cov = self.model["flow_model"].inference(image_t1_left, image_t2_left)
+
+        est_flow: torch.Tensor = est_flow.float()
+        est_cov : torch.Tensor = est_cov.float()
+
+        return self.inference_2_match(est_flow, est_cov)
+
+    @staticmethod
+    def inference_2_match(flow_12: torch.Tensor, cov_12: torch.Tensor) -> IMatcher.Output:
+        match_map, match_cov = flow_12, cov_12
+        match_mask = None
+        return IMatcher.Output.from_partial_cov(flow=match_map, cov=match_cov, mask=match_mask)
+
+    @property
+    def provide_cov(self) -> tuple[bool, bool]:
+        return False, True

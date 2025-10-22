@@ -397,9 +397,9 @@ def vit_giant2(patch_size=16, num_register_tokens=0, **kwargs):
 
 def DINOv2(model_name):
     model_zoo = {
-        "vits": vit_small, 
-        "vitb": vit_base, 
-        "vitl": vit_large, 
+        "vits": vit_small,
+        "vitb": vit_base,
+        "vitl": vit_large,
         "vitg": vit_giant2
     }
     
