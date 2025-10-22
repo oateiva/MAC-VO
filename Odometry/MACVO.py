@@ -72,7 +72,7 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         # [0] - Frame Source Data
         # [1] - Frame index (in visual map)
         # [2] - Frame stereo depth
-        self.prev_keyframe: tuple[T_SensorFrame, int, Module.IDepth.Output] | None = None
+        self.prev_keyframe: tuple[T_SensorFrame, int, Module.IStereoDepth.Output] | None = None
         
         # Hooks
         self.on_optimize_writeback: list[MACVO.T_SYSHOOK] = []
