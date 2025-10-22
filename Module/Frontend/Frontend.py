@@ -391,7 +391,11 @@ class MonocularFrontend(IFrontend):
 
     def estimate_depth(self, frame: CameraData) -> IDepth.Output:
         mono_frame = frame.imageL.to(self.config.device)
-        depth = self.model["monodepth_model"].forward(mono_frame)
+        inverse_depth = self.model["monodepth_model"].forward(mono_frame)
+        # inverse_depth = torch.where(inverse_depth == 0, torch.full_like(inverse_depth, float('nan')), inverse_depth)
+
+        depth = 1000.0 / (inverse_depth)
+        
         # TODO: dont hack this
         # ones_tensor = torch.ones_like(depth)*0.1
         return IDepth.Output(
