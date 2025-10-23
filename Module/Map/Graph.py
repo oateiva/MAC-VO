@@ -59,7 +59,7 @@ class TensorBundle(T.Generic[T_Fields]):
     
     def serialize(self, prefix: str) -> dict[str, np.ndarray]:
         return {
-            f"{prefix}/{k}": v.cpu().numpy()
+            f"{prefix}/{k}": v.detach().cpu().numpy()
             for k, v in self.data.items()
         }
     
