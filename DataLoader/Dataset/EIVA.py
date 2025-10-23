@@ -165,7 +165,7 @@ class EIVASequence(SequenceBase[Frame]):
             self.rcam_loader = EIVAMonocularDataset(Path(cfg.root, "processed", "right"))
         else:
             self.rcam_loader = None
-            self.baseline    = None
+            self.baseline    = -1.
 
         cam_time_file_path = Path(cfg.root, "processed", "left")
         # list all files in dir
@@ -214,6 +214,7 @@ class EIVASequence(SequenceBase[Frame]):
                 camera=CameraData.from_mono(
                     T_BS      = self.lcam_T_BS,
                     K         = self.lcam_K,
+                    baseline  = torch.tensor([self.baseline]),
                     time_ns   = [self.lcam_time[index]],
                     height    = 2816,
                     width     = 2816,
