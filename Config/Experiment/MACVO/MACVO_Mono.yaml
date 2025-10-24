@@ -78,11 +78,16 @@ Odometry:
       flow:
         weight: ./Model/MACVO_FrontendCov.pth
       monodepth:
-        type: DepthAnythingV2
+        # type: DepthAnythingV2
+        # args:
+        #   weight: ./Model/depth_anything_v2_vitl.pth
+        #   encoder: vitl
+        #   scale_factor: 1000.
+        type: MetricDepthAnythingV2
         args:
-          weight: ./Model/depth_anything_v2_vitl.pth
+          weight: ./Model/depth_anything_v2_metric_vkitti_vitl.pth
           encoder: vitl
-          scale_factor: 1000.
+          max_depth: 80.
 
 
   motion:
