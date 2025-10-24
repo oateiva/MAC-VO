@@ -157,7 +157,9 @@ class DepthAnythingV2(nn.Module):
         features=256, 
         out_channels=[256, 512, 1024, 1024], 
         use_bn=False, 
-        use_clstoken=False
+        use_clstoken=False,
+        weight=None,
+        scale_factor = 1.
     ):
         super(DepthAnythingV2, self).__init__()
         
@@ -172,16 +174,25 @@ class DepthAnythingV2(nn.Module):
         self.pretrained = DINOv2(model_name=encoder)
         
         self.depth_head = DPTHead(self.pretrained.embed_dim, features, use_bn, out_channels=out_channels, use_clstoken=use_clstoken)
+
+        self.scale_factor = scale_factor
+        # Load checkpoint
+        if weight is not None:
+            ckpt = torch.load(weight, weights_only=True)
+            self.load_state_dict(ckpt)
     
     def forward(self, x):
         patch_h, patch_w = x.shape[-2] // 14, x.shape[-1] // 14
         
         features = self.pretrained.get_intermediate_layers(x, self.intermediate_layer_idx[self.encoder], return_class_token=True)
         
-        depth = self.depth_head(features, patch_h, patch_w)
-        depth = F.relu(depth)
+        idepth = self.depth_head(features, patch_h, patch_w)
+        idepth = F.relu(idepth)
+        idepth = idepth.squeeze(1)
+
+        depth = self.scale_factor / idepth
         
-        return depth.squeeze(1)
+        return depth
     
     @torch.no_grad()
     def infer_image(self, raw_image, input_size=518):

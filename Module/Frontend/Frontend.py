@@ -34,6 +34,8 @@ from Utility.Utils import reflect_torch_dtype
 from .StereoDepth import IDepth, disparity_to_depth, disparity_to_depth_cov
 from .Matching    import IMatcher
 
+from Module.Network.ModelSelector import ModelSelector
+
 # Frontend interface ###
 class IFrontend(ABC, ConfigTestableSubclass):
     """
@@ -366,11 +368,8 @@ class MonocularFrontend(IFrontend):
         ckpt  = torch.load(self.config.flow.weight, map_location=self.config.device, weights_only=True)
         flow_model.load_ddp_state_dict(ckpt)
 
-        from ..Network.DepthAnythingV2 import build_depth_anything_v2
-        monodepth_model = build_depth_anything_v2(config.monodepth.model_configs)
+        monodepth_model = ModelSelector.get(self.config.monodepth)
         ## TODO: float16, 32 etc?
-        ckpt  = torch.load(self.config.monodepth.weight, weights_only=True)
-        monodepth_model.load_state_dict(ckpt)
         monodepth_model.to(self.config.device)
         monodepth_model.eval()
 
@@ -391,10 +390,7 @@ class MonocularFrontend(IFrontend):
 
     def estimate_depth(self, frame: CameraData) -> IDepth.Output:
         mono_frame = frame.imageL.to(self.config.device)
-        inverse_depth = self.model["monodepth_model"].forward(mono_frame)
-        # inverse_depth = torch.where(inverse_depth == 0, torch.full_like(inverse_depth, float('nan')), inverse_depth)
-
-        depth = 1000.0 / (inverse_depth)
+        depth = self.model["monodepth_model"].forward(mono_frame)
         
         # TODO: dont hack this
         # ones_tensor = torch.ones_like(depth)*0.1
