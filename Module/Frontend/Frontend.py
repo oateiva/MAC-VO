@@ -391,13 +391,15 @@ class MonocularFrontend(IFrontend):
     def estimate_depth(self, frame: CameraData) -> IDepth.Output:
         mono_frame = frame.imageL.to(self.config.device)
         depth = self.model["monodepth_model"].forward(mono_frame)
+        depth = depth.unsqueeze(0)  # Add batch dimension
+
+        # TODO: estimate real depth uncertainty
+        covariance = torch.ones_like(depth)
         
-        # TODO: dont hack this
-        # ones_tensor = torch.ones_like(depth)*0.1
         return IDepth.Output(
-            depth=depth.unsqueeze(0),
+            depth=depth,
             disparity=None,
-            cov=None,
+            cov=covariance,
             disparity_uncertainty=None
             )
 
