@@ -93,6 +93,7 @@ class TwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
             scheduler = StopOnPlateau(optimizer, steps=10, patience=2, decreasing=1e-5, verbose=False)
 
             while scheduler.continual():
+                # Compute weight matrix from graph covariance
                 weight = torch.block_diag(*(
                     torch.pinverse(graph.covariance_array().to(context["device"]).double())
                 ))
