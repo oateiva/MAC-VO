@@ -1,7 +1,7 @@
 type: EIVA_NoIMU
 name: plane_nose
 args:
-  root: D:\Datasets\mac-vio\plane_nose
+  root: D:\Datasets\EIVA\plane_nose
   # Controls optional data sources
   gtDepth: false
   gtFlow: false
