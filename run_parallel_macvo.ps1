@@ -103,7 +103,7 @@ foreach ($cfg in $jobConfigs) {
         Set-Location -Path $rootDir
 
         # Run python and redirect ALL output to the log
-        python macvo.py --useRR --odom $odomYaml --data $dataYaml *> $logFile
+        python macvo.py --odom $odomYaml --data $dataYaml *> $logFile
 
     } -ArgumentList $PSScriptRoot, $cfg.Exp.FullName, $cfg.Seq.FullName, $cfg.Run, $logFile
 }
