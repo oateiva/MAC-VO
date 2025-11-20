@@ -15,7 +15,7 @@ from Utility.Math  import NormalizeQuat
 
 from ..Interface import IOptimizer
 from ..PyposeOptimizers import LM_analytic, AnalyticModule, FactorGraph
-from .Graphs import GraphInput, GraphOutput
+from .Graphs import Analytic_ReprojDepth_TwoFramePGO, GraphInput, GraphOutput, ReprojDepth_TwoFramePGO
 from .Graphs import ICP_TwoframePGO, Reproj_TwoFramePGO, ReprojDisp_TwoFramePGO
 from .Graphs import Analytic_ICP_TwoframePGO, Analytic_Reproj_TwoFramePGO, Analytic_ReprojDisp_TwoFramePGO
 
@@ -93,6 +93,7 @@ class TwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
             scheduler = StopOnPlateau(optimizer, steps=10, patience=2, decreasing=1e-5, verbose=False)
 
             while scheduler.continual():
+                # Compute weight matrix from graph covariance
                 weight = torch.block_diag(*(
                     torch.pinverse(graph.covariance_array().to(context["device"]).double())
                 ))
@@ -159,3 +160,92 @@ class Empty_TwoFrame_PGO(TwoFrame_PGO):
         return context, GraphOutput(motion=graph_data.init_motion,
                                     frame_idx=graph_data.frame_idx,
                                     from_idx=graph_data.from_idx)
+    
+
+# ------- Monocular variant ------- #
+
+class MonoTwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
+    @torch.no_grad()
+    def get_graph_data(self, global_map: VisualMap, frame_idx: torch.Tensor,
+                       observations: torch.Tensor | None = None, edges: torch.Tensor | None = None) -> GraphInput:
+        frame2opt = global_map.frames[frame_idx]
+
+        obs = global_map.get_frame2match(frame2opt)
+        pts = global_map.get_match2point(obs)
+        im_intrinsics = frame2opt.data["K"][0]
+
+        lengths = global_map.frame2match.ranges[frame2opt.index, :, 1].flatten()
+        lengths = lengths[lengths >= 0]
+        edges_idx = torch.repeat_interleave(torch.arange(lengths.size(0)), lengths.long())
+        init_motion = pp.SE3(frame2opt.data["pose"])
+        return GraphInput(frame_idx, frame_idx - 1, init_motion, None, obs, pts, im_intrinsics, edges_idx, "cpu")
+ 
+    @classmethod
+    def is_valid_config(cls, config: SimpleNamespace | None) -> None:
+        cls._enforce_config_spec(config, {
+            "graph_type": lambda s: s in {"icp", "reproj", "disp"},
+            "device": lambda v: isinstance(v, str) and (v == "cpu" or "cuda" in v),
+            "vectorize": lambda b: isinstance(b, bool),
+            "parallel": lambda b: isinstance(b, bool),
+            "autodiff": lambda b: isinstance(b, bool)
+        })
+
+    @staticmethod
+    def init_context(config) -> dict:
+        match (config.autodiff, config.graph_type):
+            case (True, "icp"): # e
+                PoseGraphClass = ICP_TwoframePGO
+            case (True, "reproj"): # e
+                PoseGraphClass = Reproj_TwoFramePGO
+            case (True, "disp"): # e
+                PoseGraphClass = ReprojDepth_TwoFramePGO
+            case (False, "icp"): # e
+                PoseGraphClass = Analytic_ICP_TwoframePGO
+            case (False, "reproj"): # e
+                PoseGraphClass = Analytic_Reproj_TwoFramePGO
+            case (False, "disp"): # e
+                PoseGraphClass = Analytic_ReprojDepth_TwoFramePGO
+            case _:
+                raise ValueError(f"Graph type of {config.graph_type} is not supported")
+
+        return {
+            "optimizer_cfg": {
+                "kernel"   : Huber(delta=0.1),
+                "solver"   : PINV(),
+                "strategy" : TrustRegion(radius=1e3),
+                "corrector": FastTriggs(Huber(delta=0.1)),
+                "vectorize": config.vectorize,
+            },
+            "device": config.device,
+
+            "pose_graph_class": PoseGraphClass
+        }
+
+    @staticmethod
+    def _optimize(context: dict, graph_data: GraphInput) -> tuple[dict, GraphOutput]:
+        with Timer.CPUTimingContext("TwoframePGO"), Timer.GPUTimingContext("TwoframePGO", torch.cuda.current_stream()):
+            graph: FactorGraph = context["pose_graph_class"](graph_data)\
+                .to(device=torch.device(context["device"]), dtype=torch.double)
+            assert isinstance(graph, FactorGraph)
+
+            if isinstance(graph, AnalyticModule):
+                optimizer = LM_analytic(graph, min=1e-6, **context["optimizer_cfg"])
+            else:
+                optimizer = LM(graph, min=1e-6, **context["optimizer_cfg"])
+
+            scheduler = StopOnPlateau(optimizer, steps=10, patience=2, decreasing=1e-5, verbose=False)
+
+            while scheduler.continual():
+                weight = torch.block_diag(*(
+                    torch.pinverse(graph.covariance_array().to(context["device"]).double())
+                ))
+                loss = optimizer.step(input=(), weight=weight)
+                scheduler.step(loss)
+
+        return context, graph.write_back()
+
+    def write_graph_data(self, result: GraphOutput | None, global_map: VisualMap) -> None:
+        if result is None: return
+
+        to_pose     = pp.SE3(result.motion[0].data.double().cpu())
+        global_map.frames.data["pose"][result.frame_idx] = to_pose.float()

@@ -1,0 +1,10 @@
+type: TartanAir_NoIMU
+name: neighborhood
+args:
+  root: D:\Datasets\TartanAir_Sample\neighborhood_sample_P002\P002
+  # Controls optional data sources
+  gtDepth: false
+  gtFlow: true
+  gtPose: true
+
+  compressed: false

@@ -1,0 +1,10 @@
+type: TartanAir_NoIMU
+name: endofworld
+args:
+  root: D:\Datasets\TartanAir_Sample\endofworld_sample_P001\P001
+  # Controls optional data sources
+  gtDepth: false
+  gtFlow: true
+  gtPose: true
+
+  compressed: false

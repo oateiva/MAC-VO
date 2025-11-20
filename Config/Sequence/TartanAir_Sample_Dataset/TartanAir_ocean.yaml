@@ -1,0 +1,10 @@
+type: TartanAir_NoIMU
+name: ocean
+args:
+  root: D:\Datasets\TartanAir_Sample\ocean_sample_P006\P006
+  # Controls optional data sources
+  gtDepth: false
+  gtFlow: true
+  gtPose: true
+
+  compressed: false

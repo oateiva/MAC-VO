@@ -1,8 +1,8 @@
 import torch
 from types import SimpleNamespace
 
-from DataLoader import SequenceBase, StereoFrame, ScaleFrame, NoTransform
-from Module.Frontend.StereoDepth import IStereoDepth
+from DataLoader import SequenceBase, Frame, ScaleFrame, NoTransform
+from Module.Frontend.StereoDepth import IDepth
 from Utility.PrettyPrint import ColoredTqdm, Logger
 from Utility.Math import MahalanobisDist
 from Utility.Datatypes import DepthPerformance, DepthCovPerformance
@@ -10,14 +10,14 @@ from Utility.Extensions import GridRecorder
 
 
 @torch.inference_mode()
-def evaluate_depth(depth: IStereoDepth, seq: SequenceBase[StereoFrame], max_depth: float = 80.) -> DepthPerformance:
+def evaluate_depth(depth: IDepth, seq: SequenceBase[Frame], max_depth: float = 80.) -> DepthPerformance:
     results : list[DepthPerformance] = []
-    frame   : StereoFrame
+    frame   : Frame
     for frame in ColoredTqdm(seq, desc="Evaluating DepthModel"):
-        assert frame.stereo.gt_depth is not None, "To evaluate depth quality, must use trajectory with gtDepth"
+        assert frame.camera.gt_depth is not None, "To evaluate depth quality, must use trajectory with gtDepth"
         
-        est_output   = depth.estimate(frame.stereo)
-        gt_depth     = frame.stereo.gt_depth.to(est_output.depth.device)
+        est_output   = depth.estimate(frame.camera)
+        gt_depth     = frame.camera.gt_depth.to(est_output.depth.device)
         
         error        = (est_output.depth - gt_depth).abs()
         mask         = est_output.depth < max_depth
@@ -40,19 +40,19 @@ def evaluate_depth(depth: IStereoDepth, seq: SequenceBase[StereoFrame], max_dept
 
 
 @torch.inference_mode()
-def evaluate_depthcov(depth: IStereoDepth, seq: SequenceBase[StereoFrame], max_depth: float = 80.) -> DepthCovPerformance:
+def evaluate_depthcov(depth: IDepth, seq: SequenceBase[Frame], max_depth: float = 80.) -> DepthCovPerformance:
     assert depth.provide_cov, f"Cannot evaluate covariance for {depth} since no cov is provided by the module."
     
     cov_performance_recorder = GridRecorder((0., 50., .5), (0., 50., .5))
     results: list[DepthCovPerformance] = []
-    frame: StereoFrame
+    frame: Frame
     for frame in ColoredTqdm(seq, desc="Evaluate DepthCov"):
-        assert frame.stereo.gt_depth is not None, "To evaluate depth cov quality, must use sequence with ground truth depth."
+        assert frame.camera.gt_depth is not None, "To evaluate depth cov quality, must use sequence with ground truth depth."
         
-        est_out = depth.estimate(frame.stereo)
+        est_out = depth.estimate(frame.camera)
         assert est_out.cov is not None, "IStereoDepth implementation did not provide cov estimation as promised (via provide_cov API)"
         
-        gt_depth    = frame.stereo.gt_depth.to(est_out.depth.device)
+        gt_depth    = frame.camera.gt_depth.to(est_out.depth.device)
         
         error       = est_out.depth - gt_depth
         error2      = error.square()
@@ -102,7 +102,7 @@ if __name__ == "__main__":
     args = args.parse_args()
     
     depth_cfg, _ = load_config(Path(args.depth_estimator))
-    depth_estimator = IStereoDepth.instantiate(depth_cfg.type, depth_cfg.args)
+    depth_estimator = IDepth.instantiate(depth_cfg.type, depth_cfg.args)
     
     if args.scale_image != 1.0:
         scale = args.scale_image
@@ -114,7 +114,7 @@ if __name__ == "__main__":
     
     for data_path in args.data:
         data_cfg, _ = load_config(Path(data_path))
-        seq         = SequenceBase[StereoFrame].instantiate(data_cfg.type, data_cfg.args).preload()
+        seq         = SequenceBase[Frame].instantiate(data_cfg.type, data_cfg.args).preload()
         seq         = seq.transform(transform_fn)
         
         print(evaluate_depth(depth_estimator, seq, max_depth=args.max_depth))

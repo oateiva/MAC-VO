@@ -52,64 +52,163 @@ class Collatable:
         if any([x is None for x in batch]): return None
         return collate_fn([x for x in batch if x is not None])
 
-
-@dataclass(kw_only=True)
-class StereoData(Collatable):
+@dataclass(slots=True, kw_only=True)
+class CameraData(Collatable):
+    # Common
     # Transformation from body frame to sensor frame
     T_BS: pp.LieTensor      # torch.float32, pp.SE3 of shape Bx7
     K   : torch.Tensor      # torch.float32 of shape Bx3x3
-    baseline: torch.Tensor   # Baseline (m) between left and right camera, len(list) = B
     time_ns : list[int]     # Time (ns) of data received, len(list) = B
     height: int             # H
     width : int             # W
-    
-    @property
-    def frame_ns(self) -> int:
-        assert len(self.time_ns) == 1, "Can only use frame_ns on unbatched data."
-        return self.time_ns[0]
-    @property
-    def frame_ms(self) -> float: return self.frame_ns / 1000.
-    @property
-    def frame_baseline(self) -> float:
-        assert self.baseline.size(0) == 1, "Can only use frame_baseline on unbatched data"
-        return self.baseline.item()
-    @property
-    def frame_K(self) -> torch.Tensor:
-        assert self.K.size(0) == 1, "Can only use frame_K on unbatched data"
-        return self.K[0]
-    
-    @property
-    def time_ms(self) -> list[float]: return [t / 1000. for t in self.time_ns]
-    @property
-    def fx(self) -> float:
-        assert self.K.size(0) == 1, "Can only use property shortcut on unbatched data"
-        return self.K[0, 0, 0].item()
-    @property
-    def fy(self) -> float:
-        assert self.K.size(0) == 1, "Can only use property shortcut on unbatched data"
-        return self.K[0, 1, 1].item()
-    @property
-    def cx(self) -> float:
-        assert self.K.size(0) == 1, "Can only use property shortcut on unbatched data"
-        return self.K[0, 0, 2].item()
-    @property
-    def cy(self) -> float:
-        assert self.K.size(0) == 1, "Can only use property shortcut on unbatched data"
-        return self.K[0, 1, 2].item()
-    
+
+    # Optional stereo
+    baseline: T.Optional[torch.Tensor] = None  # [B] or None
+
     # Sensor Data
-    imageL: torch.Tensor    # torch.float32 of shape Bx3xHxW
-    imageR: torch.Tensor    # torch.float32 of shape Bx3xHxW
-    
+    images: T.List[torch.Tensor]     # mono: [L]; stereo: [L, R] of shape Bx3xHxW
+
     # Label & Ground Truth
     gt_flow  : torch.Tensor | None = None    # torch.float32 of shape Bx2xHxW 
     flow_mask: torch.Tensor | None = None    # torch.bool    of shape Bx1xHxW
     gt_depth : torch.Tensor | None = None    # torch.float32 of shape Bx1xHxW 
-    
+
     collate_handlers = {
         "height": lambda batch: batch[0],
         "width" : lambda batch: batch[0],
     }
+
+    # ---- Convenience & checks ----
+    @property
+    def is_stereo(self) -> bool: return len(self.images) == 2
+
+    @property
+    def imageL(self) -> torch.Tensor: return self.images[0]
+
+    @imageL.setter
+    def imageL(self, value: torch.Tensor): self.images[0] = value
+
+    @property
+    def imageR(self) -> torch.Tensor:
+        assert self.is_stereo, "No right image in mono sample"
+        return self.images[1]
+
+    @imageR.setter
+    def imageR(self, value: torch.Tensor):
+        assert self.is_stereo, "No right image in mono sample"
+        self.images[1] = value
+
+    @property
+    def frame_baseline(self) -> float | None:
+        if self.baseline is None:
+            return None
+        assert self.baseline.size(0) == 1, "Can only use frame_baseline on unbatched data"
+        return self.baseline.item()
+
+    # ---- Shortcuts (work on unbatched) ----
+    @property
+    def frame_ns(self) -> int:
+        assert len(self.time_ns) == 1, "Can only use frame_ns on unbatched data."
+        return self.time_ns[0]
+
+    @property
+    def frame_ms(self) -> float: return self.frame_ns / 1000.
+
+    @property
+    def frame_K(self) -> torch.Tensor:
+        assert self.K.size(0) == 1, "Can only use frame_K on unbatched data"
+        return self.K[0]
+
+    @property
+    def time_ms(self) -> list[float]: return [t / 1000. for t in self.time_ns]
+
+    @property
+    def fx(self) -> float:
+        assert self.K.size(0) == 1, "Can only use property shortcut on unbatched data"
+        return self.K[0, 0, 0].item()
+
+    @property
+    def fy(self) -> float:
+        assert self.K.size(0) == 1, "Can only use property shortcut on unbatched data"
+        return self.K[0, 1, 1].item()
+
+    @property
+    def cx(self) -> float:
+        assert self.K.size(0) == 1, "Can only use property shortcut on unbatched data"
+        return self.K[0, 0, 2].item()
+
+    @property
+    def cy(self) -> float:
+        assert self.K.size(0) == 1, "Can only use property shortcut on unbatched data"
+        return self.K[0, 1, 2].item()
+
+    @classmethod
+    def from_stereo(cls, *, T_BS, K, time_ns, height, width, imageL, imageR, baseline, **kwargs):
+        return cls(T_BS=T_BS, K=K, time_ns=time_ns, height=height, width=width,
+                   images=[imageL, imageR], baseline=baseline, **kwargs)
+
+    @classmethod
+    def from_mono(cls, *, T_BS, K, time_ns, height, width, image, **kwargs):
+        return cls(T_BS=T_BS, K=K, time_ns=time_ns, height=height, width=width,
+                   images=[image], **kwargs)
+
+# @dataclass(kw_only=True)
+# class StereoData(Collatable):
+#     # Transformation from body frame to sensor frame
+#     T_BS: pp.LieTensor      # torch.float32, pp.SE3 of shape Bx7
+#     K   : torch.Tensor      # torch.float32 of shape Bx3x3
+#     baseline: torch.Tensor   # Baseline (m) between left and right camera, len(list) = B
+#     time_ns : list[int]     # Time (ns) of data received, len(list) = B
+#     height: int             # H
+#     width : int             # W
+    
+#     @property
+#     def frame_ns(self) -> int:
+#         assert len(self.time_ns) == 1, "Can only use frame_ns on unbatched data."
+#         return self.time_ns[0]
+#     @property
+#     def frame_ms(self) -> float: return self.frame_ns / 1000.
+#     @property
+#     def frame_baseline(self) -> float:
+#         assert self.baseline.size(0) == 1, "Can only use frame_baseline on unbatched data"
+#         return self.baseline.item()
+#     @property
+#     def frame_K(self) -> torch.Tensor:
+#         assert self.K.size(0) == 1, "Can only use frame_K on unbatched data"
+#         return self.K[0]
+    
+#     @property
+#     def time_ms(self) -> list[float]: return [t / 1000. for t in self.time_ns]
+#     @property
+#     def fx(self) -> float:
+#         assert self.K.size(0) == 1, "Can only use property shortcut on unbatched data"
+#         return self.K[0, 0, 0].item()
+#     @property
+#     def fy(self) -> float:
+#         assert self.K.size(0) == 1, "Can only use property shortcut on unbatched data"
+#         return self.K[0, 1, 1].item()
+#     @property
+#     def cx(self) -> float:
+#         assert self.K.size(0) == 1, "Can only use property shortcut on unbatched data"
+#         return self.K[0, 0, 2].item()
+#     @property
+#     def cy(self) -> float:
+#         assert self.K.size(0) == 1, "Can only use property shortcut on unbatched data"
+#         return self.K[0, 1, 2].item()
+    
+#     # Sensor Data
+#     imageL: torch.Tensor    # torch.float32 of shape Bx3xHxW
+#     imageR: torch.Tensor    # torch.float32 of shape Bx3xHxW
+    
+#     # Label & Ground Truth
+#     gt_flow  : torch.Tensor | None = None    # torch.float32 of shape Bx2xHxW 
+#     flow_mask: torch.Tensor | None = None    # torch.bool    of shape Bx1xHxW
+#     gt_depth : torch.Tensor | None = None    # torch.float32 of shape Bx1xHxW 
+    
+#     collate_handlers = {
+#         "height": lambda batch: batch[0],
+#         "width" : lambda batch: batch[0],
+#     }
 
 
 @dataclass(kw_only=True)
@@ -183,18 +282,38 @@ class DataFrame(Collatable):
         assert len(self.time_ns) == 1, "frame_time_ns property is only valid on unbatched data"
         return self.time_ns[0]
 
+
 T_Data = T.TypeVar("T_Data", bound=DataFrame)
+
 
 @dataclass(kw_only=True)
 class DataFramePair(DataFrame, T.Generic[T_Data]):
     cur : T_Data
     nxt : T_Data
 
-@dataclass(kw_only=True)
-class StereoFrame(DataFrame):
-    stereo   : StereoData
 
 @dataclass(kw_only=True)
-class StereoInertialFrame(StereoFrame):
+class Frame(DataFrame):
+    camera: CameraData
+
+    @property
+    def stereo(self) -> CameraData:
+        return self.camera
+
+    @stereo.setter
+    def stereo(self, value: CameraData) -> None:
+        self.camera = value
+
+    @property
+    def mono(self) -> CameraData:
+        return self.camera
+
+    @mono.setter
+    def mono(self, value: CameraData) -> None:
+        self.camera = value
+
+
+@dataclass(kw_only=True)
+class StereoInertialFrame(Frame):
     imu        : IMUData
     gt_attitude: AttitudeData | None = None

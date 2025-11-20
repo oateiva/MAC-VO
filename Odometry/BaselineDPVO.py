@@ -9,13 +9,13 @@ from dpvo.config import cfg     #type: ignore
 DPVO: Any
 cfg : Any
 
-from DataLoader import SequenceBase, StereoFrame
+from DataLoader import SequenceBase, Frame
 from Module.Map import VisualMap, FrameNode
 
 from .Interface import IOdometry
 
 
-class DeepPatchVO(IOdometry[StereoFrame]):
+class DeepPatchVO(IOdometry[Frame]):
     def __init__(self, config_file: str, weight_file: str, height: int, width: int, **kwargs) -> None:
         super().__init__()
         self.config_file = config_file
@@ -35,19 +35,19 @@ class DeepPatchVO(IOdometry[StereoFrame]):
         self.T_BSs = []
     
     @classmethod
-    def from_config(cls: type["DeepPatchVO"], cfg: SimpleNamespace, seq: SequenceBase[StereoFrame]) -> "DeepPatchVO":
+    def from_config(cls: type["DeepPatchVO"], cfg: SimpleNamespace, seq: SequenceBase[Frame]) -> "DeepPatchVO":
         sample_frame = seq[0]
-        return cls(**vars(cfg.Odometry.args), height=sample_frame.stereo.height, width=sample_frame.stereo.width)
+        return cls(**vars(cfg.Odometry.args), height=sample_frame.camera.height, width=sample_frame.camera.width)
     
     @torch.no_grad()
     @torch.inference_mode()
-    def run(self, frame: StereoFrame) -> None:
-        self.Ks.append(frame.stereo.K)
-        self.T_BSs.append(frame.stereo.T_BS)
-        self.Ts.append(frame.stereo.frame_ns)
+    def run(self, frame: Frame) -> None:
+        self.Ks.append(frame.camera.K)
+        self.T_BSs.append(frame.camera.T_BS)
+        self.Ts.append(frame.camera.frame_ns)
         # NOTE: DPVO will perform /255 operation internally.
-        image_cu = frame.stereo.imageL.cuda()[0] * 255
-        intrinsic_cu = torch.tensor([frame.stereo.fx, frame.stereo.fy, frame.stereo.cx, frame.stereo.cy], device="cuda")
+        image_cu = frame.camera.imageL.cuda()[0] * 255
+        intrinsic_cu = torch.tensor([frame.camera.fx, frame.camera.fy, frame.camera.cx, frame.camera.cy], device="cuda")
         self.dpvo(frame.frame_idx, image_cu, intrinsic_cu)
         torch.cuda.empty_cache()
         

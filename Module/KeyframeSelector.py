@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from types import SimpleNamespace
 
 from Utility.Extensions import ConfigTestableSubclass
-from DataLoader import StereoFrame, T_Data
+from DataLoader import Frame, T_Data
 
 
 class IKeyframeSelector(ABC, T.Generic[T_Data], ConfigTestableSubclass):
@@ -19,8 +19,8 @@ class IKeyframeSelector(ABC, T.Generic[T_Data], ConfigTestableSubclass):
     def isKeyframe(self, frame: T_Data) -> bool: ...
 
 
-class AllKeyframe(IKeyframeSelector[StereoFrame]):
-    def isKeyframe(self, frame: StereoFrame) -> bool:
+class AllKeyframe(IKeyframeSelector[Frame]):
+    def isKeyframe(self, frame: Frame) -> bool:
         return True
 
     @classmethod
@@ -28,8 +28,8 @@ class AllKeyframe(IKeyframeSelector[StereoFrame]):
         cls._enforce_config_spec(config, {})
 
 
-class UniformKeyframe(IKeyframeSelector[StereoFrame]):    
-    def isKeyframe(self, frame: StereoFrame) -> bool:
+class UniformKeyframe(IKeyframeSelector[Frame]):    
+    def isKeyframe(self, frame: Frame) -> bool:
         return (frame.frame_idx % self.config.keyframe_freq) == 0
 
     @classmethod

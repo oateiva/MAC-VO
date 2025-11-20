@@ -1,7 +1,7 @@
 import argparse
 from pathlib import Path
 
-from DataLoader import SequenceBase, StereoFrame, smart_transform
+from DataLoader import SequenceBase, Frame, smart_transform
 from Evaluation.EvalSeq import EvaluateSequences
 from Odometry.MACVO import MACVO
 from Utility.Config import build_dynamic_config, load_config
@@ -15,10 +15,10 @@ def execute_experiment(name, cfg, cfg_dict, root_box: Sandbox) -> str:
     exp_space.config = cfg_dict
     
     sequence = smart_transform(
-        SequenceBase[StereoFrame].instantiate(cfg.Data.type, cfg.Data.args),
+        SequenceBase[Frame].instantiate(cfg.Data.type, cfg.Data.args),
         cfg.Preprocess
     ).preload()
-    system = MACVO[StereoFrame].from_config(cfg)
+    system = MACVO[Frame].from_config(cfg)
     system.receive_frames(sequence, exp_space)
     
     return str(exp_space.folder)

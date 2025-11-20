@@ -9,4 +9,4 @@ from .Dataset.KITTI      import KITTI_StereoSequence
 from .Dataset.ZedCam     import ZedSequence
 from .Dataset.EuRoC      import EuRoC_StereoSequence, EuRoC_Sequence
 from .Dataset.VBR        import VBR_StereoSequence
-from .Dataset.EIVA       import EIVA_StereoSequence, EIVA_StereoSequenceORM
+from .Dataset.EIVA       import EIVASequence, EIVA_StereoSequenceORM

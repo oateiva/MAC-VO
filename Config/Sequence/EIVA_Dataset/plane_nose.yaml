@@ -6,6 +6,7 @@ args:
   gtDepth: false
   gtFlow: false
   gtPose: true
+  is_stereo: false
   navigation_names: [plane_nose]
   sequence_camera_names: [left, right]
 

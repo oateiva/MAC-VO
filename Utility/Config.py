@@ -77,7 +77,8 @@ def build_dynamic_config(spec: DynamicConfigSpec):
 
 
 def load_config(path: Path):
-    assert path.exists()
+    if not path.exists():
+        raise FileNotFoundError(f"Config file not found: {path}")
     with open(path, "r") as f:
         data = yaml.load(f, IncludeLoader)
     return asNamespace(data), data

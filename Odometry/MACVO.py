@@ -10,7 +10,7 @@ from rich.panel import Panel
 from typing import Callable
 
 import Module
-from DataLoader import StereoFrame
+from DataLoader import Frame
 from Module.Map import VisualMap, FrameNode, MatchObs, PointNode
 from Utility.Point import filterPointsInRange, pixel2point_NED
 from Utility.PrettyPrint import Logger, GlobalConsole
@@ -20,7 +20,7 @@ from Utility.Extensions import ConfigTestable
 
 from .Interface import IOdometry
 
-T_SensorFrame = T.TypeVar("T_SensorFrame", bound=StereoFrame)
+T_SensorFrame = T.TypeVar("T_SensorFrame", bound=Frame)
 
 
 class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
@@ -158,18 +158,18 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         })
 
     def initialize(self, frame0: T_SensorFrame):
-        depth0          = self.Frontend.estimate_depth(frame0.stereo)
+        depth0          = self.Frontend.estimate_depth(frame0.camera)
         est_pose        = self.MotionEstimator.predict(frame0, None, depth0.depth).unsqueeze(0)
         
         frame_idx = self.graph.frames.push(FrameNode.init({
             "pose"        : est_pose,
-            "T_BS"        : frame0.stereo.T_BS,
+            "T_BS"        : frame0.camera.T_BS,
             "need_interp" : torch.tensor([0], dtype=torch.bool),
-            "time_ns"     : torch.tensor([frame0.stereo.frame_ns], dtype=torch.long),
-            "K"           : frame0.stereo.K,
-            "baseline"    : frame0.stereo.baseline,
+            "time_ns"     : torch.tensor([frame0.camera.frame_ns], dtype=torch.long),
+            "K"           : frame0.camera.K,
+            "baseline"    : frame0.camera.baseline,
         }))
-        self.OutlierFilter.set_meta(frame0.stereo)
+        self.OutlierFilter.set_meta(frame0.camera)
         self.prev_keyframe = (frame0, int(frame_idx.item()), depth0)
 
     def run_pair(self, frame0: T_SensorFrame, frame1: T_SensorFrame) -> None:
@@ -181,7 +181,7 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
             return
         
         depth0          = self.prev_keyframe[2]
-        depth1, match01 = self.Frontend.estimate_pair(frame0.stereo, frame1.stereo)
+        depth1, match01 = self.Frontend.estimate_pair(frame0.camera, frame1.camera)
 
         # Receive optimization result from previous step (if exists) ####################
         # NOTE: should always writeback optimized pose to global map before selecting new 
@@ -196,13 +196,13 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         est_pose = self.MotionEstimator.predict(frame1, match01.flow, depth1.depth).unsqueeze(0)
         
         # Generate Keypoints for frame 0 and 1 ##########################################
-        kp0_uv  = self.KeypointSelector.select_point(frame0.stereo, self.num_point, depth0, depth1, match01)
+        kp0_uv  = self.KeypointSelector.select_point(frame0.camera, self.num_point, depth0, depth1, match01)
         kp1_uv  = kp0_uv + self.Frontend.retrieve_pixels(kp0_uv, match01.flow).T
         
         inbound_mask= filterPointsInRange(
             kp1_uv, 
-            (self.edge_width, frame1.stereo.width - self.edge_width), 
-            (self.edge_width, frame1.stereo.height - self.edge_width)
+            (self.edge_width, frame1.camera.width - self.edge_width), 
+            (self.edge_width, frame1.camera.height - self.edge_width)
         )
         kp0_uv  = kp0_uv[inbound_mask]
         kp1_uv  = kp1_uv[inbound_mask]
@@ -235,13 +235,13 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         
         # Record color of keypoints (for visualization) #################################
         kp0_uv_cpu = kp0_uv.cpu()
-        kp0_color  = frame0.stereo.imageL[..., kp0_uv_cpu[..., 1], kp0_uv_cpu[..., 0]].squeeze(0).T
+        kp0_color  = frame0.camera.imageL[..., kp0_uv_cpu[..., 1], kp0_uv_cpu[..., 0]].squeeze(0).T
         kp0_color  = (kp0_color * 255).to(torch.uint8)
         
         # Project from 2D -> 3D #########################################################
-        pos0_Tc = pixel2point_NED(kp0_uv, kp0_d, frame0.stereo.frame_K).cpu()
-        pos0_covTc  = self.ObsCovModel.estimate(frame0.stereo, kp0_uv, depth0, kp0_sigma_dd, kp0_sigma_uv)
-        pos1_covTc  = self.ObsCovModel.estimate(frame1.stereo, kp1_uv, depth1, kp1_sigma_dd, kp1_sigma_uv)
+        pos0_Tc = pixel2point_NED(kp0_uv, kp0_d, frame0.camera.frame_K).cpu()
+        pos0_covTc  = self.ObsCovModel.estimate(frame0.camera, kp0_uv, depth0, kp0_sigma_dd, kp0_sigma_uv)
+        pos1_covTc  = self.ObsCovModel.estimate(frame1.camera, kp1_uv, depth1, kp1_sigma_dd, kp1_sigma_uv)
         
         
         # Run Outlier Filter ############################################################
@@ -298,6 +298,7 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         rr_plt.log_flow(
             "/world/macvo/cam_left/optical_flow",
             match01.flow[0].detach().permute(1, 2, 0))
+        rr_plt.log_depth("/world/macvo/cam_left/depth", depth1.depth[0])
         rr_plt.log_flow_covar("/world/macvo/cam_left/optical_flow_covar", match01.cov)
         fig_plt.plot_imatcher("matching", match01, frame0, frame1)
         fig_plt.plot_istereo ("stereo_d", depth1 , frame1)
@@ -319,19 +320,19 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
 
         # Add (dense) mapping points to the map #########################################
         if self.mapping:
-            map0_uv       = self.MappointSelector.select_point(frame0.stereo, 2000, depth0, depth1, match01)
+            map0_uv       = self.MappointSelector.select_point(frame0.camera, 2000, depth0, depth1, match01)
             num_kp        = map0_uv.size(0)
             map0_d        = self.Frontend.retrieve_pixels(map0_uv, depth0.depth).squeeze(0)
-            map0_Tc       = pixel2point_NED(map0_uv, map0_d, frame0.stereo.frame_K).cpu()
+            map0_Tc       = pixel2point_NED(map0_uv, map0_d, frame0.camera.frame_K).cpu()
 
             map0_sigma_dd = self.Frontend.retrieve_pixels(map0_uv, depth0.cov)
             map0_sigma_dd = map0_sigma_dd.squeeze(0) if (map0_sigma_dd is not None) else None
             map0_sigma_uv = torch.ones((num_kp, 3), device=self.device) * self.match_cov_default
             map0_sigma_uv[..., 2] = 0.   # No sigma_uv off-diag term.
-            map0_Tc_cov = self.ObsCovModel.estimate(frame0.stereo, map0_uv, depth0, map0_sigma_dd, map0_sigma_uv)
+            map0_Tc_cov = self.ObsCovModel.estimate(frame0.camera, map0_uv, depth0, map0_sigma_dd, map0_sigma_uv)
             
             map0_uv_cpu = map0_uv.cpu()
-            map0_color  = frame0.stereo.imageL[..., map0_uv_cpu[..., 1], map0_uv_cpu[..., 0]].squeeze(0).T
+            map0_color  = frame0.camera.imageL[..., map0_uv_cpu[..., 1], map0_uv_cpu[..., 0]].squeeze(0).T
             map0_color  = (map0_color * 255).to(torch.uint8)
             
             num_map_orig  = len(self.graph.map_points)
@@ -346,11 +347,11 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
     def push_keyframe(self, frame: T_SensorFrame, est_pose: pp.LieTensor | torch.Tensor, need_interp: bool=False) -> torch.Tensor:
         frame_idx = self.graph.frames.push(FrameNode.init({
             "pose"        : est_pose,
-            "T_BS"        : frame.stereo.T_BS,
+            "T_BS"        : frame.camera.T_BS,
             "need_interp" : torch.tensor([need_interp], dtype=torch.bool),
-            "time_ns"     : torch.tensor([frame.stereo.frame_ns], dtype=torch.long),
-            "K"           : frame.stereo.K,
-            "baseline"    : frame.stereo.baseline,
+            "time_ns"     : torch.tensor([frame.camera.frame_ns], dtype=torch.long),
+            "K"           : frame.camera.K,
+            "baseline"    : frame.camera.baseline,
         }))
         return frame_idx
 

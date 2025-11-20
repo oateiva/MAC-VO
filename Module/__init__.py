@@ -6,6 +6,6 @@ from .MapProcessor import IMapProcessor
 from .KeyframeSelector import IKeyframeSelector
 from .Optimization import IOptimizer
 
-from .Frontend.StereoDepth import IStereoDepth
+from .Frontend.StereoDepth import IDepth
 from .Frontend.Matching    import IMatcher
 from .Frontend.Frontend    import IFrontend

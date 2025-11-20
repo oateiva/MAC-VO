@@ -5,9 +5,9 @@ from types import SimpleNamespace
 import torch
 
 
-from .Frontend.StereoDepth import IStereoDepth
+from .Frontend.StereoDepth import IDepth
 from .Frontend.Matching    import IMatcher
-from DataLoader import StereoData
+from DataLoader import CameraData
 
 from Utility.Extensions import ConfigTestableSubclass
 from Utility.Timer import Timer
@@ -27,10 +27,10 @@ class IKeypointSelector(ABC, ConfigTestableSubclass):
     @abstractmethod
     def select_point(
         self,
-        frame   : StereoData,
+        frame   : CameraData,
         numPoint: int,
-        depth0_est: IStereoDepth.Output,
-        depth1_est: IStereoDepth.Output,
+        depth0_est: IDepth.Output,
+        depth1_est: IDepth.Output,
         match_est: IMatcher.Output | None,
     ) -> torch.Tensor:
         """
@@ -60,7 +60,7 @@ class SelectorCompose(IKeypointSelector):
         self.weight = torch.tensor(self.config.weight)
         self.weight = self.weight / self.weight.sum()
     
-    def select_point(self, frame: StereoData, numPoint: int, depth0_est: IStereoDepth.Output, depth1_est: IStereoDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
+    def select_point(self, frame: CameraData, numPoint: int, depth0_est: IDepth.Output, depth1_est: IDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
         keypoints = []
         for selector, weight in zip(self.selectors, self.weight):
             keypoints.append(selector.select_point(frame, int(numPoint * weight), depth0_est, depth1_est, match_est))
@@ -84,7 +84,7 @@ class MappingPointSelector(IKeypointSelector):
             "mask_width": lambda v: isinstance(v, int)
         })
     
-    def select_point(self, frame: StereoData, numPoint: int, depth0_est: IStereoDepth.Output, depth1_est: IStereoDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
+    def select_point(self, frame: CameraData, numPoint: int, depth0_est: IDepth.Output, depth1_est: IDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
         assert depth0_est.cov is not None
         depth_mask     = depth0_est.depth < self.config.max_depth
         depth_cov_mask = depth0_est.cov   < self.config.max_depth_cov
@@ -104,7 +104,7 @@ class RandomSelector(IKeypointSelector):
     """
     Uniformly random select keypoints within the scope of [mask_width : -mask_width]
     """
-    def select_point(self, frame: StereoData, numPoint: int, depth0_est: IStereoDepth.Output, depth1_est: IStereoDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
+    def select_point(self, frame: CameraData, numPoint: int, depth0_est: IDepth.Output, depth1_est: IDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
         h_indices = torch.randint(self.config.mask_width, frame.height - self.config.mask_width, (numPoint, 1), device=self.config.device)
         w_indices = torch.randint(self.config.mask_width, frame.width  - self.config.mask_width, (numPoint, 1), device=self.config.device)
         kps = torch.cat([w_indices, h_indices], dim=1)
@@ -123,7 +123,7 @@ class GradientSelector(IKeypointSelector):
     Select keypoint based on gradient information. Will random select points with 
     local image gradient > config.grad_std.
     """
-    def select_point(self, frame: StereoData, numPoint: int, depth0_est: IStereoDepth.Output, depth1_est: IStereoDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
+    def select_point(self, frame: CameraData, numPoint: int, depth0_est: IDepth.Output, depth1_est: IDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
         image = frame.imageL[0]
 
         image_grad = torch.nn.functional.conv2d(
@@ -166,7 +166,7 @@ class SparseGradienSelector(IKeypointSelector):
     Ensured sparsity of keypoint by applying non-maximum suppresion (NMS) on image gradient
     of keypoint candidates.
     """
-    def select_point(self, frame: StereoData, numPoint: int, depth0_est: IStereoDepth.Output, depth1_est: IStereoDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
+    def select_point(self, frame: CameraData, numPoint: int, depth0_est: IDepth.Output, depth1_est: IDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
         image = frame.imageL[0]
 
         image_grad = torch.nn.functional.conv2d(
@@ -220,7 +220,7 @@ class GridSelector(IKeypointSelector):
     The requested `numPoint` will be used to estimate the spacing between keypoints, but the 
     selector may not generate exactly `numPoint` amount of keypoints.
     """
-    def select_point(self, frame: StereoData, numPoint: int, depth0_est: IStereoDepth.Output, depth1_est: IStereoDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
+    def select_point(self, frame: CameraData, numPoint: int, depth0_est: IDepth.Output, depth1_est: IDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
         h, w = frame.height, frame.width
         h -= 2 * self.config.mask_width
         w -= 2 * self.config.mask_width
@@ -257,7 +257,7 @@ class CovAwareSelector(IKeypointSelector):
     @Timer.cpu_timeit("KPSelector.select")
     @Timer.gpu_timeit("KPSelector.select")
     @torch.inference_mode()
-    def select_point(self, frame: StereoData, numPoint: int, depth0_est: IStereoDepth.Output, depth1_est: IStereoDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
+    def select_point(self, frame: CameraData, numPoint: int, depth0_est: IDepth.Output, depth1_est: IDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
         assert depth0_est.cov is not None
         assert depth1_est.cov is not None
         if self.config.max_depth == "auto": self.config.max_depth = frame.fx * frame.frame_baseline
@@ -359,7 +359,7 @@ class CovAwareSelector_NoDepth(IKeypointSelector):
     @Timer.cpu_timeit("KPSelector.select")
     @Timer.gpu_timeit("KPSelector.select")
     @torch.inference_mode()
-    def select_point(self, frame: StereoData, numPoint: int, depth0_est: IStereoDepth.Output, depth1_est: IStereoDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
+    def select_point(self, frame: CameraData, numPoint: int, depth0_est: IDepth.Output, depth1_est: IDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
         if match_est is None or match_est.cov is None:
             return self.fallback_grid_selector.select_point(frame, numPoint, depth0_est, depth1_est, match_est)
         else:

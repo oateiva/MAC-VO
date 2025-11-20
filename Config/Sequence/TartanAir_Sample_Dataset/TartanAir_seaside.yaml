@@ -1,0 +1,10 @@
+type: TartanAir_NoIMU
+name: seaside
+args:
+  root: D:\Datasets\TartanAir_Sample\seasidetown_sample_P003\P003
+  # Controls optional data sources
+  gtDepth: false
+  gtFlow: true
+  gtPose: true
+
+  compressed: false

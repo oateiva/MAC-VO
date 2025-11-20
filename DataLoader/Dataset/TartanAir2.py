@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from ..SequenceBase import SequenceBase
-from ..Interface import StereoData, StereoFrame, StereoInertialFrame
+from ..Interface import Frame, StereoInertialFrame
 
 
 from .TartanAir import TartanAirMonocularDataset, TartanAirIMUSimulator, loadTartanAirGT, IMUNoiseGenerator
@@ -50,7 +50,7 @@ class TartanAirV2_Sequence(SequenceBase[StereoInertialFrame]):
             imu_data, attitude_data     = self.imu_sequence.frameRangeQuery(index - 1, index)
         return StereoInertialFrame(
             idx=[local_index],
-            stereo=stereo_frame.stereo,
+            camera=stereo_frame.camera,
             imu=imu_data, gt_attitude=attitude_data,
             gt_pose=stereo_frame.gt_pose,
             time_ns=stereo_frame.time_ns
@@ -70,7 +70,7 @@ class TartanAirV2_Sequence(SequenceBase[StereoInertialFrame]):
         IMUNoiseGenerator.is_valid_config(config.imu_sim)
 
 
-class TartanAirV2_StereoSequence(SequenceBase[StereoFrame]):
+class TartanAirV2_StereoSequence(SequenceBase[Frame]):
     @classmethod
     def name(cls) -> str: return "TartanAirv2_NoIMU"
     
@@ -115,12 +115,12 @@ class TartanAirV2_StereoSequence(SequenceBase[StereoFrame]):
         
         super().__init__(length)
     
-    def __getitem__(self, local_index: int) -> StereoFrame:
+    def __getitem__(self, local_index: int) -> Frame:
         index   = self.get_index(local_index)
         gt_flow = self.flow_loader[index] if self.flow_loader else None
-        return StereoFrame(
+        return Frame(
             idx=[local_index],
-            stereo=StereoData(
+            camera=StereoData(
                 T_BS      = self.lcam_T_BS,
                 K         = self.lcam_K,
                 baseline  = torch.tensor([self.baseline]),

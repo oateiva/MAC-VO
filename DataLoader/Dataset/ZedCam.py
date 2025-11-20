@@ -9,11 +9,12 @@ from typing import Any
 
 from torch.utils.data import Dataset
 
-from ..Interface import StereoFrame, StereoData
+# from ..Interface import Frame, StereoData
 from ..SequenceBase import SequenceBase
+from ..Interface import Frame
 
 
-class ZedSequence(SequenceBase[StereoFrame]):
+class ZedSequence(SequenceBase[Frame]):
     @classmethod
     def name(cls) -> str: return "Zed"
 
@@ -40,13 +41,13 @@ class ZedSequence(SequenceBase[StereoFrame]):
         self.length = len(self.ImageL)
         super().__init__(self.length)
 
-    def __getitem__(self, local_index: int) -> StereoFrame:
+    def __getitem__(self, local_index: int) -> Frame:
         index = self.get_index(local_index)
         
-        return StereoFrame(
+        return Frame(
             idx    = [local_index],
             time_ns= [local_index * 1000],   # FIXME: a fake timestamp.
-            stereo = StereoData(
+            camera = StereoData(
                 T_BS     = pp.identity_SE3(1),
                 K        = self.K,
                 baseline = torch.tensor([self.baseline]),
@@ -122,9 +123,9 @@ if __name__ == "__main__":
     args.add_argument("--data", default="Config/Sequence/Zed/kit2kit_manual_dyna.yaml", type=str)
     args = args.parse_args()
     datacfg, datacfg_dict = load_config(Path(args.data))
-    dataset = SequenceBase[StereoFrame].instantiate(**vars(datacfg)).clip(16, 32)
+    dataset = SequenceBase[Frame].instantiate(**vars(datacfg)).clip(16, 32)
     dataloader = DataLoader(dataset, batch_size=16, shuffle=False, num_workers=0, collate_fn=dataset.collate_fn)
     
-    batch: StereoFrame
+    batch: Frame
     for batch in dataloader:
-        print(batch.stereo.imageL.shape, batch.stereo.imageR.shape, batch.idx, batch.stereo.K.shape)
+        print(batch.camera.imageL.shape, batch.camera.imageR.shape, batch.idx, batch.camera.K.shape)

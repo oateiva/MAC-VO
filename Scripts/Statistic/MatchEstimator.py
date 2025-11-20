@@ -3,7 +3,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import torch
 
-from DataLoader import SequenceBase, StereoFrame
+from DataLoader import SequenceBase, Frame
 from Module.Frontend.Matching import IMatcher
 from Utility.Config import build_dynamic_config, LoadFrom
 from Utility.Plot import getColor
@@ -23,13 +23,13 @@ def main(seq_cfg, match_cfgs):
         low_est_q_errs = []
 
         for idx in ColoredTqdm(range(1, len(sequence))):
-            prev_frame: StereoFrame = sequence[idx - 1]
-            est_out = match_est.estimate(prev_frame.stereo, sequence[idx])
+            prev_frame: Frame = sequence[idx - 1]
+            est_out = match_est.estimate(prev_frame.camera, sequence[idx])
             est_match = est_out.flow
             est_match_cov = est_out.cov
 
-            assert prev_frame.stereo.gt_flow is not None
-            ref_match = cropToMultiple(prev_frame.stereo.gt_flow, [64, 64], [2, 3])
+            assert prev_frame.camera.gt_flow is not None
+            ref_match = cropToMultiple(prev_frame.camera.gt_flow, [64, 64], [2, 3])
 
             err_flow = torch.abs(est_match - ref_match)
 

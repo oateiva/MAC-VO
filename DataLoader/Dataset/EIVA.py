@@ -13,7 +13,7 @@ from Utility.PrettyPrint import Logger
 from django.db.models import QuerySet, OuterRef, Subquery
 
 from ..SequenceBase import SequenceBase
-from ..Interface    import StereoFrame, StereoData
+from ..Interface    import Frame, CameraData
 from ..Django_Sequence import DjangoORMSequence, ensure_django
 
 
@@ -41,7 +41,7 @@ def zephyr_filename_to_ns(filename):
     return nanoseconds
 
 
-class EIVA_StereoSequenceORM(DjangoORMSequence[StereoFrame]):
+class EIVA_StereoSequenceORM(DjangoORMSequence[Frame]):
     def __init__(self, config: dict | Any):
         # Metadata
         self.lcam_T_BS = pp.identity_SE3(1)
@@ -103,7 +103,7 @@ class EIVA_StereoSequenceORM(DjangoORMSequence[StereoFrame]):
                 .only("pk", "datetime", "image__path"))
 
     # ---------- mapping ----------
-    def record_to_frame(self, row: "SequenceImage", *, local_index: int, original_index: int) -> StereoFrame:
+    def record_to_frame(self, row: "SequenceImage", *, local_index: int, original_index: int) -> Frame:
         # timestamps (ensure ns)
         t = row.datetime  # datetime.time
         ns = ((t.hour * 3600) + (t.minute * 60) + t.second) * int(1e9) + t.microsecond * 1000
@@ -112,9 +112,9 @@ class EIVA_StereoSequenceORM(DjangoORMSequence[StereoFrame]):
         imgR = self._read_path_to_tensor(row.right_image_path)
 
         B, C, H, W = imgL.shape
-        return StereoFrame(
+        return Frame(
             idx=[local_index],
-            stereo=StereoData(
+            camera=CameraData.from_stereo(
                 T_BS=self.lcam_T_BS,
                 K=self.lcam_K,
                 baseline=torch.tensor([self.baseline], dtype=torch.float32),
@@ -137,27 +137,35 @@ class EIVA_StereoSequenceORM(DjangoORMSequence[StereoFrame]):
         ten /= 255.
         return ten
 
-class EIVA_StereoSequence(SequenceBase[StereoFrame]):
+
+class EIVASequence(SequenceBase[Frame]):
     @classmethod
     def name(cls) -> str: return "EIVA_NoIMU"
 
     def __init__(self, config: SimpleNamespace | dict[str, Any]):
         cfg = self.config_dict2ns(config)
 
-        # Metadata
+        # Metadata (common)
         self.lcam_T_BS = pp.identity_SE3(1)
         self.lcam_K    = torch.tensor([
             [1847.5905420747683, 0.0, 1391.3],
             [0.0, 1847.5905420747683, 1407.177],
             [0.0, 0.0, 1.0]]).unsqueeze(0)
-        self.baseline  = 0.17007674086397787
         self.width     = 2816
         self.height    = 2816
         # End
 
-        # Stereo Loader
+        self.is_stereo = cfg.is_stereo
+
+        # Loaders
         self.lcam_loader = EIVAMonocularDataset(Path(cfg.root, "processed", "left"))
-        self.rcam_loader = EIVAMonocularDataset(Path(cfg.root, "processed", "right"))
+
+        if self.is_stereo:
+            self.baseline  = 0.17007674086397787
+            self.rcam_loader = EIVAMonocularDataset(Path(cfg.root, "processed", "right"))
+        else:
+            self.rcam_loader = None
+            self.baseline    = -1.
 
         cam_time_file_path = Path(cfg.root, "processed", "left")
         # list all files in dir
@@ -176,28 +184,49 @@ class EIVA_StereoSequence(SequenceBase[StereoFrame]):
 
         super().__init__(self.length)
 
-    def __getitem__(self, local_index: int) -> StereoFrame:
+    def __getitem__(self, local_index: int) -> Frame:
         index   = self.get_index(local_index)
-        return StereoFrame(
-            idx=[local_index],
-            stereo=StereoData(
-                T_BS      = self.lcam_T_BS,
-                K         = self.lcam_K,
-                baseline  = torch.tensor([self.baseline]),
-                time_ns   = [self.lcam_time[index]],
-                height    = 2816,
-                width     = 2816,
-                imageL    = self.lcam_loader[index],
-                imageR    = self.rcam_loader[index],
 
-                # Ground truth and labels
-                gt_depth  = None,
-                gt_flow   = None,
-                flow_mask = None,
-            ),
-            time_ns   = [self.lcam_time[index]],
-            gt_pose   = cast(pp.LieTensor, self.gt_poses[index].unsqueeze(0)) if (self.gt_poses is not None) else None,
-        )
+        if self.is_stereo is True:
+            return Frame(
+                idx=[local_index],
+                camera=CameraData.from_stereo(
+                    T_BS      = self.lcam_T_BS,
+                    K         = self.lcam_K,
+                    baseline  = torch.tensor([self.baseline]),
+                    time_ns   = [self.lcam_time[index]],
+                    height    = 2816,
+                    width     = 2816,
+                    imageL    = self.lcam_loader[index],
+                    imageR    = self.rcam_loader[index],
+
+                    # Ground truth and labels
+                    gt_depth  = None,
+                    gt_flow   = None,
+                    flow_mask = None,
+                ),
+                time_ns   = [self.lcam_time[index]],
+                gt_pose   = cast(pp.LieTensor, self.gt_poses[index].unsqueeze(0)) if (self.gt_poses is not None) else None,
+            )
+        else:
+            return Frame(
+                idx=[local_index],
+                camera=CameraData.from_mono(
+                    T_BS      = self.lcam_T_BS,
+                    K         = self.lcam_K,
+                    baseline  = torch.tensor([self.baseline]),
+                    time_ns   = [self.lcam_time[index]],
+                    height    = 2816,
+                    width     = 2816,
+                    image    = self.lcam_loader[index],
+                    # Ground truth and labels
+                    gt_depth  = None,
+                    gt_flow   = None,
+                    flow_mask = None,
+                ),
+                time_ns   = [self.lcam_time[index]],
+                gt_pose   = cast(pp.LieTensor, self.gt_poses[index].unsqueeze(0)) if (self.gt_poses is not None) else None,
+            )
 
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:

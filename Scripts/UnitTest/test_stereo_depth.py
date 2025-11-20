@@ -3,7 +3,7 @@ import torch
 from pathlib import Path
 
 from DataLoader import TartanAirV2_StereoSequence
-from Module.Frontend.StereoDepth import IStereoDepth
+from Module.Frontend.StereoDepth import IDepth
 from Utility.Config import load_config
 
 
@@ -22,11 +22,11 @@ def test_matching(config: str):
     ))
     
     frameA         = seq[0]
-    stereo_depth   = IStereoDepth.instantiate(cfg.type, cfg.args)
-    depth_output   = stereo_depth.estimate(frameA.stereo)
+    stereo_depth   = IDepth.instantiate(cfg.type, cfg.args)
+    depth_output   = stereo_depth.estimate(frameA.camera)
 
     assert depth_output.depth is not None
-    B, C, H, W = seq[0].stereo.imageL.shape
+    B, C, H, W = seq[0].camera.imageL.shape
     
     # Check flow shape validity
     assert depth_output.depth.shape == torch.Size([B, 1, H, W])

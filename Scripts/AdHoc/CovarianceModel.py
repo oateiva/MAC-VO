@@ -10,7 +10,7 @@ from matplotlib.axes import Axes
 
 from DataLoader import StereoData
 from Module import ICovariance2to3
-from Module.Frontend.StereoDepth import IStereoDepth
+from Module.Frontend.StereoDepth import IDepth
 from Utility.Plot import plot_gaussian_conf
 from Utility.Point import pixel2point_NED
 
@@ -55,7 +55,7 @@ def simulate_cov_model(
             gt_flow=None, flow_mask=None, gt_depth=None
         ),
         kp=torch.tensor([[u, v]]),
-        depth_est=IStereoDepth.Output(depth=fake_depth_map, cov=fake_depth_cov_map),
+        depth_est=IDepth.Output(depth=fake_depth_map, cov=fake_depth_cov_map),
         depth_cov=torch.tensor([depth_cov]),
         flow_cov=torch.tensor([[cov_u, cov_v]])
     )

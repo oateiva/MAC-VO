@@ -3,8 +3,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import torch
 
-from DataLoader import SequenceBase, StereoFrame
-from Module.Frontend.StereoDepth import IStereoDepth
+from DataLoader import SequenceBase, Frame
+from Module.Frontend.StereoDepth import IDepth
 from Utility.Config import load_config
 from Utility.Plot import getColor
 from Utility.Utils import cropToMultiple
@@ -15,24 +15,24 @@ def main(args):
     depth_cfg, _ = load_config(Path(args.depthcfg))
 
     sequence = SequenceBase.instantiate(**vars(sequence_cfg))
-    depth_est = IStereoDepth.instantiate(depth_cfg.type, depth_cfg.args)
+    depth_est = IDepth.instantiate(depth_cfg.type, depth_cfg.args)
 
     avg_err_percentage = []
     avg_errs = []
 
-    frame: StereoFrame
+    frame: Frame
     for frame in sequence:
         if frame.frame_idx % 3 != 0:
             continue
-        est_output = depth_est.estimate(frame.stereo)
+        est_output = depth_est.estimate(frame.camera)
         
         assert est_output.depth is not None
-        assert frame.stereo.gt_depth is not None
+        assert frame.camera.gt_depth is not None
         
-        ref_depth = cropToMultiple(frame.stereo.gt_depth, [64, 64], [2, 3])
+        ref_depth = cropToMultiple(frame.camera.gt_depth, [64, 64], [2, 3])
 
-        est_disparity = (frame.stereo.fx * frame.stereo.frame_baseline) / est_output.depth
-        ref_disparity = (frame.stereo.fx * frame.stereo.frame_baseline) / ref_depth
+        est_disparity = (frame.camera.fx * frame.camera.frame_baseline) / est_output.depth
+        ref_disparity = (frame.camera.fx * frame.camera.frame_baseline) / ref_depth
 
         masking = est_disparity >= 1
 

@@ -1,0 +1,10 @@
+type: TartanAir_NoIMU
+name: seasons
+args:
+  root: D:\Datasets\TartanAir_Sample\seasonsforest_sample_P002\P002
+  # Controls optional data sources
+  gtDepth: false
+  gtFlow: true
+  gtPose: true
+
+  compressed: false

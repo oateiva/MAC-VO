@@ -1,0 +1,13 @@
+type: EIVA_NoIMU
+name: plane_mid2
+args:
+  root: D:\Datasets\EIVA\plane_mid2
+  # Controls optional data sources
+  gtDepth: false
+  gtFlow: false
+  gtPose: true
+  is_stereo: true
+  navigation_names: [plane_mid]
+  sequence_camera_names: [left, right]
+
+  compressed: true
