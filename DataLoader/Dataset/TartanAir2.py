@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from ..SequenceBase import SequenceBase
-from ..Interface import CameraData, Frame, StereoInertialFrame
+from ..Interface import Frame, StereoInertialFrame
 
 
 from .TartanAir import TartanAirMonocularDataset, TartanAirIMUSimulator, loadTartanAirGT, IMUNoiseGenerator

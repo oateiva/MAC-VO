@@ -13,7 +13,7 @@ from Utility.PrettyPrint import Logger
 from Utility.Config import load_config
 from Utility.Math import qinterp, interpolate_pose
 
-from ..Interface import CameraData, IMUData, Frame, StereoInertialFrame, AttitudeData
+from ..Interface import IMUData, Frame, StereoInertialFrame, AttitudeData
 from ..SequenceBase import SequenceBase
 
 

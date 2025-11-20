@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from torch.utils.data import Dataset
 
-from ..Interface import Frame, CameraData
+from ..Interface import Frame
 from ..SequenceBase import SequenceBase
 
 EDN2NED = pp.from_matrix(torch.tensor([

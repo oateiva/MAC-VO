@@ -9,7 +9,7 @@ from typing import Generic, cast
 from types import SimpleNamespace
 from Utility.Extensions import ConfigTestableSubclass,TensorQueue
 from Utility.PrettyPrint import Logger
-from DataLoader import Frame, StereoInertialFrame, T_Data
+from DataLoader import Frame, T_Data
 from Utility.Timer import Timer
 
 

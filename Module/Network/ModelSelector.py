@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from typing import Type, Any
+from typing import Type
 import torch.nn as nn
 
 class ModelSelector:
