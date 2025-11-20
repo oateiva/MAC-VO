@@ -18,7 +18,7 @@ Common:
   device: &device cuda
 
 Odometry:
-  name: MACVO-DepthAnything
+  name: MACVO-DAv2
   args:
     # Device directive to the VO system
     # NOTE: the system may not follow this device config strictly since some module
@@ -80,7 +80,7 @@ Odometry:
       monodepth:
         type: DepthAnythingV2
         args:
-          weight: ./Model/depth_anything_v2_vitl.pth
+          weight: C:/ai_checkpoints/monodepth/depth_anything_v2_vitl.pth
           encoder: vitl
           scale_factor: 1000.
         # type: MetricDepthAnythingV2

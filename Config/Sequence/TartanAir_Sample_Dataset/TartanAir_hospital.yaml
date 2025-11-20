@@ -1,7 +1,7 @@
 type: TartanAir_NoIMU
-name: abf001
+name: gascola
 args:
-  root: D:\Datasets\TartanAir_Sample\abandonedfactory_sample_P001\P001
+  root: D:\Datasets\TartanAir_Sample\hospital_sample_P000\P000
   # Controls optional data sources
   gtDepth: false
   gtFlow: true

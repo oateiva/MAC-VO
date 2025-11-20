@@ -1,7 +1,7 @@
 type: TartanAir_NoIMU
-name: abf001
+name: seasons
 args:
-  root: D:\Datasets\TartanAir_Sample\abandonedfactory_sample_P001\P001
+  root: D:\Datasets\TartanAir_Sample\seasonsforest_sample_P002\P002
   # Controls optional data sources
   gtDepth: false
   gtFlow: true
