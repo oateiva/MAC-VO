@@ -11,6 +11,7 @@ from torch.utils.data import Dataset
 
 # from ..Interface import Frame, StereoData
 from ..SequenceBase import SequenceBase
+from ..Interface import Frame
 
 
 class ZedSequence(SequenceBase[Frame]):

@@ -14,7 +14,7 @@ from Utility.PrettyPrint import Logger
 from Utility.Config import load_config
 from Utility.Math import qinterp, interpolate_pose
 
-from ..Interface import StereoData, IMUData, Frame, StereoInertialFrame, AttitudeData
+from ..Interface import CameraData, IMUData, Frame, StereoInertialFrame, AttitudeData
 from ..SequenceBase import SequenceBase
 
 EDN2NED = pp.from_matrix(torch.tensor([

@@ -13,7 +13,8 @@ from Utility.Extensions import ConfigTestable
 from Utility.PrettyPrint import Logger
 
 from ..SequenceBase import SequenceBase
-from ..Interface    import StereoInertialFrame, Frame, CameraData, IMUData, AttitudeData
+from ..Interface    import Frame, CameraData
+from ..Interface    import StereoInertialFrame, IMUData, AttitudeData
 
 
 class TartanAir_Sequence(SequenceBase[StereoInertialFrame]):
@@ -130,7 +131,7 @@ class TartanAir_StereoSequence(SequenceBase[Frame]):
         gt_flow = self.flow_loader[index] if self.flow_loader else None
         return Frame(
             idx=[local_index],
-            camera=StereoData(
+            camera = CameraData.from_stereo(
                 T_BS      = self.lcam_T_BS,
                 K         = self.lcam_K,
                 baseline  = torch.tensor([self.baseline]),
