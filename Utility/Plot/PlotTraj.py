@@ -24,7 +24,7 @@ def plot_motionRTE(ax: Axes, ref_traj: PlotableMotions, est_traj: PlotableMotion
     err_motions = ref_motions @ est_motions.Inv()
     err_trans   = err_motions.translation().norm(dim=1).numpy()
     handle, = ax.plot(err_trans, scalex=True, scaley=True, label=est_traj.name, **est_traj.plot_kwargs)
-    
+
     plot_losttrack_frames(ax, est_traj.data.frame_status)
     return handle
 
@@ -36,14 +36,14 @@ def plot_MotionRTE_axes(ax: Axes, ref_traj: PlotableMotions, est_traj: PlotableM
     err_trans   = err_motions.translation().numpy()
     handle, = ax.plot(np.abs(err_trans[..., axis]), scalex=True, scaley=True, label=est_traj.name, **est_traj.plot_kwargs)
 
-    plot_losttrack_frames(ax, est_traj.data.frame_status)    
+    plot_losttrack_frames(ax, est_traj.data.frame_status)
     return handle
 
 @IgnoreException
 def plot_Translation_axes(ax: Axes, traj: PlotableMotions | PlotableTrajectory, axis: int) -> Line2D:
     motions = traj.data.translation
     handle, = ax.plot(motions[..., axis], scalex=True, scaley=True, label=traj.name, **traj.plot_kwargs)
-    
+
     plot_losttrack_frames(ax, traj.data.frame_status)
     return handle
 
@@ -54,7 +54,7 @@ def plot_MotionROE(ax: Axes, ref_traj: PlotableMotions, est_traj: PlotableMotion
     err_motions = ref_motions @ est_motions.Inv()
     err_rots    = err_motions.rotation().Log().norm(dim=1).numpy()
     handle, = ax.plot(err_rots, scalex=True, scaley=True, label=est_traj.name, **est_traj.plot_kwargs)
-    
+
     plot_losttrack_frames(ax, est_traj.data.frame_status)
     return handle
 
@@ -65,7 +65,7 @@ def plot_MotionROE_axes(ax: Axes, ref_traj: PlotableMotions, est_traj: PlotableM
     err_motions = ref_motions @ est_motions.Inv()
     err_rots    = err_motions.rotation().euler()[..., axis].abs().numpy()
     handle, = ax.plot(err_rots, scalex=True, scaley=True, label=est_traj.name, **est_traj.plot_kwargs)
-    
+
     plot_losttrack_frames(ax, est_traj.data.frame_status)
     return handle
 
@@ -89,7 +89,7 @@ def plot_LostTrackAt(ax: Axes, axis_0: int, axis_1: int, traj: PlotableTrajector
     lost_x, lost_y = traj_transitions[vo_lost_mask, axis_0], traj_transitions[vo_lost_mask, axis_1]
     scatter_handle = ax.scatter(lost_x, lost_y, color="red", marker=MarkerStyle("x"), zorder=100)
     _, labels = ax.get_legend_handles_labels()
-    
+
     # We only want this to occur once
     if "VO Lost Track" not in labels:
         scatter_handle.set_label("VO Lost Track")
@@ -99,12 +99,12 @@ def plot_CumulativeROECurve(ax: Axes, ref_traj: PlotableMotions, est_traj: Plota
     ref_motions = ref_traj.data.motions
     est_motions = est_traj.data.motions
     err_motions = ref_motions @ est_motions.Inv()
-    
+
     if axis is None:
         err_rots    = err_motions.rotation().Log().norm(dim=1).numpy()
     else:
         err_rots    = err_motions.rotation().Log().norm[..., axis].numpy()
-    
+
     return ax.ecdf(err_rots, label=est_traj.name, **est_traj.plot_kwargs)
 
 @IgnoreException
@@ -112,10 +112,10 @@ def plot_CumulativeRTECurve(ax: Axes, ref_traj: PlotableMotions, est_traj: Plota
     ref_motions = ref_traj.data.motions
     est_motions = est_traj.data.motions
     err_motions = ref_motions @ est_motions.Inv()
-    
+
     if axis is None:
         err_trans   = err_motions.translation().norm(dim=1).numpy()
     else:
         err_trans   = err_motions.translation()[..., axis].numpy()
-    
+
     return ax.ecdf(err_trans, label=est_traj.name, **est_traj.plot_kwargs)

@@ -100,8 +100,8 @@ class PSMNet(nn.Module):
     def forward(self, x):
         # left = x[0]
         # right = x[1]
-        # refimg_fea     = self.feature_extraction(left) 
-        # targetimg_fea  = self.feature_extraction(right) 
+        # refimg_fea     = self.feature_extraction(left)
+        # targetimg_fea  = self.feature_extraction(right)
         assert x.shape[1] % 2 == 0
         x1 = x.reshape(x.shape[0] * 2, x.shape[1] // 2, x.shape[2], x.shape[3])
         x1 = self.feature_extraction(x1)

@@ -13,14 +13,14 @@ def execute_experiment(name, cfg, cfg_dict, root_box: Sandbox) -> str:
     # Execute an experiment, and return the directory of result sandbox
     exp_space = root_box.new_child(name)
     exp_space.config = cfg_dict
-    
+
     sequence = smart_transform(
         SequenceBase[Frame].instantiate(cfg.Data.type, cfg.Data.args),
         cfg.Preprocess
     ).preload()
     system = MACVO[Frame].from_config(cfg)
     system.receive_frames(sequence, exp_space)
-    
+
     return str(exp_space.folder)
 
 

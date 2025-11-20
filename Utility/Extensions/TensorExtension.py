@@ -6,19 +6,19 @@ Github Repo: https://github.com/MarkChenYutian/AutoScalingTensor
 """
 
 # MIT License
-# 
+#
 # Copyright (c) 2024 Yutian Chen
-# 
+#
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
 # in the Software without restriction, including without limitation the rights
 # to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 # copies of the Software, and to permit persons to whom the Software is
 # furnished to do so, subject to the following conditions:
-# 
+#
 # The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
-# 
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -32,19 +32,19 @@ import math
 from typing import Sequence, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    # Since extending torch.Tensor class using __torch_function__ is not supported by 
-    # static type checker like MyPy and Pyright, we use this dummy class to fool the 
+    # Since extending torch.Tensor class using __torch_function__ is not supported by
+    # static type checker like MyPy and Pyright, we use this dummy class to fool the
     # static analysis tool that AutoScalingTensor behaves like a torch.Tensor.
     # https://github.com/pytorch/pytorch/issues/75568
     # https://github.com/pytorch/pytorch/pull/75484
-    # 
+    #
     # Due to the auto attribute delegation to torch.Tensor in the AutoScalingTensor.__getattribute__(...)
     # this version visible to type hinting actually matches all valid usages of the AutoScalingTensor
     # so there is no significant discrepency between static analysis bahavior and actual runtime result.
     class AutoScalingTensor(torch.Tensor):
-        def __init__(self, 
-                     shape: torch.Size | Sequence[int] | None, 
-                     grow_on: int, 
+        def __init__(self,
+                     shape: torch.Size | Sequence[int] | None,
+                     grow_on: int,
                      init_tensor: torch.Tensor | None = None,
                      init_val: int | float | None = None,
                      **kwargs) -> None: ...
@@ -58,9 +58,9 @@ if TYPE_CHECKING:
         def tensor(self) -> torch.Tensor: ...
 else:
     class AutoScalingTensor:
-        def __init__(self, 
-                    shape: torch.Size | Sequence[int] | None, 
-                    grow_on: int, 
+        def __init__(self,
+                    shape: torch.Size | Sequence[int] | None,
+                    grow_on: int,
                     init_tensor: torch.Tensor | None = None,
                     init_val: int | float | None = None,
                     **kwargs
@@ -76,43 +76,43 @@ else:
                 assert init_tensor is not None
                 self._tensor = init_tensor
                 self._curr_max_size = self._tensor.size(grow_on)
-        
+
         def _alloc_new_tensor(self, shape, **kwargs):
             if self.init_val is None:
                 return torch.empty(shape, device=self.device, **kwargs)
             else:
                 return torch.full(shape, fill_value=self.init_val, device=self.device, **kwargs)
-        
+
         def _scale_up_to(self, size: int):
             grow_to = int(2 ** math.ceil(math.log2(size + 1)))
             orig_shape = list(self._tensor.shape)
             orig_shape[self.grow_on] = grow_to
-            
+
             new_storage = self._alloc_new_tensor(orig_shape, dtype=self._tensor.dtype)
             new_storage.narrow(dim=self.grow_on, start=0, length=self.current_size).copy_(
                 self._tensor.narrow(dim=self.grow_on, start=0, length=self.current_size)
             )
-            
+
             self._tensor = new_storage
             self._curr_max_size = grow_to
-        
+
         @property
         def tensor(self) -> torch.Tensor:
             return self._tensor.narrow(dim=self.grow_on, start=0, length=self.current_size)
-        
+
         def __repr__(self) -> str:
             return f"AutoScalingTensor(alloc={self._curr_max_size}, actual={self.current_size}, \n\tdata={self.tensor}\n)"
 
         def push(self, x: torch.Tensor) -> None:
             data_size = x.size(self.grow_on)
-            
+
             if self.current_size + data_size >= self._curr_max_size:
                 self._scale_up_to(self.current_size + data_size)
             assert self.current_size < self._curr_max_size
-            
+
             self._tensor.narrow(dim=self.grow_on, start=self.current_size, length=data_size).copy_(x, non_blocking=True)
             self.current_size += data_size
-        
+
         @classmethod
         def __torch_function__(cls, func, types, args=(), kwargs=None):
             if kwargs is None:
@@ -165,45 +165,45 @@ class TensorQueue:
     """
     A circular buffer tensor.
     """
-    def __init__(self, 
-        shape: torch.Size | Sequence[int], 
-        grow_dim: int, 
+    def __init__(self,
+        shape: torch.Size | Sequence[int],
+        grow_dim: int,
         device: torch.device, dtype: torch.dtype
     ):
         self.device   = device
         self.grow_dim = grow_dim
         self.buf_size = shape[self.grow_dim]
-        
+
         self.q_start = 0    # Starting point of circular array
         self.q_end   = 0    # Ending point of circular array
-    
+
         self._buffer = torch.empty(size=shape, dtype=dtype, device=device)
         self._empty  = True
-        
+
         # Special Optimization for scalar write demand
         # Explicitly maintein a scalar write cache. When the buffer is read
-        # or other (non-scalar) write operation is triggered, first write the 
+        # or other (non-scalar) write operation is triggered, first write the
         # cached scalars in batch operation, then perform the following operations.
         self.scalar_array = len(shape) == 1
         self.write_batch  = []
         #
-    
+
     def __repr__(self) -> str:
         return f"CircularTensor({self.tensor}, buf_size={self.buf_size}, real_size={len(self)})"
-    
+
     def __len__(self) -> int:
         if self.is_full: return self.buf_size
         return (self.q_end - self.q_start)
-    
+
     def __write_scalar_batch(self) -> None:
         if len(self.write_batch) == 0: return
         self.__push(torch.tensor(self.write_batch[-self.buf_size:], dtype=self._buffer.dtype, device=self._buffer.device))
         self.write_batch.clear()
-    
+
     @property
     def is_full(self) -> bool:
         return self.q_start == self.q_end and (not self._empty)
-    
+
     @property
     def tensor(self) -> torch.Tensor:
         self.__write_scalar_batch()
@@ -214,12 +214,12 @@ class TensorQueue:
 
         if self.q_start < self.q_end:
             return self._buffer.narrow_copy(self.grow_dim, self.q_start, self.q_end - self.q_start)
-    
+
         return torch.cat([
             self._buffer.narrow(self.grow_dim, self.q_start, self.buf_size - self.q_start),
             self._buffer.narrow(self.grow_dim, 0, self.q_end)
         ], dim=self.grow_dim)
-    
+
     def push(self, value: torch.Tensor) -> None:
         """
         push a batch of values into the CircularTensor. Will trigger a cache eviction
@@ -227,25 +227,25 @@ class TensorQueue:
         """
         self.__write_scalar_batch()
         self.__push(value)
-    
+
     def __push(self, value: torch.Tensor) -> None:
         """
         Actual underlying circular buffer push algorithm.
         """
         orig_full = self.is_full
         if self._empty and value.size(self.grow_dim) > 0: self._empty = False
-        
+
         # Truncate the input if it is greater than the entire buffer
         if value.size(self.grow_dim) > self.buf_size:
             value = value.narrow(self.grow_dim, start=-self.buf_size, length=self.buf_size)
 
-        # Write the value into buffer. At this time it is guaranteed that the value is 
+        # Write the value into buffer. At this time it is guaranteed that the value is
         # Smaller than the buffer.
         value_size = value.size(self.grow_dim)
         assert value_size <= self.buf_size, "Impossible case triggered"
-        
+
         write_to = 0
-        
+
         # Segment 1 - self.end => min(self.start, self.buf_size)
         seg1_length  = min(self.buf_size - self.q_end, value_size - write_to)
         self._buffer.narrow(self.grow_dim, start=self.q_end, length=seg1_length).copy_(
@@ -265,7 +265,7 @@ class TensorQueue:
         self.q_end = (self.q_end + seg2_length) % self.buf_size
         self.q_start = (self.q_start + seg2_length) % self.buf_size
         write_to   += seg2_length
-        
+
         assert write_to == value_size, "Must use up all the input values by this point."
 
     def push_scalar(self, value: int | float) -> None:

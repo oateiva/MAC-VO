@@ -41,17 +41,17 @@ def EvaluateSequences(
 
         try:
             gt_traj, est_traj = Trajectory.from_sandbox(exp_space, align_time="est->gt")
-            
+
             if est_traj is None:
                 Logger.write("error", f"Unable to retrieve estimated trajectory from {config.Project}")
                 eval_results.append([config.Project] + ([None] * 12))
                 continue
-            
+
             est_traj.plot_kwargs |= dict(color=getColor("-", 4, 0))
 
             for key, scale in NEED_ALIGN_SCALE.items():
                 if key not in est_traj.name.lower(): continue
-                
+
                 Logger.write("info", f"{est_traj} --[align_scale={scale}]-> {gt_traj}")
                 if scale == "Dynamic": est_traj.data = est_traj.data.align_scale(gt_traj.data)
                 else: est_traj.data = est_traj.data.scale(scale)
@@ -73,9 +73,9 @@ def EvaluateSequences(
         except Exception as e:
             Logger.show_exception()
             eval_results.append([config.Project if hasattr(config, "Project") else "--"] + ([None] * 12))
-            
+
     pb.close()
-    
+
     eval_results.append(
         ["Average"] + list(map(mean, [
             [r[idx] for r in eval_results if r[idx] is not None] for idx in range(1, len(eval_results[0]))

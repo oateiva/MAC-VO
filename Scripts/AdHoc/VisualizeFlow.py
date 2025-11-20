@@ -35,12 +35,12 @@ def sparsification_plot(cov, mse):
 
 if __name__ == "__main__":
     fig_plt.set_fn_mode(fig_plt.plot_imatcher, "image")
-    
+
     import argparse
     args = argparse.ArgumentParser()
     args.add_argument("--data", type=str, default="./Config/Sequence/TartanAir_seaside_000.yaml")
     args = args.parse_args()
-    
+
     datacfg, _ = load_config(Path(args.data))
     matchcfg, _ = build_dynamic_config(
         {
@@ -60,12 +60,12 @@ if __name__ == "__main__":
         frameA, frameB = seq[idx], seq[idx + 1]
         est_out = match_est.estimate(frameA, frameB)
         est_flow, est_flowcov = est_out.flow, est_out.cov
-        
+
         flow_est = est_flow  # 2, 480, 640
-        
+
         assert frameA.gtFlow is not None
         assert est_flowcov is not None
-        
+
         flow_gt = frameA.gtFlow[0]
         cov_est = est_flowcov
         cov_gt = (flow_gt - flow_est).square()
@@ -73,5 +73,5 @@ if __name__ == "__main__":
         est, oracle, _, _, _ = sparsification_plot(
             np.linalg.norm(cov_est, axis=0), np.linalg.norm(cov_gt, axis=0)
         )
-        
+
         fig_plt.plot_imatcher("matching", est_out, frameA, frameB)

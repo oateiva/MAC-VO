@@ -12,7 +12,7 @@ from .PlotTraj import (
     plot_Rotation_axes,
     plot_Trajectory,
     plot_Translation_axes,
-    plot_LostTrackAt, 
+    plot_LostTrackAt,
     plot_CumulativeRTECurve,
     plot_CumulativeROECurve,
 )
@@ -144,7 +144,7 @@ def PlotTrajectory(trajs: list[PlotableTrajectory], file_name: Path):
     ax.legend(frameon=False)
     ax.set_title("Trajectory on x-y plane")
     ax.set_aspect("equal", adjustable="datalim")
-    
+
     ax = fig.add_subplot(2, 2, 2)
     for traj in trajs:
         plot_Trajectory(ax, 0, 2, traj)
@@ -152,7 +152,7 @@ def PlotTrajectory(trajs: list[PlotableTrajectory], file_name: Path):
     ax.legend(frameon=False)
     ax.set_title("Trajectory on x-z plane")
     ax.set_aspect("equal", adjustable="datalim")
-    
+
     ax = fig.add_subplot(2, 2, 3)
     for traj in trajs:
         plot_Trajectory(ax, 1, 2, traj)
@@ -172,7 +172,7 @@ def AnalyzeRTE_with_Covariance(gt_traj: PlotableMotions, trajs: list[PlotableMot
     fig, (ax1, ax2) = plt.subplots(2, 1, dpi=300)
     for est_traj in trajs:
         plot_MotionROE(ax1, gt_traj, est_traj)
-    
+
     ax2: Axes
     ax2.set_title("Estimated quality over time")
     ax2.plot(quality.numpy(), label="flow_cov")
@@ -180,7 +180,7 @@ def AnalyzeRTE_with_Covariance(gt_traj: PlotableMotions, trajs: list[PlotableMot
 
     ax1.grid(visible=True, linestyle="--")
     ax2.grid(visible=True, linestyle="--")
-    
+
     plt.tight_layout()
     plt.savefig(str(file_name))
     plt.close()
@@ -189,14 +189,14 @@ def AnalyzeRTE_with_Covariance(gt_traj: PlotableMotions, trajs: list[PlotableMot
 def plot_flow_performance(flow_results: list[FlowPerformance], file_name: str):
     GRID_SHAPE = (1, 2)
     _ = plt.figure(figsize=(16, 6), dpi=300)
-    
+
     fields = ["masked_epe", "epe"]
     for i, field in enumerate(fields):
         row: list[float] = [getattr(res, field) for res in flow_results]
         ax = plt.subplot2grid(GRID_SHAPE, (i // 2, i % 2), rowspan=1, colspan=1)
         ax.set_title(f"Distribution {field}", loc="left")
         plot_histogram(row, bins=('width', 2.))(ax)
-    
+
     plt.tight_layout()
     plt.savefig(str(file_name))
     plt.close()
@@ -208,7 +208,7 @@ def AnalyzeRTE_cdf(runs: list[tuple[PlotableMotions, PlotableMotions]], axis: Li
 
     for ref_traj, est_traj in runs:
         plot_CumulativeRTECurve(ax, ref_traj, est_traj, axis)
-    
+
     ax.legend(frameon=False)
     ax.set_xlim(left=1e-5)
     ax.set_ylim(bottom=0., top=1.)
@@ -226,7 +226,7 @@ def AnalyzeROE_cdf(runs: list[tuple[PlotableMotions, PlotableMotions]], axis: Li
 
     for ref_traj, est_traj in runs:
         plot_CumulativeROECurve(ax, ref_traj, est_traj, axis)
-    
+
     ax.legend(frameon=False)
     ax.set_xlim(left=1e-5)
     ax.set_ylim(bottom=0., top=1.)

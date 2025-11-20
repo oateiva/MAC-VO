@@ -56,7 +56,7 @@ def gaussain_full_kernels(cov_2x2: torch.Tensor, kernel_size: int) -> torch.Tens
     x = torch.linspace(-(kernel_size - 1) / 2., (kernel_size - 1) / 2., kernel_size, device=cov_2x2.device)
     y = torch.linspace(-(kernel_size - 1) / 2., (kernel_size - 1) / 2., kernel_size, device=cov_2x2.device)
     indices = torch.stack(torch.meshgrid(x, y, indexing="ij"), dim=-1).unsqueeze(0).repeat(N, 1, 1, 1) # N*K*K*2
-    
+
     z = torch.einsum('bxyi,bij,bxyj->bxy', indices, -0.5 * inv_cov, indices).exp()
     kernel = z / (2 * torch.pi * torch.sqrt(det_cov)).view(N, 1, 1)
     kernel_s = kernel.sum(dim=[-1, -2], keepdim=True)
@@ -70,26 +70,26 @@ def gaussian_mixture_mean_var(batch_means: torch.Tensor, batch_vars: torch.Tenso
     batch_means: B x N torch.float, mean of each subpopulation
     batch_vars : B x N torch.float, variance of each subpopulation
     batch_prob : B x N torch.float, prob of each subpopulation, (batch_prob.sum(dim=1) == 1.).all()
-    
+
     ---
-    
+
     Returns
     batch_mixture_mean: B torch.float, mean of each mixture.
     batch_mixture_var : B torch.float, variance of each mixture.
-    
+
     ---
-    
+
     Ref: https://stats.stackexchange.com/questions/445231/compute-mean-and-variance-of-mixture-of-gaussians-given-mean-variance-of-compone
     """
-    
+
     # Remove some low-probability subpopolation to improve robustness of estimation.
     batch_prob[batch_prob < prob_threshold] = 0.
     batch_prob = batch_prob / batch_prob.sum(dim=1, keepdim=True)
-    
+
     calc_mean = (batch_means * batch_prob).sum(dim=1)
     calc_var = ((batch_vars + batch_means.square()) * batch_prob).sum(dim=1) - \
                calc_mean.square()
-    
+
     return calc_mean, calc_var / 2
 
 
@@ -117,7 +117,7 @@ def interpolate_pose(Ps: pp.LieTensor, ts: torch.Tensor, ts_ev: torch.Tensor) ->
     lie_type = lie_algebra_diff.ltype
 
     P_interp = pp.LieTensor(t_ev_prop.unsqueeze(-1) * lie_algebra_diff, ltype=lie_type).Exp().to(P_seg_start) @ P_seg_start
-    if interp_mask.sum().item() > 0: P_container[interp_mask] = P_interp    
+    if interp_mask.sum().item() > 0: P_container[interp_mask] = P_interp
     return pp.SE3(P_container), ~interp_mask
 
 
@@ -150,7 +150,7 @@ def MahalanobisDist(x: torch.Tensor, mu: torch.Tensor, sigma: torch.Tensor) -> t
 def MahalanobisDist_Inv(x: torch.Tensor, mu: torch.Tensor, sigma_inv: torch.Tensor) -> torch.Tensor:
     """
     Use this if you have some smarter way to compute the inverse of sigma.
-    
+
     Argument
         x        : torch.Tensor of shape N x F
         mu       : torch.Tensor of shape N x F

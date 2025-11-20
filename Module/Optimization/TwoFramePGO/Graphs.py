@@ -37,14 +37,14 @@ class ICP_TwoframePGO(FactorGraph):
         self.init_motion           = graph_data.init_motion
         self.from_idx              = graph_data.from_idx
         self.frame_idx             = graph_data.frame_idx
-        
+
         self.pose2opt       = pp.Parameter(pp.SE3(self.init_motion))
         self.edges_index    = graph_data.edges_index
-        
+
         # ICP-based residual
         self.pts = graph_data.points
         self.obs = graph_data.observations
-        
+
         self.register_buffer("K", graph_data.images_intrinsic)
         self.register_buffer("points_Tc",
             pixel2point_NED(self.obs.data["pixel2_uv"], self.obs.data["pixel2_d"].squeeze(-1), graph_data.images_intrinsic)
@@ -53,12 +53,12 @@ class ICP_TwoframePGO(FactorGraph):
         self.register_buffer("points_Tw", self.pts.data["pos_Tw"])
         self.register_buffer("obs_covTc", self.obs.data["obs2_covTc"])
         self.register_buffer("pts_covTw", self.pts.data["cov_Tw"])
-        
+
 
     def forward(self) -> torch.Tensor:
         frame_pose = typ.cast(pp.LieTensor, self.pose2opt[self.edges_index])
         return frame_pose.Act(self.points_Tc) - self.points_Tw
-    
+
     @torch.no_grad()
     @torch.inference_mode()
     def covariance_array(self) -> torch.Tensor:
@@ -79,10 +79,10 @@ class Reproj_TwoFramePGO(FactorGraph):
         self.from_idx : torch.Tensor = graph_data.from_idx
         self.frame_idx: torch.Tensor = graph_data.frame_idx
         self.init_motion:  pp.LieTensor = graph_data.init_motion
-        
+
         self.pose2opt       = pp.Parameter(pp.SE3(self.init_motion))
         self.edges_index    = graph_data.edges_index
-        
+
         self.pts     = graph_data.points
         self.obs     = graph_data.observations
 
@@ -93,7 +93,7 @@ class Reproj_TwoFramePGO(FactorGraph):
         self.register_buffer("pos_Tw" , self.pts.data["pos_Tw"])
         self.register_buffer("cov_Tw" , self.pts.data["cov_Tw"])
         self.register_buffer("kp2"    , self.obs.data["pixel2_uv"])
-        
+
         N = self.obs.data["pixel2_uv_cov"].size(0)
         # Build covar matrix for keypoints at t+1
         cov_kp2 = torch.empty((N, 2, 2))
@@ -141,7 +141,7 @@ class ReprojDisp_TwoFramePGO(Reproj_TwoFramePGO):
         # add disparity variance
         cov[:, 2, 2] = graph_data.observations.data["pixel2_disp_cov"].squeeze(-1)
         self.register_buffer("cov", cov)
-    
+
     def forward(self) -> torch.Tensor:
         # Transform map points from world to camera frame at t+1
         self.pos_Tc = self.pose2opt.Inv() * self.pos_Tw
@@ -273,7 +273,7 @@ class ReprojDepth_TwoFramePGO(Reproj_TwoFramePGO):
         # We'll convert to inverse-depth and its variance.
         kp2_depth      = graph_data.observations.data["pixel2_d"]          # (N,1)
         kp2_depth_cov  = graph_data.observations.data["pixel2_d_cov"]      # (N,1) or missing/filled -1
-        
+
         # Build inverse depth safely
         eps = 1e-8
         d   = torch.clamp(kp2_depth, min=eps) # (N,1) avoid div-by-zero
@@ -321,7 +321,7 @@ class ReprojDepth_TwoFramePGO(Reproj_TwoFramePGO):
         x = self.pos_Tc[:, 0:1]           # predicted depth (m)
         x_safe = torch.clamp(x, min=eps)
         idepth_hat = x_safe.reciprocal()       # 1 / x_hat
-        
+
         valid = torch.isfinite(x) & (x > eps)
         idepth_err = idepth_hat - self.kp2_idepth
         idepth_err = torch.where(valid, idepth_err, torch.zeros_like(idepth_err))

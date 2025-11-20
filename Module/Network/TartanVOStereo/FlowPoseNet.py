@@ -1,4 +1,4 @@
-import torch 
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -9,7 +9,7 @@ def conv(in_planes, out_planes, kernel_size: int | tuple[int, int]=3, stride=2, 
             nn.BatchNorm2d(out_planes),
             nn.ReLU(inplace=True)
         )
-    else: 
+    else:
         return nn.Sequential(
             nn.Conv2d(in_planes, out_planes, kernel_size=kernel_size, padding=padding, stride=stride, dilation=dilation),
             nn.ReLU(inplace=True)
@@ -17,7 +17,7 @@ def conv(in_planes, out_planes, kernel_size: int | tuple[int, int]=3, stride=2, 
 
 def linear(in_planes, out_planes):
     return nn.Sequential(
-        nn.Linear(in_planes, out_planes), 
+        nn.Linear(in_planes, out_planes),
         nn.ReLU(inplace=True)
         )
 
@@ -52,11 +52,11 @@ class VOFlowRes(nn.Module):
         if stereo:
             inputnum += 1
         inputnum += uncertainty # mono-uncertainty: +1, stereo-uncertainty: +2
-        
+
         self.down_scale = down_scale
         self.config = config
         self.stereo = stereo
-        self.autoDistTarget = autoDistTarget # scale the distance wrt the mean value 
+        self.autoDistTarget = autoDistTarget # scale the distance wrt the mean value
         self.out_feature = out_feature
 
         if config==0:
@@ -148,7 +148,7 @@ class VOFlowRes(nn.Module):
             x = self.layer6(x)
         if self.config==3:
             x = F.avg_pool2d(x, kernel_size = x.shape[-2:])
-        
+
         x = x.view(x.shape[0], -1)
         x_trans = self.voflow_trans(x)
         x_rot = self.voflow_rot(x)

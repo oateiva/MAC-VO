@@ -16,7 +16,7 @@ from Utility.Extensions import ConfigTestableSubclass
 class ICovariance2to3(ABC, ConfigTestableSubclass):
     def __init__(self, config: SimpleNamespace):
         self.config = config
-    
+
     @abstractmethod
     def estimate(
         self,
@@ -52,7 +52,7 @@ class NoCovariance(ICovariance2to3):
     def estimate(self, frame: CameraData, kp: torch.Tensor, depth_est: IDepth.Output, depth_cov: torch.Tensor | None, flow_cov: torch.Tensor | None) -> torch.Tensor:
         N = kp.size(0)
         return torch.eye(3).unsqueeze(0).repeat(N, 1, 1).double()
-    
+
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None: return
 
@@ -60,7 +60,7 @@ class NoCovariance(ICovariance2to3):
 class DepthCovariance(ICovariance2to3):
     """
     Returns covariance matrix estimated using only depth cov.
-    
+
     Since this will be ill-defined (cov matrix won't be full-ranked since there is no uncertainty on xy direction in 3D space)
     we add a `regularization` term on the main diagonal to make it full-ranked.
     """
@@ -76,7 +76,7 @@ class DepthCovariance(ICovariance2to3):
     def estimate(self, frame: CameraData, kp: torch.Tensor, depth_est: IDepth.Output, depth_cov: torch.Tensor | None, flow_cov: torch.Tensor | None) -> torch.Tensor:
         assert depth_est.cov is not None
         assert depth_cov is not None
-        
+
         pixel_u, pixel_v = kp[..., 0], kp[..., 1]
         fx, fy, cx, cy = frame.fx, frame.fy, frame.cx, frame.cy
 
@@ -103,7 +103,7 @@ class DepthCovariance(ICovariance2to3):
         #       instability degrades the non-linear optimization process significantly.
         cov += (self.config.regularization * torch.eye(3)).unsqueeze(0).double()
         return cov
-    
+
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
         cls._enforce_config_spec(config, {
@@ -121,7 +121,7 @@ class MatchCovariance(ICovariance2to3):
 
     @Timer.cpu_timeit("Cov Model")
     @Timer.gpu_timeit("Cov Model")
-    def estimate(self, frame: CameraData, kp: torch.Tensor, depth_est: IDepth.Output, depth_cov: torch.Tensor | None, flow_cov: torch.Tensor | None) -> torch.Tensor:        
+    def estimate(self, frame: CameraData, kp: torch.Tensor, depth_est: IDepth.Output, depth_cov: torch.Tensor | None, flow_cov: torch.Tensor | None) -> torch.Tensor:
         n_sample = kp.size(0)
 
         kp_long = kp.clone().long()
@@ -151,7 +151,7 @@ class MatchCovariance(ICovariance2to3):
 
         cov_matrices = create_2x2_matrix([[var_u, var_uv], [var_uv, var_v]], n_sample=n_sample, device=torch.device(self.config.device))
         local_filters = gaussain_full_kernels(cov_matrices, kernel_size=self.config.kernel_size)
-        
+
         patches = depth_est.depth[..., all_v_indices, all_u_indices].view(
             n_sample, self.config.kernel_size, self.config.kernel_size
         ).to(self.config.device)
@@ -168,7 +168,7 @@ class MatchCovariance(ICovariance2to3):
         else:
             assert depth_cov is not None
             wvar_depth = depth_cov
-        
+
         wvar_depth = wvar_depth.clamp(min=self.config.min_depth_cov)
 
         # Inverse project 2D keypoint to 3D space.
@@ -179,7 +179,7 @@ class MatchCovariance(ICovariance2to3):
         ).double()
 
         return cov
-    
+
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
         cls._enforce_config_spec(config, {
@@ -204,10 +204,10 @@ class GaussianMixtureCovariance(ICovariance2to3):
     @Timer.gpu_timeit("Cov Model")
     def estimate(self, frame: CameraData, kp: torch.Tensor, depth_est: IDepth.Output, depth_cov: torch.Tensor | None, flow_cov: torch.Tensor | None) -> torch.Tensor:
         assert depth_est.cov is not None
-        
+
         n_sample = kp.size(0)
         kp_long = kp.long()
-        
+
         if (has_flow_cov_flag := flow_cov is not None):
             # Min clamp to 0.16 since camera plane is descretelized by pixels, which has at least an
             # uncertainty of 0.16
@@ -216,7 +216,7 @@ class GaussianMixtureCovariance(ICovariance2to3):
             flow_cov = torch.ones((n_sample, 3), device=kp.device, dtype=torch.float) * self.config.match_cov_default
             assert flow_cov is not None
             flow_cov[..., 2] = 0.
-        
+
         # Min clamp to 0.5 since camera plane is descretelized by pixels, which has at least an
         # uncertainty of 0.5
 
@@ -237,7 +237,7 @@ class GaussianMixtureCovariance(ICovariance2to3):
 
         cov_matrices = create_2x2_matrix([[var_u, var_uv], [var_uv, var_v]], n_sample=n_sample, device=var_u.device)
         local_filters = gaussain_full_kernels(cov_matrices, kernel_size=self.config.kernel_size)
-        
+
         patches = depth_est.depth[..., all_v_indices, all_u_indices].view(
             n_sample, self.config.kernel_size, self.config.kernel_size
         )
@@ -281,14 +281,14 @@ class GaussianMixtureCovariance(ICovariance2to3):
 class Modifier_Diagonalize(ICovariance2to3):
     """
     This class is a wrapper (modifier) to another IObservationCov model.
-    
-    On every call, it will forward everything to the internal model and diagonalize the 
+
+    On every call, it will forward everything to the internal model and diagonalize the
     output covariance model. (by setting the off-diagonal terms to zero.)
     """
     def __init__(self, config: SimpleNamespace):
         super().__init__(config)
         self.submodule = ICovariance2to3.instantiate(config.type, config.args)
-    
+
     def estimate(self, frame: CameraData, kp: torch.Tensor, depth_est: IDepth.Output, depth_cov: torch.Tensor | None, flow_cov: torch.Tensor | None) -> torch.Tensor:
         covs = self.submodule.estimate(frame, kp, depth_est, depth_cov, flow_cov)
         for i in range(3):
@@ -296,7 +296,7 @@ class Modifier_Diagonalize(ICovariance2to3):
                 if i == j: continue
                 covs[..., i, j] = 0.
         return covs
-    
+
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
         ICovariance2to3.is_valid_config(config)
@@ -305,14 +305,14 @@ class Modifier_Diagonalize(ICovariance2to3):
 class Modifier_Normalize(ICovariance2to3):
     """
     This class is a wrapper (modifier) to another IObservationCov model.
-    
+
     On every call, it will forward everything to the internal model and normalize the output
     covariance matrices (by setting average determinant of all points to 1).
     """
     def __init__(self, config: SimpleNamespace):
         super().__init__(config)
         self.submodule = ICovariance2to3.instantiate(config.type, config.args)
-    
+
     def estimate(self, frame: CameraData, kp: torch.Tensor, depth_est: IDepth.Output, depth_cov: torch.Tensor | None, flow_cov: torch.Tensor | None) -> torch.Tensor:
         covs = self.submodule.estimate(frame, kp, depth_est, depth_cov, flow_cov)
         covs /= torch.det(covs).unsqueeze(-1).unsqueeze(-1)
@@ -324,49 +324,49 @@ class Modifier_Normalize(ICovariance2to3):
 
 
 # Utility Functions #################################################
-# 
+#
 # Common routeins shared across multiple modules
 #
 
 def Covariance_2to3_diag(
-    sigma_uu: torch.Tensor, sigma_vv: torch.Tensor, sigma_dd: torch.Tensor, 
+    sigma_uu: torch.Tensor, sigma_vv: torch.Tensor, sigma_dd: torch.Tensor,
     u: torch.Tensor, v: torch.Tensor, d: torch.Tensor,
     fx: float, fy: float, cx: float, cy: float
 ) -> torch.Tensor:
     """
     Project the uncertainty on 2D image plane to 3D space (under camera coordinate)
-    
+
     In
     * sigma_uu: torch.Tensor (N,)
         Variance of keypoints' u-coordinate on image plane.
-    
+
     * sigma_vv: torch.Tensor (N,)
         Variance of keypoints' v-coordinate on image plane.
-    
+
     * sigma_dd: torch.Tensor (N,)
         Variance of keypoints' depth on image plane.
-    
+
     * u: torch.Tensor (N,) - keypoints' u-coordinate
     * v: torch.Tensor (N,) - keypoints' v-coordinate
     * d: torch.Tensor (N,) - keypoints' depth
-    
+
     * meta: MetaInfo
         Camera meta information (camera intrinsic, mostly)
-    
+
     Out
     * cov_3d: torch.Tensor(N, 3, 3)
         3x3 Covariance matrix of keypoints' distribution in 3D space (under camera coordinate)
-    
+
     Ref: For deriviation, see Appendix A and Section III.C of MAC-VO's paper.
     """
     sigma_xx = (sigma_uu * sigma_dd + sigma_uu * d.square() + (u - cx).square() * sigma_dd) / (fx ** 2)
     sigma_yy = (sigma_vv * sigma_dd + sigma_vv * d.square() + (v - cy).square() * sigma_dd) / (fy ** 2)
     sigma_zz = sigma_dd
-    
+
     sigma_xy = ((u - cx) * (v - cy) * sigma_dd) / (fx * fy)
     sigma_xz = ((u - cx) * sigma_dd) / fx
     sigma_yz = ((v - cy) * sigma_dd) / fy
-    
+
     return create_3x3_matrix([
         [sigma_zz, sigma_xz, sigma_yz],
         [sigma_xz, sigma_xx, sigma_xy],
@@ -381,41 +381,41 @@ def Covariance_2to3_full(
 ) -> torch.Tensor:
     """
     Project the uncertainty on 2D image plane to 3D space (under camera coordinate)
-    
+
     In
     * sigma_uu: torch.Tensor (N,)
         Variance of keypoints' u-coordinate on image plane.
-    
+
     * sigma_vv: torch.Tensor (N,)
         Variance of keypoints' v-coordinate on image plane.
-    
+
     * sigma_uv: torch.Tensor (N,)
         Covariance of keypoints' u and v coordinate on image plane.
-    
+
     * sigma_dd: torch.Tensor (N,)
         Variance of keypoints' depth on image plane.
-    
+
     * u: torch.Tensor (N,) - keypoints' u-coordinate
     * v: torch.Tensor (N,) - keypoints' v-coordinate
     * d: torch.Tensor (N,) - keypoints' depth
-    
+
     * meta: MetaInfo
         Camera meta information (camera intrinsic, mostly)
-    
+
     Out
     * cov_3d: torch.Tensor(N, 3, 3)
         3x3 Covariance matrix of keypoints' distribution in 3D space (under camera coordinate)
-    
+
     For deriviation, ask Yutian : )
     """
     sigma_xx = (((u - cx).square() * sigma_dd) + (d.square() * sigma_uu) + (sigma_uu * sigma_dd)) / (fx ** 2)
     sigma_yy = (((v - cy).square() * sigma_dd) + (d.square() * sigma_vv) + (sigma_vv * sigma_dd)) / (fy ** 2)
     sigma_zz = sigma_dd
-    
+
     sigma_xy = (((u - cx) * (v - cy) * sigma_dd) + (d.square() + sigma_dd) * sigma_uv) / (fx * fy)
     sigma_xz = (sigma_dd * (u - cx)) / fx
     sigma_yz = (sigma_dd * (v - cy)) / fy
-    
+
     return create_3x3_matrix([
         [sigma_zz, sigma_xz, sigma_yz],
         [sigma_xz, sigma_xx, sigma_xy],
@@ -426,7 +426,7 @@ def Covariance_2to3_full(
 def create_3x3_matrix(matrix: list[list[torch.Tensor | float]], n_sample: int, device: torch.device):
     assert len(matrix) == 3 and len(matrix[0]) == 3 and len(matrix[1]) == 3 and len(matrix[2]) == 3
     mat = torch.empty((n_sample, 3, 3))
-    
+
     for i in range(3):
         for j in range(3):
             mat[..., i, j] = matrix[i][j]
@@ -436,7 +436,7 @@ def create_3x3_matrix(matrix: list[list[torch.Tensor | float]], n_sample: int, d
 def create_2x2_matrix(matrix: list[list[torch.Tensor | float]], n_sample: int, device: torch.device):
     assert len(matrix) == 2 and len(matrix[0]) == 2 and len(matrix[1]) == 2
     mat = torch.empty((n_sample, 2, 2), device=device)
-    
+
     for i in range(2):
         for j in range(2):
             mat[..., i, j] = matrix[i][j]

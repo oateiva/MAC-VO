@@ -22,17 +22,17 @@ class Timer:
         if active: Logger.write("info", "Timer is set to active.")
 
     @classmethod
-    def cpu_timeit(cls, name: str):        
+    def cpu_timeit(cls, name: str):
         def decorator(func):
             @wraps(func)
             def wrapped(*args, **kwargs):
                 if not cls.ACTIVE: return func(*args, **kwargs)
                 time_stream = cls.CPU_TIME_STREAM.get(name, ([], []))
-                
+
                 time_stream[0].append(time.time() * 1000)
                 result = func(*args, **kwargs)
                 time_stream[1].append(time.time() * 1000)
-                
+
                 cls.CPU_TIME_STREAM[name] = time_stream
                 return result
             return wrapped
@@ -52,11 +52,11 @@ class Timer:
                 time_stream[1].append(end_event)
                 cls.GPU_STREAMS.add(stream)
                 cls.GPU_TIME_STREAM[name] = time_stream
-                
+
                 start_event.record(stream)
                 result = func(*args, **kwargs)
                 end_event.record(stream)
-                
+
                 return result
             return wrapped
         return decorator
@@ -83,7 +83,7 @@ class Timer:
         time_stream = cls.GPU_TIME_STREAM.get(name, ([], []))
         time_stream[0].append(start_event := torch.cuda.Event(enable_timing=True))
         time_stream[1].append(end_event   := torch.cuda.Event(enable_timing=True))
-        
+
         start_event.record(stream)
         yield
         end_event.record(stream)
@@ -93,12 +93,12 @@ class Timer:
     def report(cls):
         if not cls.ACTIVE: return
         report_str = "\n--- Timer Report ---\n"
-        
+
         # CPU Side timing
         report_str += "CPU Timers:\n"
         for name, (starts, ends) in cls.CPU_TIME_STREAM.items():
             elapsed = list(map(lambda pair: pair[1] - pair[0], zip(starts, ends)))
-            
+
             if len(starts) == 0:
                 report_str += f"\t{name}".ljust(20) +  \
                     f" | #Call= 0".ljust(20) + \
@@ -112,7 +112,7 @@ class Timer:
                     f" | MedianTime={median_elapsed : 3f} ms\n"
 
         # GPU Side timing
-        
+
         # Ensure everything is finished
         report_str += "GPU Timers:\n"
         for stream in cls.GPU_STREAMS: stream.synchronize()
@@ -132,7 +132,7 @@ class Timer:
                     f" | #Call={len(starts)}".ljust(20) + \
                     f" | AvgTime={(sum(elapsed) / len(starts)) : 3f} ms".ljust(20) + \
                     f" | MedianTime={median_elapsed : 3f} ms\n"
-        
+
         # Logger.write("info", report_str)
         print(report_str)
 

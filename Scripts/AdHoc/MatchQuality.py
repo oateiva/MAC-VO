@@ -8,7 +8,7 @@ from Utility.Config import build_dynamic_config, load_config
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--data", type=str, default="./Config/Sequence/TartanAir_seaside_000.yaml")
-args = parser.parse_args()    
+args = parser.parse_args()
 
 datacfg, _ = load_config(Path(args.data))
 flow_cfg, _ = build_dynamic_config({   # For simplicity of editing config
@@ -35,11 +35,11 @@ for frame in sequence:
     if prev_frame is None:
         prev_frame = frame
         continue
-    
+
     assert frame.camera.gt_flow is not None
     output_1 = module.estimate(prev_frame.camera, frame.camera)
     output_2 = module.estimate(frame.camera, prev_frame.camera)
-    
+
     diff_flow = (output_1.flow.cpu() - frame.camera.gt_flow).abs().median()
     diff_fwd_rev = (output_1.flow - (-1 * output_2.flow)).abs().median()
     prev_frame = frame

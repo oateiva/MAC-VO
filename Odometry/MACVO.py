@@ -27,11 +27,11 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
     # Type alias of callback hooks for MAC-VO system. Will be called by the system on
     # certain event occurs (optimization finish, for instance.)
     T_SYSHOOK = Callable[["MACVO",], None]
-    
+
     def __init__(
         self,
         device, num_point, edgewidth, match_cov_default, profile, mapping,
-        frontend        : Module.IFrontend, 
+        frontend        : Module.IFrontend,
         motion_model    : Module.IMotionModel[T_SensorFrame],
         kp_selector     : Module.IKeypointSelector,
         map_selector    : Module.IKeypointSelector,
@@ -45,7 +45,7 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         super().__init__(profile=profile)
         if len(_excessive_args) > 0:
             Logger.write("warn", f"Receive excessive arguments for __init__ {_excessive_args}, update/clean up your config!")
-        
+
         self.graph = VisualMap()
         self.device = device
         self.mapping: bool = mapping
@@ -67,18 +67,18 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         self.num_point = num_point
         self.edge_width = edgewidth
         self.isinitiated = False
-        
+
         # Context for tracking
         # [0] - Frame Source Data
         # [1] - Frame index (in visual map)
         # [2] - Frame stereo depth
         self.prev_keyframe: tuple[T_SensorFrame, int, Module.IStereoDepth.Output] | None = None
-        
+
         # Hooks
         self.on_optimize_writeback: list[MACVO.T_SYSHOOK] = []
 
         self.report_config()
-    
+
     @classmethod
     def from_config(cls, cfg: SimpleNamespace):
         odomcfg = cfg.Odometry
@@ -92,7 +92,7 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         MapRefiner          = Module.IMapProcessor.instantiate(odomcfg.postprocess.type, odomcfg.postprocess.args)
         KeyframeSelector    = Module.IKeyframeSelector[T_SensorFrame].instantiate(odomcfg.keyframe.type, odomcfg.keyframe.args)
         Optimizer           = Module.IOptimizer.instantiate(odomcfg.optimizer.type, odomcfg.optimizer.args)
-        
+
         return cls(
             frontend=Frontend,
             motion_model=MotionEstimator,
@@ -105,7 +105,7 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
             optimizer=Optimizer,
             **vars(odomcfg.args),
         )
-    
+
     def report_config(self):
         # Cute fine-print boxes
         box1 = Panel.fit(
@@ -121,7 +121,7 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         )
         box2 = Panel.fit(
             "\n".join(
-                [   
+                [
                     f"Optimizer       -'{self.Optimizer       .__class__.__name__}'",
                     f"Frontend        -'{self.Frontend        .__class__.__name__}'",
                     f"MotionEstimator -'{self.MotionEstimator .__class__.__name__}'",
@@ -147,12 +147,12 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         Module.ICovariance2to3.is_valid_config(config.cov.obs)
         Module.IFrontend.is_valid_config(config.frontend)
         Module.IOptimizer.is_valid_config(config.optimizer)
-        
+
         cls._enforce_config_spec(config.args, {
             "device"            : lambda s: isinstance(s, str) and (("cuda" in s) or (s == "cpu")),
-            "num_point"         : lambda b: isinstance(b, int) and b > 0, 
-            "edgewidth"         : lambda b: isinstance(b, int) and b > 0, 
-            "match_cov_default" : lambda b: isinstance(b, (float, int)) and b > 0.0, 
+            "num_point"         : lambda b: isinstance(b, int) and b > 0,
+            "edgewidth"         : lambda b: isinstance(b, int) and b > 0,
+            "match_cov_default" : lambda b: isinstance(b, (float, int)) and b > 0.0,
             "profile"           : lambda b: isinstance(b, bool),
             "mapping"           : lambda b: isinstance(b, bool),
         })
@@ -160,7 +160,7 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
     def initialize(self, frame0: T_SensorFrame):
         depth0          = self.Frontend.estimate_depth(frame0.camera)
         est_pose        = self.MotionEstimator.predict(frame0, None, depth0.depth).unsqueeze(0)
-        
+
         frame_idx = self.graph.frames.push(FrameNode.init({
             "pose"        : est_pose,
             "T_BS"        : frame0.camera.T_BS,
@@ -174,117 +174,117 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
 
     def run_pair(self, frame0: T_SensorFrame, frame1: T_SensorFrame) -> None:
         assert self.prev_keyframe is not None
-        
+
         # Check if current frame is the keyframe ########################################
-        if not self.KeyframeSelector.isKeyframe(frame1):            
+        if not self.KeyframeSelector.isKeyframe(frame1):
             self.push_keyframe(frame1, self.graph.frames.data["pose"][self.prev_keyframe[1]].unsqueeze(0), need_interp=True)
             return
-        
+
         depth0          = self.prev_keyframe[2]
         depth1, match01 = self.Frontend.estimate_pair(frame0.camera, frame1.camera)
 
         # Receive optimization result from previous step (if exists) ####################
-        # NOTE: should always writeback optimized pose to global map before selecting new 
+        # NOTE: should always writeback optimized pose to global map before selecting new
         # keypoints (register new 3D point) on that frame.
         self.Optimizer.write_map(self.graph)
         for func in self.on_optimize_writeback: func(self)
-        
+
         # Motion model provide an initial guess to the pose of frame1 ###################
         # Update motion model (this must be after write_back to get latest result)
         # NOTE: I assume the motion estimator works on stereo camera frame (not body frame)
         self.MotionEstimator.update(pp.SE3(self.graph.frames.data["pose"][self.prev_keyframe[1]]))
         est_pose = self.MotionEstimator.predict(frame1, match01.flow, depth1.depth).unsqueeze(0)
-        
+
         # Generate Keypoints for frame 0 and 1 ##########################################
         kp0_uv  = self.KeypointSelector.select_point(frame0.camera, self.num_point, depth0, depth1, match01)
         kp1_uv  = kp0_uv + self.Frontend.retrieve_pixels(kp0_uv, match01.flow).T
-        
+
         inbound_mask= filterPointsInRange(
-            kp1_uv, 
-            (self.edge_width, frame1.camera.width - self.edge_width), 
+            kp1_uv,
+            (self.edge_width, frame1.camera.width - self.edge_width),
             (self.edge_width, frame1.camera.height - self.edge_width)
         )
         kp0_uv  = kp0_uv[inbound_mask]
         kp1_uv  = kp1_uv[inbound_mask]
-        
+
         # Retrieve depth and depth cov for kp on frame 0 and 1 ##########################
         kp0_d               = self.Frontend.retrieve_pixels(kp0_uv, depth0.depth).squeeze(0)
         kp0_disparity       = self.Frontend.retrieve_pixels(kp0_uv, depth0.disparity)
         kp0_sigma_disparity = self.Frontend.retrieve_pixels(kp0_uv, depth0.disparity_uncertainty)
         kp0_sigma_dd        = self.Frontend.retrieve_pixels(kp0_uv, depth0.cov)
         kp0_sigma_dd        = kp0_sigma_dd.squeeze(0) if kp0_sigma_dd is not None else None
-        
+
         kp1_d               = self.Frontend.retrieve_pixels(kp1_uv, depth1.depth).squeeze(0)
         kp1_disparity       = self.Frontend.retrieve_pixels(kp1_uv, depth1.disparity)
         kp1_sigma_disparity = self.Frontend.retrieve_pixels(kp1_uv, depth1.disparity_uncertainty)
         kp1_sigma_dd        = self.Frontend.retrieve_pixels(kp1_uv, depth1.cov)
         kp1_sigma_dd        = kp1_sigma_dd.squeeze(0) if kp1_sigma_dd is not None else None
-        
-        
+
+
         # Retrieve match cov for kp on frame 0 and 1    #################################
         num_kp = kp0_uv.size(0)
-        
-        # kp 0 has a fake sigma uv as it is manually selected pixels. This UV 
-        # represents the uncertainty introduced by the quantization process when 
+
+        # kp 0 has a fake sigma uv as it is manually selected pixels. This UV
+        # represents the uncertainty introduced by the quantization process when
         # taking photo with discrete pixels.
         kp0_sigma_uv = torch.ones((num_kp, 3), device=self.device) * self.match_cov_default
         kp0_sigma_uv[..., 2] = 0.   # No sigma_uv off-diag term.
-        
+
         kp1_sigma_uv = self.Frontend.retrieve_pixels(kp0_uv, match01.cov)
         kp1_sigma_uv = kp1_sigma_uv.T if kp1_sigma_uv is not None else None
-        
+
         # Record color of keypoints (for visualization) #################################
         kp0_uv_cpu = kp0_uv.cpu()
         kp0_color  = frame0.camera.imageL[..., kp0_uv_cpu[..., 1], kp0_uv_cpu[..., 0]].squeeze(0).T
         kp0_color  = (kp0_color * 255).to(torch.uint8)
-        
+
         # Project from 2D -> 3D #########################################################
         pos0_Tc = pixel2point_NED(kp0_uv, kp0_d, frame0.camera.frame_K).cpu()
         pos0_covTc  = self.ObsCovModel.estimate(frame0.camera, kp0_uv, depth0, kp0_sigma_dd, kp0_sigma_uv)
         pos1_covTc  = self.ObsCovModel.estimate(frame1.camera, kp1_uv, depth1, kp1_sigma_dd, kp1_sigma_uv)
-        
-        
+
+
         # Run Outlier Filter ############################################################
         match_obs = MatchObs.init({
             "pixel1_uv"      : kp0_uv_cpu,
             "pixel2_uv"      : kp1_uv.cpu(),
-            
+
             "pixel1_d"       : kp0_d.unsqueeze(-1).cpu(),
             "pixel2_d"       : kp1_d.unsqueeze(-1).cpu(),
-            
+
             "pixel1_disp"    : torch.empty((num_kp, 1)).fill_(-1) if kp0_disparity is None else kp0_disparity.T.cpu(),
             "pixel2_disp"    : torch.empty((num_kp, 1)).fill_(-1) if kp1_disparity is None else kp1_disparity.T.cpu(),
-            
+
             "pixel1_disp_cov": torch.empty((num_kp, 1)).fill_(-1) if kp0_sigma_disparity is None else kp0_sigma_disparity.T.cpu(),
             "pixel2_disp_cov": torch.empty((num_kp, 1)).fill_(-1) if kp1_sigma_disparity is None else kp1_sigma_disparity.T.cpu(),
-            
+
             "pixel1_d_cov"   : torch.empty((num_kp, 1)).fill_(-1) if kp0_sigma_dd is None else kp0_sigma_dd.unsqueeze(-1).cpu(),
             "pixel2_d_cov"   : torch.empty((num_kp, 1)).fill_(-1) if kp1_sigma_dd is None else kp1_sigma_dd.unsqueeze(-1).cpu(),
-            
+
             "pixel1_uv_cov"  : torch.empty((num_kp, 3)).fill_(-1) if kp0_sigma_uv is None else kp0_sigma_uv,
             "pixel2_uv_cov"  : torch.empty((num_kp, 3)).fill_(-1) if kp1_sigma_uv is None else kp1_sigma_uv,
-            
+
             "obs1_covTc"     : pos0_covTc,
             "obs2_covTc"     : pos1_covTc,
         })
         assert self.OutlierFilter.verify_shape(match_obs), "The provided MatchFactor does not contain all data for outlier filter."
         mask = self.OutlierFilter.filter(match_obs, torch.device("cpu"))
         match_obs = match_obs[mask]
-        
+
         # Register the factor graph #####################################################
         prev_pose       = pp.SE3(self.graph.frames.data["pose"][self.prev_keyframe[1]])
         prev_rot        = prev_pose.rotation().matrix().repeat((num_kp, 1, 1)).to(torch.float64)
         num_match_orig  = len(self.graph.match)
-        
+
         point_idx = self.graph.points.push(PointNode.init({
-            "pos_Tw": pp.SE3_type.Act(prev_pose, pos0_Tc)[..., :3],  # NOTE: Refer to https://github.com/pypose/pypose/issues/342 
+            "pos_Tw": pp.SE3_type.Act(prev_pose, pos0_Tc)[..., :3],  # NOTE: Refer to https://github.com/pypose/pypose/issues/342
             "cov_Tw": torch.bmm(torch.bmm(prev_rot, pos0_covTc), prev_rot.transpose(1, 2)),
             "color" : kp0_color
         })[mask])
         frame_idx      = self.push_keyframe(frame1, est_pose)
         prev_frame_idx = torch.tensor([self.prev_keyframe[1]], dtype=torch.long)
         match_idx      = self.graph.match.push(match_obs)
-        
+
         num_match_kp = len(match_obs)
         self.graph.point2match.add(point_idx, match_idx)    # Associate point -> match
         self.graph.match2point.set(match_idx, point_idx)    # Associate match -> point
@@ -330,11 +330,11 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
             map0_sigma_uv = torch.ones((num_kp, 3), device=self.device) * self.match_cov_default
             map0_sigma_uv[..., 2] = 0.   # No sigma_uv off-diag term.
             map0_Tc_cov = self.ObsCovModel.estimate(frame0.camera, map0_uv, depth0, map0_sigma_dd, map0_sigma_uv)
-            
+
             map0_uv_cpu = map0_uv.cpu()
             map0_color  = frame0.camera.imageL[..., map0_uv_cpu[..., 1], map0_uv_cpu[..., 0]].squeeze(0).T
             map0_color  = (map0_color * 255).to(torch.uint8)
-            
+
             num_map_orig  = len(self.graph.map_points)
             num_mappoint  = map0_Tc.size(0)
             map_idx = self.graph.map_points.push(PointNode.init({
@@ -371,7 +371,7 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
             self.initialize(frame)
             self.isinitiated = True
             return
-        
+
         assert self.prev_keyframe is not None
         self.run_pair(self.prev_keyframe[0], frame)
 

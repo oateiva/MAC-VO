@@ -13,7 +13,7 @@ def evaluateRTE(
         align_origin=False,
         align=True
         ):
-    result = main_rpe.rpe(gt_traj, est_traj, 
+    result = main_rpe.rpe(gt_traj, est_traj,
                           pose_relation=PoseRelation.translation_part,
                           align_origin=align_origin,
                           align=align,
@@ -26,7 +26,7 @@ def evaluateATE(gt_traj: PosePath3D, est_traj: PosePath3D,
                 align_origin=False,
                 align=True
                 ):
-    result = main_ape.ape(gt_traj, est_traj, 
+    result = main_ape.ape(gt_traj, est_traj,
                           pose_relation=PoseRelation.translation_part,
                           align_origin=align_origin,
                           align=align,
@@ -44,7 +44,7 @@ def evaluateROE(
     Evaluates error of rotation
     """
     # Due to the numerical precision of trajectory file, sometimes this method call
-    # may raise evo.LieAlgebraException. In this case, you need to move to 
+    # may raise evo.LieAlgebraException. In this case, you need to move to
     #   .../evo/code/lie_algebra.py (Library code)
     # and manually change the atol in is_so3(...) method from 1e-6 (library default)
     # to 1e-4 (or a more relaxed value)

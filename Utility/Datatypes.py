@@ -20,7 +20,7 @@ def mean(data: Iterable[float]) -> float:
     data = list(data)  # Convert iterable to list to allow multiple passes
     if not data:
         raise ValueError("mean() arg is an empty sequence")  # Handle empty input
-    
+
     return sum(data) / len(data)  # Compute mean
 
 
@@ -31,7 +31,7 @@ class FlowPerformance:
     px1 : float
     px3 : float
     px5 : float
-    
+
     @classmethod
     def mean(cls, values: list["FlowPerformance"]) -> "FlowPerformance":
         return FlowPerformance(
@@ -49,7 +49,7 @@ class FlowCovPerformance:
     q25_nll: float
     q50_nll: float
     q75_nll: float
-    
+
     @classmethod
     def mean(cls, values: list["FlowCovPerformance"]) -> "FlowCovPerformance":
         return FlowCovPerformance(
@@ -83,7 +83,7 @@ class DepthCovPerformance:
     q25_nll: float
     q50_nll: float
     q75_nll: float
-    
+
     @classmethod
     def mean(cls, values: list["DepthCovPerformance"]) -> "DepthCovPerformance":
         return DepthCovPerformance(

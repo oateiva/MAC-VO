@@ -13,11 +13,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      
+
       - name: Report Environment
         run: |
           python -m pip list
-      
+
       - name: Static Analysis by PyRight
         uses: jakebailey/pyright-action@v2
         with:

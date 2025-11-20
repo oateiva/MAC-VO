@@ -8,7 +8,7 @@ from Utility.Config import build_dynamic_config, load_config
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--data", type=str, default="./Config/Sequence/TartanAir_seaside_000.yaml")
-args = parser.parse_args()    
+args = parser.parse_args()
 
 datacfg, _ = load_config(Path(args.data))
 depth_cfg, _ = build_dynamic_config({   # For simplicity of editing config

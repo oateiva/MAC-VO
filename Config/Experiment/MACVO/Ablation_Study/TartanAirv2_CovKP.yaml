@@ -40,7 +40,7 @@ Odometry:
       max_match_cov: 100.0
 
   mappoint:
-    # Mapping feature can be conveniently turn off by using 
+    # Mapping feature can be conveniently turn off by using
     # "type: NoKeypointSelector" instead of the config below.
     type: MappingPointSelector
     args:
@@ -77,15 +77,15 @@ Odometry:
             max_depth: *max_depth
         - type: LikelyFrontOfCamFilter
           args:
-  
+
   postprocess:
     type: MotionInterpolate
     args:
-  
+
   keyframe:
     type: AllKeyframe
     args:
-  
+
   optimizer:
     type: TwoFrame_PGO
     args:

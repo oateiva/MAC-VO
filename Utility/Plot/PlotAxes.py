@@ -28,7 +28,7 @@ def as_chain_func(func: T.Callable[T.Concatenate[Axes, I], Axes | None]) -> T.Ca
 
 @as_chain_func
 @IgnoreException
-def plot_start(ax: Axes) -> Axes: 
+def plot_start(ax: Axes) -> Axes:
     return ax
 
 @as_chain_func
@@ -82,7 +82,7 @@ def plot_flow(ax: Axes, flow: torch.Tensor | None | np.ndarray) -> Axes:
         flow - (2, H, W) - Any range
     """
     if flow is None: return ax
-    
+
     assert flow.shape[0] == 2    # 2 x H x W
     if isinstance(flow, torch.Tensor):
         color_map = flow_to_color(flow.permute(1, 2, 0).numpy())
@@ -96,7 +96,7 @@ def plot_mask(ax: Axes, mask: torch.Tensor | np.ndarray | None) -> Axes:
     if mask is None: return ax
     if isinstance(mask, torch.Tensor):
         mask = mask.float().detach().cpu().numpy()
-    
+
     H, W = mask.shape
     rgba_mask = np.zeros((H, W, 4))
     rgba_mask[..., 0:3] = 1
@@ -124,7 +124,7 @@ def plot_keypoints(ax: Axes, keypoints: torch.Tensor, depth_cov: torch.Tensor | 
 @IgnoreException
 def plot_flow_cov(ax: Axes, keypoints: torch.Tensor, flow_cov: torch.Tensor | None, scale: float=3., colors=(0.2078431373, 0.6745098039, 0.6431372549, 0.5)) -> Axes:
     if flow_cov is None: return ax
-    
+
     offsets = keypoints.detach().cpu()
 
     # Extract elements from the Nx3 covariance tensor
@@ -182,14 +182,14 @@ def plot_histogram(ax: Axes, data: torch.Tensor | np.ndarray | list[float], bins
         data = data.detach().cpu().numpy()
     if isinstance(data, np.ndarray):
         data = data.flatten()
-    
+
     match bins:
         case "num", bin_num:
             bin_num = int(bin_num)
             ax.hist(data, bins=bin_num, **hist_kwargs)
         case "width", bin_width:
             ax.hist(data, bins=np.arange(min(data), max(data) + bin_width, bin_width).tolist(), **hist_kwargs)
-    
+
     return ax
 
 @as_chain_func
@@ -231,32 +231,32 @@ def plot_gaussian_conf(ax: Axes, mean: torch.Tensor | np.ndarray, cov_matrix: to
     """
     assert len(cov_matrix.shape) == 2 and cov_matrix.shape[0] == 2 and cov_matrix.shape[1] == 2
     assert mean.shape[0] == 2 and len(mean.shape) == 1
-    
+
     if isinstance(mean, torch.Tensor):
         mean = mean.cpu().numpy()
     if isinstance(cov_matrix, torch.Tensor):
         cov_matrix = cov_matrix.cpu().numpy()
-    
+
     # Calculate eigenvalues and eigenvectors
     eigenvalues, eigenvectors = np.linalg.eig(cov_matrix)
-    
+
     # Sort eigenvalues and eigenvectors
     sort_indices = np.argsort(eigenvalues)[::-1]
     eigenvalues = eigenvalues[sort_indices]
     eigenvectors = eigenvectors[:, sort_indices]
-    
+
     # Calculate scaling factor
     chisquare_val = chi2.ppf(confidence, df=2)
     scaling_factor = np.sqrt(chisquare_val)
-    
+
     # Calculate ellipse parameters
     width, height = 2 * scaling_factor * np.sqrt(eigenvalues)
     angle = np.arctan2(eigenvectors[1, 0], eigenvectors[0, 0])
-    
+
     # Create and plot ellipse
-    ellipse = Ellipse((mean[0], mean[1]), width, height, angle=np.degrees(angle), 
+    ellipse = Ellipse((mean[0], mean[1]), width, height, angle=np.degrees(angle),
                                   facecolor='none', edgecolor='red')
-    
+
     ax.add_patch(ellipse)
     return ax
 
@@ -265,7 +265,7 @@ def plot_gaussian_conf(ax: Axes, mean: torch.Tensor | np.ndarray, cov_matrix: to
 def plot_cumulative_density(ax: Axes, values: torch.Tensor | np.ndarray, **kwargs) -> Axes:
     if isinstance(values, torch.Tensor):
         values = values.cpu().numpy()
-    
+
     ax.ecdf(values, **kwargs)
     return ax
 
@@ -277,7 +277,7 @@ def plot_kp_correspondence(ax: Axes, kp1: torch.Tensor | np.ndarray, kp2: torch.
         kp1 = kp1.cpu().detach().numpy()
     if isinstance(kp2, torch.Tensor):
         kp2 = kp2.cpu().detach().numpy()
-    
+
     # Construct segments as (N, 2, 2), where each row is [[x1, y1], [x2, y2]]
     segments = np.stack((kp1, kp2), axis=1)  # Shape (N, 2, 2)
 

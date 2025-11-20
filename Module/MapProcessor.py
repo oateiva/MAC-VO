@@ -15,11 +15,11 @@ class IMapProcessor(ABC, ConfigTestableSubclass):
     """
     def __init__(self, config: SimpleNamespace | None):
         self.config = config
-    
+
     @abstractmethod
     def elaborate_map(self, frames: FrameStore) -> tuple[FrameStore, torch.Tensor]:
         """
-        Given a sequence of frames, elaborate the trajectory (frame poses) and handle the 
+        Given a sequence of frames, elaborate the trajectory (frame poses) and handle the
         'need_interp' (i.e. lost track / skipped) frames.
         """
         ...
@@ -38,9 +38,9 @@ class PoseInterpolate(IMapProcessor):
         bad_mask[:5]  = False
         bad_mask[-5:] = False
         bad_idx = torch.nonzero(bad_mask).flatten()
-        
+
         interp_poses, _ = interpolate_pose(poses[~bad_mask], torch.nonzero(~bad_mask).flatten(), bad_idx)   #type: ignore
-        
+
         frames.data["pose"][bad_mask] = interp_poses.tensor()
         return frames, bad_idx
 
@@ -62,11 +62,11 @@ class MotionInterpolate(IMapProcessor):
         motions = poses[:-1].Inv() @ poses[1:]  #type: ignore
         bad_mask[:2] = False
         bad_mask[-2:] = False
-        
+
         interp_idx = torch.nonzero(bad_mask).flatten()
         interp_motions, _ = interpolate_pose(motions[~bad_mask], torch.nonzero(~bad_mask).flatten(), interp_idx)
         motions[bad_mask] = interp_motions
-        
+
         # NOTE: pp.cumprod is not numerically stable, so we use this cumops with NormalizeQuat for
         # more stable performance.
         # https://github.com/pypose/pypose/issues/346

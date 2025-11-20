@@ -22,19 +22,19 @@ class ZedSequence(SequenceBase[Frame]):
         cfg = self.config_dict2ns(config)
         self.raw_width = cfg.width
         self.raw_height = cfg.height
-        
+
         K = torch.tensor([[cfg.fx, 0.0, cfg.cx], [0.0, cfg.fy, cfg.cy], [0.0, 0.0, 1.0]]).unsqueeze(0)
-        
+
         width = self.raw_width
         height = self.raw_height
-        
+
         # metadata
         self.seqRoot = Path(cfg.root)
         self.K = K
         self.baseline = cfg.bl
         self.width = width
         self.height = height
-        
+
         self.ImageL = ZedMonocularDataset(Path(self.seqRoot), left=True)
         self.ImageR = ZedMonocularDataset(Path(self.seqRoot), left=False)
 
@@ -43,7 +43,7 @@ class ZedSequence(SequenceBase[Frame]):
 
     def __getitem__(self, local_index: int) -> Frame:
         index = self.get_index(local_index)
-        
+
         return Frame(
             idx    = [local_index],
             time_ns= [local_index * 1000],   # FIXME: a fake timestamp.
@@ -58,7 +58,7 @@ class ZedSequence(SequenceBase[Frame]):
                 imageR   = self.ImageR[index]
             )
         )
-    
+
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
         cls._enforce_config_spec(config, {
@@ -70,13 +70,13 @@ class ZedSequence(SequenceBase[Frame]):
             "bl"  : lambda v: isinstance(v, float),
             "width": lambda v: isinstance(v, int),
             "height": lambda v: isinstance(v, int)
-        })  
+        })
 
 
 class ZedMonocularDataset(Dataset):
     """
     Return images in the given directory ends with .png
-    Return the image in shape (1, 3, H, W) with dtype=float32 
+    Return the image in shape (1, 3, H, W) with dtype=float32
     and normalized (image in [0, 1])
     """
     def __init__(self, directory: Path, left: bool = True) -> None:
@@ -92,9 +92,9 @@ class ZedMonocularDataset(Dataset):
             self.file_names = glob.glob(str(self.directory) + "/rgb_l/*.png") + glob.glob(str(self.directory) + "/rgb_l/*.jpg")
         else:
             self.file_names = glob.glob(str(self.directory) + "/rgb_r/*.png") + glob.glob(str(self.directory) + "/rgb_r/*.jpg")
-        
+
         self.file_names = sorted(self.file_names, key=natural_sort_key)
-            
+
         self.length = len(self.file_names)
         assert self.length > 0, f"No file with '.png' suffix is found under {self.directory}"
 
@@ -125,7 +125,7 @@ if __name__ == "__main__":
     datacfg, datacfg_dict = load_config(Path(args.data))
     dataset = SequenceBase[Frame].instantiate(**vars(datacfg)).clip(16, 32)
     dataloader = DataLoader(dataset, batch_size=16, shuffle=False, num_workers=0, collate_fn=dataset.collate_fn)
-    
+
     batch: Frame
     for batch in dataloader:
         print(batch.camera.imageL.shape, batch.camera.imageR.shape, batch.idx, batch.camera.K.shape)

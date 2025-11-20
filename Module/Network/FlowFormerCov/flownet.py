@@ -10,9 +10,9 @@ class FlowFormerCov(FlowFormer):
     def __init__(self, cfg, encoder_dtype: torch.dtype=torch.float32, decoder_dtype: torch.dtype=torch.float32):
         super(FlowFormerCov, self).__init__(cfg)
         self.memory_decoder = MemoryCovDecoder(self.cfg, decoder_dtype)
-        
+
         self.enc_dtype = encoder_dtype
-        self.context_encoder = self.context_encoder.to(dtype=self.enc_dtype) 
+        self.context_encoder = self.context_encoder.to(dtype=self.enc_dtype)
         self.memory_encoder  = self.memory_encoder.to(dtype=self.enc_dtype)
 
     def forward(self, image1, image2):
@@ -31,7 +31,7 @@ class FlowFormerCov(FlowFormer):
             flow_predictions, cov_predictions = self.memory_decoder(cost_memory, context, cost_maps)
 
         return flow_predictions, cov_predictions
-    
+
     @torch.no_grad()
     @torch.inference_mode()
     def inference(self, image1: torch.Tensor, image2: torch.Tensor):
@@ -51,4 +51,3 @@ class FlowFormerCov(FlowFormer):
             else:
                 cvt_ckpt[k] = ckpt[k]
         self.load_state_dict(cvt_ckpt, strict=False)
-

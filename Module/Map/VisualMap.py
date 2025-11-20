@@ -17,7 +17,7 @@ class VisualMap:
         self.init_size: T.Final[int]  = 1024
         self.max_pt_obs: T.Final[int] = 5
         self.max_frame_range: T.Final[int] = 2
-        
+
         self.frames = FrameStore(
             index=AutoScalingTensor((self.init_size,), grow_on=0, dtype=torch.long),
             data={
@@ -29,7 +29,7 @@ class VisualMap:
                 "time_ns"    : AutoScalingTensor((self.init_size,     ), grow_on=0, dtype=torch.long)
             }
         )
-        
+
         self.points = PointStore(
             index=AutoScalingTensor((self.init_size,), grow_on=0, dtype=torch.long),
             data={
@@ -38,7 +38,7 @@ class VisualMap:
                 "color"  : AutoScalingTensor((self.init_size, 3   ), grow_on=0, dtype=torch.uint8)
             }
         )
-        
+
         self.map_points = PointStore(
             index=AutoScalingTensor((self.init_size,), grow_on=0, dtype=torch.long),
             data={
@@ -74,30 +74,30 @@ class VisualMap:
         self.match2frame2 = Scaling_SingleEdge(self.init_size)
         self.match2point  = Scaling_SingleEdge(self.init_size)
         self.point2match  = Scaling_SparseEdge_Multi(self.init_size, self.max_pt_obs)
-        
+
         self.frames.register_edge(self.frame2map)
         self.frames.register_edge(self.frame2match)
         self.points.register_edge(self.point2match)
         self.match.register_edge(self.match2point)
         self.match.register_edge(self.match2frame1)
         self.match.register_edge(self.match2frame2)
-        
+
 
     def get_frame2match(self, frame: FrameNode) -> MatchObs:
         return self.match[self.frame2match.project(frame.index)]
 
     def get_match2point(self, match: MatchObs) -> PointNode:
         return self.points[self.match2point.project(match.index)]
-    
+
     def get_point2match(self, point: PointNode) -> MatchObs:
         return self.match[self.point2match.project(point.index)]
-    
+
     def get_match2frame1(self, match: MatchObs) -> FrameNode:
         return self.frames[self.match2frame1.project(match.index)]
-    
+
     def get_match2frame2(self, match: MatchObs) -> FrameNode:
         return self.frames[self.match2frame2.project(match.index)]
-    
+
     def get_frame2map(self, frame: FrameNode) -> PointNode:
         return self.map_points[self.frame2map.project(frame.index)]
 
@@ -113,14 +113,14 @@ class VisualMap:
           | self.match2frame2.serialize("edge/match2frame2")
           | self.frame2map.serialize("edge/frame2map")
         )
-    
+
     @classmethod
     def deserialize(cls, value: dict[str, np.ndarray]) -> Self:
         map = cls()
         map.frames = map.frames.deserialize("frames/", value)
         map.match  = map.match.deserialize("match/", value)
         map.points = map.points.deserialize("points/", value)
-        
+
         map.frame2match  = map.frame2match.deserialize("edge/frame2match", value)
         map.point2match  = map.point2match.deserialize("edge/point2match", value)
         map.match2point  = map.match2point .deserialize("edge/match2point", value)

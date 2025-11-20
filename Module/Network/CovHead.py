@@ -1,13 +1,13 @@
 import torch.nn as nn
 from typing import List
 
-    
+
 
 class CNNCovHead(nn.Module):
     """
     Estimate the covariance using a CNN architecture.
     """
-    def __init__(self, k_list: List[int] = [7, 7, 7], c_list: List[int] = [128, 64, 32, 2], 
+    def __init__(self, k_list: List[int] = [7, 7, 7], c_list: List[int] = [128, 64, 32, 2],
                         s_list: List[int]|None = None, p_list: List[int]|None = None):
         super().__init__()
         assert len(k_list) == len(c_list) - 1, "Number of kernel size should be one less than number of channels."
@@ -16,12 +16,12 @@ class CNNCovHead(nn.Module):
             self.s_list = [1] * (len(c_list) - 1)
         else:
             self.s_list = s_list
-        
+
         if p_list is None:
             self.p_list = [k // 2 for k in k_list]
         else:
             self.p_list = p_list
-    
+
         layers = []
 
         for i in range(len(self.c_list) - 2):
@@ -52,7 +52,7 @@ class LinearCovHead(nn.Module):
         layers.append(nn.Linear(c_list[-2], c_list[-1]))
 
         self.layers = nn.Sequential(*layers)
-    
+
     def forward(self, x):
         """
         The feature input is default as [B, C, H, W], given that most of the encoder are
@@ -62,4 +62,3 @@ class LinearCovHead(nn.Module):
         x = x.view(b, c, -1).permute(0, 2, 1)
         cov = self.layers(x).exp()
         return cov.permute(0, 2, 1).reshape(b, 2, h, w)
-

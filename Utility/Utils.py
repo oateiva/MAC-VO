@@ -42,7 +42,7 @@ def cropToMultiple(x: torch.Tensor, factor: int | list[int], dim: int | list[int
         if to_crop == 0:
             return x
         return x.narrow(dim, to_crop, size - (2 * to_crop))
-    
+
     if isinstance(factor, int) and isinstance(dim, int):
         return _cropToMultiple(x, factor, dim)
 
@@ -70,7 +70,7 @@ def centerCropTo(x: torch.Tensor, shape: int | list[int], dim: int | list[int]):
         if to_crop == 0:
             return x
         return x.narrow(dim, to_crop, size - (2 * to_crop))
-    
+
     if isinstance(shape, int) and isinstance(dim, int):
         return _centerCropTo(x, shape, dim)
 
@@ -95,9 +95,9 @@ def centerCropTo(x: torch.Tensor, shape: int | list[int], dim: int | list[int]):
 def padTo(x: torch.Tensor, sizes: int | Sequence[int], dim: int | Sequence[int], value: float):
     def _padTo(x: torch.Tensor, factor: int, dim: int, pad_value: float):
         size = x.size(dim)
-        
+
         assert (factor - size) % 2 == 0, f"Can only handle even padding. Target_size={factor}, Actual_size={size} on dim {dim}."
-        
+
         to_pad = (factor - size) // 2
         if to_pad == 0:
             return x

@@ -11,18 +11,18 @@ EXP2COLOR = {
     "2pgoFF_eDeM_eMKP_interp": [149/255, 17/255, 32/255],
     "TartanAir_MKP_interp": [149/255, 17/255, 32/255],
     "2pgoFF_Cov_MKP_interp": [149/255, 17/255, 32/255],
-    
+
     "dpvo": [253/255, 181/255, 21/255],
     "DPVO": [253/255, 181/255, 21/255],
-    
+
     "DROID_SLAM": [0, 150/255, 71/255],
-    
+
     "tartanvo": [74/255, 61/255, 152/255],
     "TartanVO": [74/255, 61/255, 152/255],
-    
+
     "ORB_SLAM3": [0/255, 123/255, 192/255],
     "iSLAM_VO": [0/255, 123/255, 192/255],
-    
+
     "mast3r": [185/255, 53/255, 189/255],
 }
 EXP2KWARGS = {
@@ -70,7 +70,7 @@ def plot_runs(filename: str, runs: list[tuple[PlotableTrajectory | None, Plotabl
         est_traj.plot_kwargs |= {"color": EXP2COLOR[odom_name]}
         est_traj.plot_kwargs |= EXP2KWARGS[odom_name]
         est_traj.name = odom_name
-        
+
         trajectories.append(est_traj)
 
     for run in runs:
@@ -78,10 +78,10 @@ def plot_runs(filename: str, runs: list[tuple[PlotableTrajectory | None, Plotabl
         if gt_traj is not None: break
     else:
         raise Exception("No Groundtruth Trajectory provided!")
-    
+
     gt_traj.plot_kwargs |= {"color": "gray", "linewidth": 4, "linestyle": "--"}
     gt_traj.name = "Ground Truth"
-    
+
     aligned_trajectories = []
     for traj in trajectories:
         gt_cropped = gt_traj.apply(lambda x: x.crop(to_idx=traj.data.length))
@@ -95,7 +95,7 @@ def PlotTrajectory(gt_traj: PlotableTrajectory, trajs: list[PlotableTrajectory],
     fig = plt.figure(figsize=(6, 6), dpi=500)
     ax = fig.add_subplot(1, 1, 1)
     ax.axis("off")
-    
+
     Plot.plot_Trajectory(ax, 0, 1, gt_traj)
     gt_position = gt_traj.data.poses.translation().numpy()[..., :2]
     max_distance = -1.
@@ -103,18 +103,18 @@ def PlotTrajectory(gt_traj: PlotableTrajectory, trajs: list[PlotableTrajectory],
         traj_position = traj.data.poses.translation().numpy()[..., :2]
         target_size = min(traj_position.shape[0], gt_position.shape[0])
         traj_distance = np.linalg.norm(traj_position[:target_size] - gt_position[:target_size], axis=1)
-        
+
         if target_size < traj.data.length: trajs[idx] = traj.apply(lambda x: x.crop(to_idx=target_size))
         max_distance = max(max_distance, traj_distance.max())
     max_distance = min(max_distance, MAX_DIST * (gt_position[..., 0].max() - gt_position[..., 0].min()))
-    
+
     for traj in trajs:
         traj.name = EXP2DISPLAY[traj.name]
         traj_position = traj.data.poses.translation().numpy()[..., :2]
         target_size = min(traj_position.shape[0], gt_position.shape[0])
         traj_distance = np.linalg.norm(traj_position[:target_size] - gt_position[:target_size], axis=1)
         alpha_value = MIN_ALPHA + (1 - MIN_ALPHA) * (max_distance - traj_distance).clip(0, None) / max_distance
-        
+
         if traj.name in EXAMPTION_ALPHA:
             traj.plot_kwargs |= dict(zorder=100)
             Plot.plot_Trajectory(ax, 0, 1, traj)
@@ -128,7 +128,7 @@ def PlotTrajectory(gt_traj: PlotableTrajectory, trajs: list[PlotableTrajectory],
                 label=traj.name,
                 **traj.plot_kwargs
             )(ax)
-    
+
     ax.legend(frameon=False)
     ax.set_aspect("equal", adjustable="datalim")
 

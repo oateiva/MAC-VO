@@ -14,17 +14,17 @@ CollateFn = T.Callable[[T.Sequence[Tp],], Tp]
 @dataclass(kw_only=True)
 class Collatable:
     collate_handlers: T.ClassVar[dict[str, CollateFn]] = dict()
-    
+
     @classmethod
     def collate(cls, batch: T.Sequence[Self]) -> Self:
         """
         A default collate function that will handle torch.Tensor, pp.LieTensor and
         np.array automatically. You can perform more customized collate by one of the following methods:
-        
+
         1. Overriding the collate method
-        
+
         2. Setting the class attribute `collate_handlers` to a dictionary that maps the attribute name to the collate function corresponding to that field.
-        
+
         """
         data_dict = dict()
         for key, value in batch[0].__dict__.items():
@@ -46,7 +46,7 @@ class Collatable:
                 raise ValueError(f"Unsupported data type {type(value)}, you need to overrider the collate method.")
             data_dict[key] = cls._collate([getattr(x, key) for x in batch], collate_fn)
         return cls(**data_dict)
-    
+
     @staticmethod
     def _collate(batch: T.Sequence[Tp | None], collate_fn: CollateFn) -> Tp | None:
         if any([x is None for x in batch]): return None
@@ -69,9 +69,9 @@ class CameraData(Collatable):
     images: T.List[torch.Tensor]     # mono: [L]; stereo: [L, R] of shape Bx3xHxW
 
     # Label & Ground Truth
-    gt_flow  : torch.Tensor | None = None    # torch.float32 of shape Bx2xHxW 
+    gt_flow  : torch.Tensor | None = None    # torch.float32 of shape Bx2xHxW
     flow_mask: torch.Tensor | None = None    # torch.bool    of shape Bx1xHxW
-    gt_depth : torch.Tensor | None = None    # torch.float32 of shape Bx1xHxW 
+    gt_depth : torch.Tensor | None = None    # torch.float32 of shape Bx1xHxW
 
     collate_handlers = {
         "height": lambda batch: batch[0],
@@ -161,7 +161,7 @@ class CameraData(Collatable):
 #     time_ns : list[int]     # Time (ns) of data received, len(list) = B
 #     height: int             # H
 #     width : int             # W
-    
+
 #     @property
 #     def frame_ns(self) -> int:
 #         assert len(self.time_ns) == 1, "Can only use frame_ns on unbatched data."
@@ -176,7 +176,7 @@ class CameraData(Collatable):
 #     def frame_K(self) -> torch.Tensor:
 #         assert self.K.size(0) == 1, "Can only use frame_K on unbatched data"
 #         return self.K[0]
-    
+
 #     @property
 #     def time_ms(self) -> list[float]: return [t / 1000. for t in self.time_ns]
 #     @property
@@ -195,16 +195,16 @@ class CameraData(Collatable):
 #     def cy(self) -> float:
 #         assert self.K.size(0) == 1, "Can only use property shortcut on unbatched data"
 #         return self.K[0, 1, 2].item()
-    
+
 #     # Sensor Data
 #     imageL: torch.Tensor    # torch.float32 of shape Bx3xHxW
 #     imageR: torch.Tensor    # torch.float32 of shape Bx3xHxW
-    
+
 #     # Label & Ground Truth
-#     gt_flow  : torch.Tensor | None = None    # torch.float32 of shape Bx2xHxW 
+#     gt_flow  : torch.Tensor | None = None    # torch.float32 of shape Bx2xHxW
 #     flow_mask: torch.Tensor | None = None    # torch.bool    of shape Bx1xHxW
-#     gt_depth : torch.Tensor | None = None    # torch.float32 of shape Bx1xHxW 
-    
+#     gt_depth : torch.Tensor | None = None    # torch.float32 of shape Bx1xHxW
+
 #     collate_handlers = {
 #         "height": lambda batch: batch[0],
 #         "width" : lambda batch: batch[0],
@@ -220,7 +220,7 @@ class IMUData(Collatable):
     T_BS: pp.LieTensor          # torch.float32, pp.SE3 of shape Bx7
     time_ns: torch.Tensor       # torch.int64 of shape BxNx1
     gravity: list[float]        # gravity constant
-    
+
     @property
     def time_delta(self) -> torch.Tensor: return self.time_ns[:, 1:] - self.time_ns[:, :-1]
     @property
@@ -229,7 +229,7 @@ class IMUData(Collatable):
     def frame_gravity(self) -> float:
         assert len(self.gravity) == 1, "frame_gravity can only be used on unbatched data"
         return self.gravity[0]
-    
+
     # acc: Raw acceleration of IMU body frame with gravity added
     acc   : torch.Tensor                # torch.float32 of shape BxNx3
     # gyro: Angular rate of the IMU body frame
@@ -242,7 +242,7 @@ class AttitudeData(Collatable):
     T_BS: pp.LieTensor          # torch.float32, pp.SE3 of shape Bx7
     time_ns: torch.Tensor       # torch.int64 of shape BxNx1
     gravity: list[float]        # gravity constant
-    
+
     @property
     def time_delta(self) -> torch.Tensor: return self.time_ns[:, 1:] - self.time_ns[:, :-1]
     @property
@@ -251,12 +251,12 @@ class AttitudeData(Collatable):
     def frame_gravity(self) -> float:
         assert len(self.gravity) == 1, "frame_gravity can only be used on unbatched data"
         return self.gravity[0]
-    
+
     # Ground truth velocity, position and rotation
     gt_vel: torch.Tensor      # torch.float32 of shape BxNx3
     gt_pos: torch.Tensor      # torch.float32 of shape BxNx3
     gt_rot: pp.LieTensor      # torch.float32 of shape BxNx4, pp.SO3 rotation.
-    
+
     # Initial condition for IMU preintegration
     init_vel: torch.Tensor      # torch.float32 of shape Bx1x3
     init_pos: torch.Tensor      # torch.float32 of shape Bx1x3

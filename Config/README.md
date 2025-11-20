@@ -28,7 +28,7 @@ Interface           |   Description
 `IKeyframeSelector `  |   Selecting keyframe, poses at non-keyframe are interpolated
 `IMapProcessor     `  |   Pose-process the map, perform smoothing / interpolation
 
-The implementation of module is loaded **dynamically** following the config file, usually using the class method 
+The implementation of module is loaded **dynamically** following the config file, usually using the class method
 
 ```python
 Interface.instantiate("implementation_class_name", *args, **kwargs)

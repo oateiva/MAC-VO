@@ -13,11 +13,11 @@ Odometry:
     args:
       weight: ./Model/MACVO_posenet.pkl
       device: cuda
-    
+
   tartanvo:
       weight: ./Model/MACVO_posenet.pkl
       device: cuda
-  
+
   keyframe:
     type: UniformKeyframe
     args:

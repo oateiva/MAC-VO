@@ -152,19 +152,19 @@ class RAFTFlowCovNet(nn.Module):
     def inference(self, first: torch.Tensor, second: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         pre_im0, shape0 = self.preprocess(first)
         pre_im1, _ = self.preprocess(second)
-        
+
         flow, flow_covs = self(pre_im0.to(self.device), pre_im1.to(self.device))
-        
+
         flow_covs = [
             cov.view(cov.shape[0], 2, cov.shape[1] // 2, cov.shape[2], cov.shape[3])
             for cov in flow_covs
         ]
         cov_preds = [cov.mean(dim=2) for cov in flow_covs]
         flow_cov = cov_preds[-1]
-        
+
         post_flow = self.postprocess(flow, shape0, isflow=True)
         post_flow_cov = (self.postprocess(flow_cov, shape0, isflow=False) * 2).exp()
-        
+
         return post_flow, post_flow_cov
 
     @staticmethod

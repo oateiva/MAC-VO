@@ -16,7 +16,7 @@ from Utility.Config import load_config, namespace_to_cfgnode
 from Utility.PrettyPrint import ColoredTqdm, Logger
 
 from .utils import (
-    T_TrainType, 
+    T_TrainType,
     AssertLiteralType,
     get_scheduler, get_optimizer
 )
@@ -38,7 +38,7 @@ def merge_matrices(matrices):
             continue
         for k, v in m.items():
             _matric[k] += v
-    
+
     for k, v in _matric.items():
         _matric[k] /= len(matrices)
     return _matric
@@ -48,7 +48,7 @@ def train(modelcfg, cfg, loader: DataLoader[DataFramePair[Frame]], eval_loader=N
     from Module.Network.FlowFormerCov import build_flowformer
     train_mode: T_TrainType = modelcfg.training_mode
     AssertLiteralType(train_mode, T_TrainType)
-    
+
     model = build_flowformer(modlecfg, torch.float32, torch.float32)
     if modlecfg.restore_ckpt:
         model.load_ddp_state_dict(torch.load(modlecfg.restore_ckpt, weights_only=True))
@@ -56,7 +56,7 @@ def train(modelcfg, cfg, loader: DataLoader[DataFramePair[Frame]], eval_loader=N
     model = nn.DataParallel(model)
     model.cuda()
     model.train()
-    
+
     optimizer = get_optimizer(cfg.Model.optimizer.type)(
         model.parameters(),
         **vars(cfg.Model.optimizer.args)
@@ -80,7 +80,7 @@ def train(modelcfg, cfg, loader: DataLoader[DataFramePair[Frame]], eval_loader=N
     if modlecfg.wandb:
         wandb.init(project=modlecfg.name, config=modlecfg)
         wandb.watch(model, log=None)
-        
+
     total_steps = 0
     should_keep_training = True
     while should_keep_training:
@@ -92,10 +92,10 @@ def train(modelcfg, cfg, loader: DataLoader[DataFramePair[Frame]], eval_loader=N
             img1, img2 = frameData.cur.camera.imageL.cuda(), frameData.nxt.camera.imageL.cuda()
             gt_flow = frameData.cur.camera.gt_flow.cuda()
             flow_mask = frameData.cur.camera.flow_mask.cuda()
-            
+
             flow, cov = model(img1, img2)
             loss, _ = sequence_loss(cfg=modlecfg, preds=flow, gt=gt_flow, flow_mask=flow_mask, cov_preds=cov)
-            
+
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), modlecfg.clip)
@@ -109,7 +109,7 @@ def train(modelcfg, cfg, loader: DataLoader[DataFramePair[Frame]], eval_loader=N
                     metrics = merge_matrices([sequence_metric(modelcfg, flow, cov, gt_flow, flow_mask)[1]])
                     metrics["lr"] = lr
                     wandb.log(metrics)
-                
+
             total_steps += 1
 
             if total_steps > modlecfg.num_steps:
@@ -117,7 +117,7 @@ def train(modelcfg, cfg, loader: DataLoader[DataFramePair[Frame]], eval_loader=N
                 break
 
             if modelcfg.autosave_freq and total_steps % modelcfg.autosave_freq == 0:
-                PATH = "%s/%s/%d.pth" % (modelcfg.autosave_dir, modelcfg.name + modelcfg.time, total_steps)  
+                PATH = "%s/%s/%d.pth" % (modelcfg.autosave_dir, modelcfg.name + modelcfg.time, total_steps)
                 Logger.write("info", f"Save model to {PATH}")
                 if isinstance(model, nn.DataParallel):
                     # We don't want to have a layer of `module.` on all weights. Since we are definitely not
@@ -125,11 +125,11 @@ def train(modelcfg, cfg, loader: DataLoader[DataFramePair[Frame]], eval_loader=N
                     torch.save(model.module.state_dict(), PATH)
                 else:
                     torch.save(model.state_dict(), PATH)
-                
+
     PATH = "%s/%s/%d.pth" % (modlecfg.autosave_dir, modlecfg.name + modlecfg.time, total_steps)
     torch.save(model.state_dict(), PATH)
-    
-    
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="Config/Train/Demo.yaml")
@@ -143,7 +143,7 @@ if __name__ == "__main__":
     modlecfg.update(vars(args))
     datacfg = cfg.Train
     modlecfg.time = time.strftime("%m-%d-%H-%M-%S", time.localtime())
-    
+
     os.makedirs("%s/%s" % (args.autosave_dir, modlecfg.name + modlecfg.time), exist_ok=True)
     torch.manual_seed(modlecfg.seed)
     np.random.seed(modlecfg.seed)
@@ -151,7 +151,7 @@ if __name__ == "__main__":
                   CastDataType(dict(dtype=cfg.Model.datatype)),
                   AddImageNoise(dict(stdv=5.0)),
                   ScaleFrame(dict(scale_u=cfg.Model.image_scale, scale_v=cfg.Model.image_scale, interp='nearest'))]
-    
+
     traindatasets = TrainDataset[Frame].mp_instantiation(datacfg.data, 0, -1, lambda cfg: cfg.type in {"TartanAir_NoIMU", "TartanAirv2_NoIMU"})
     trainloader = DataLoader[DataFramePair[Frame]](
         ConcatDataset([
@@ -165,7 +165,7 @@ if __name__ == "__main__":
         drop_last=True,
         num_workers=4,
     )
-    
+
     if args.wandb:
         try:
             import wandb

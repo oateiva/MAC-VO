@@ -142,7 +142,7 @@ class TartanStereoVOMatch(TartanStereoVONetInterface):
         #
         flow_output = self.model.forward_flow(img0_flow, img1_flow)
         flow_output = flow_output / self.flow_norm
-        
+
         # Postprocess
         flow_output_resized = torch.nn.functional.interpolate(
             flow_output, scale_factor=4.0, mode="nearest"
@@ -154,35 +154,35 @@ class TartanStereoVOMatch(TartanStereoVONetInterface):
 class TartanStereoVOMotion(TartanStereoVONetInterface):
     def __init__(self, weight: Path, eval_mode: bool, device: str = "cuda"):
         super().__init__(weight, eval_mode, device)
-    
+
     @staticmethod
     def cropAndResize(x: torch.Tensor, target_shape: tuple[int, int]) -> torch.Tensor:
         orig_height, orig_width = x.shape[-2], x.shape[-1]
         targ_height, targ_width = target_shape
-        
+
         # Calculate scaing factor
         scale_factor = min(int(orig_height / targ_height), int(orig_width / targ_width))
-        
+
         crop_targ_height, crop_targ_width = targ_height * scale_factor, targ_width * scale_factor
         x = centerCropTo(x, [crop_targ_height, crop_targ_width], [-2, -1])
-        
+
         # Scale down
         x = torch.nn.functional.interpolate(x, size=(targ_height, targ_width), mode='bilinear', align_corners=True)
         return x
-    
+
     @torch.inference_mode()
-    def inference(self, frame0: Frame, flow: torch.Tensor, depth: torch.Tensor) -> torch.Tensor:        
+    def inference(self, frame0: Frame, flow: torch.Tensor, depth: torch.Tensor) -> torch.Tensor:
         meta = frame0.camera
         tensor_intrinsic = make_device_intrinsic_layer(
             meta.height, meta.width, meta.fx, meta.fy, meta.cx, meta.cy, torch.device(self.device)
         ).unsqueeze(0).permute(0, 3, 1, 2)
-        
+
         # (112, 160) is the size of feature map received by the PoseNet in original TartanVO paper.
         # See paper at https://arxiv.org/abs/2011.00359
         tensor_intrinsic_resize = self.cropAndResize(tensor_intrinsic, (112, 160))
         depth_resize = self.cropAndResize(depth, (112, 160))
         flow_resize  = self.cropAndResize(flow, (112, 160)) * self.flow_norm
-        
+
         stereo = (meta.baseline * meta.K[:,0,0]) / depth_resize
         stereo = torch.nan_to_num(stereo * self.model.stereoNormFactor, nan=0.0).clamp(min=0.0)
 
@@ -190,5 +190,5 @@ class TartanStereoVOMotion(TartanStereoVONetInterface):
 
         inputTensor = torch.cat((flow_resize, depth_resize, tensor_intrinsic_resize), dim=1).to(self.device)
         pose = self.model.flowPoseNet(inputTensor, scale_disp=1.0)
-        
+
         return pose.squeeze() * self.pose_norm

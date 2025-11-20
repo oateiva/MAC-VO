@@ -30,13 +30,13 @@ class TartanAirV2_Sequence(SequenceBase[StereoInertialFrame]):
         "gyro_bias_instability": (5.8e-6, 5.8e-6, 5.8e-6),
         "gyro_random_walk": (3.8e-7, 3.8e-7, 3.8e-7),
     })
-    
+
     @classmethod
     def name(cls) -> str: return "TartanAirv2"
-    
+
     def __init__(self, config: SimpleNamespace | dict[str, Any]):
         cfg = self.config_dict2ns(config)
-        
+
         self.stereo_sequence = TartanAirV2_StereoSequence(cfg)
         self.imu_sequence    = TartanAirIMUSimulator(cfg.imu_sim, Path(cfg.root, "pose_lcam_front.txt"), fps=cfg.imu_freq)
         super().__init__(len(self.stereo_sequence))
@@ -55,7 +55,7 @@ class TartanAirV2_Sequence(SequenceBase[StereoInertialFrame]):
             gt_pose=stereo_frame.gt_pose,
             time_ns=stereo_frame.time_ns
         )
-    
+
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
         assert config is not None
@@ -73,10 +73,10 @@ class TartanAirV2_Sequence(SequenceBase[StereoInertialFrame]):
 class TartanAirV2_StereoSequence(SequenceBase[Frame]):
     @classmethod
     def name(cls) -> str: return "TartanAirv2_NoIMU"
-    
+
     def __init__(self, config: SimpleNamespace | dict[str, Any]):
         cfg = self.config_dict2ns(config)
-        
+
         # Metadata
         self.lcam_T_BS = pp.identity_SE3(1)
         self.lcam_K    = torch.tensor([[320.0, 0.0, 320.0], [0.0, 320.0, 320.0], [0.0, 0.0, 1.0]]).unsqueeze(0)
@@ -84,11 +84,11 @@ class TartanAirV2_StereoSequence(SequenceBase[Frame]):
         self.width     = 640
         self.height    = 640
         # End
-        
+
         # Stereo Loader
         self.lcam_loader = TartanAirMonocularDataset(Path(cfg.root, "image_lcam_front"))
         self.rcam_loader = TartanAirMonocularDataset(Path(cfg.root, "image_rcam_front"))
-        
+
         cam_time_file_path = Path(cfg.root, "imu", "cam_time.txt")
         if cam_time_file_path.exists():
             self.lcam_time   = (np.loadtxt(str(cam_time_file_path), dtype=np.float64) * 1_000_000_000).astype(np.int64)
@@ -112,9 +112,9 @@ class TartanAirV2_StereoSequence(SequenceBase[Frame]):
         if cfg.gtPose:
             self.gt_poses = loadTartanAirGT(Path(cfg.root, "pose_lcam_front.txt"))
         else: self.gt_poses = None
-        
+
         super().__init__(length)
-    
+
     def __getitem__(self, local_index: int) -> Frame:
         index   = self.get_index(local_index)
         gt_flow = self.flow_loader[index] if self.flow_loader else None
@@ -129,7 +129,7 @@ class TartanAirV2_StereoSequence(SequenceBase[Frame]):
                 width     = 640,
                 imageL    = self.lcam_loader[index],
                 imageR    = self.rcam_loader[index],
-                
+
                 # Ground truth and labels
                 gt_depth  = self.depth_loader[index] if self.depth_loader else None,
                 gt_flow   = gt_flow[0] if gt_flow else None,
@@ -138,7 +138,7 @@ class TartanAirV2_StereoSequence(SequenceBase[Frame]):
             time_ns   = [self.lcam_time[index].item()],  # Fake data, assume 10Hz image
             gt_pose   = cast(pp.LieTensor, self.gt_poses[index].unsqueeze(0)) if (self.gt_poses is not None) else None,
         )
-    
+
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
         assert config is not None

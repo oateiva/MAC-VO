@@ -15,13 +15,13 @@ from Utility.PrettyPrint import Logger
 class YAMLFileProxy:
     def __init__(self, file_name: Path):
         self.file_path = file_name
-        
+
         # Transparent Config Cache
         if not self.file_path.exists():
             self.__file_cache = SimpleNamespace()
         else:
             self.__file_cache, _ = load_config(self.file_path)
-    
+
     @property
     def data(self) -> SimpleNamespace:
         return self.__file_cache
@@ -46,7 +46,7 @@ class SandboxFile:
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.fp is None:
             return
-    
+
         self.fp.close()
         if exc_type is not None:
             Logger.write("warn", f"File {self.file} with mode {self.mode} fails.",)
@@ -133,7 +133,7 @@ class Sandbox:
         def autophagy():
             try:
                 shutil.rmtree(str(self.folder))
-                
+
                 Logger.write(
                     "warn", f"[bold red]Sandbox at {str(self.folder)} is auto-removed.[/]", marked=True
                 )

@@ -34,14 +34,14 @@ class TartanAir_Sequence(SequenceBase[StereoInertialFrame]):
         "gyro_bias_instability": (5.8e-6, 5.8e-6, 5.8e-6),
         "gyro_random_walk": (3.8e-7, 3.8e-7, 3.8e-7),
     })
-    
+
     @classmethod
     def name(cls) -> str: return "TartanAir"
-    
+
     def __init__(self, config: SimpleNamespace | dict[str, Any]):
         cfg = self.config_dict2ns(config)
         self.stereo_sequence = TartanAir_StereoSequence(cfg)
-        
+
         if cfg.imu_freq is None:
             self.imu_sequence    = TartanAirIMULoader(Path(cfg.root, "imu"))
         else:
@@ -80,10 +80,10 @@ class TartanAir_Sequence(SequenceBase[StereoInertialFrame]):
 class TartanAir_StereoSequence(SequenceBase[Frame]):
     @classmethod
     def name(cls) -> str: return "TartanAir_NoIMU"
-    
+
     def __init__(self, config: SimpleNamespace | dict[str, Any]):
         cfg = self.config_dict2ns(config)
-        
+
         # Metadata
         self.lcam_T_BS = pp.identity_SE3(1)
         self.lcam_K    = torch.tensor([[320.0, 0.0, 320.0], [0.0, 320.0, 240.0], [0.0, 0.0, 1.0]]).unsqueeze(0)
@@ -91,7 +91,7 @@ class TartanAir_StereoSequence(SequenceBase[Frame]):
         self.width     = 640
         self.height    = 480
         # End
-        
+
         # Stereo Loader
         self.lcam_loader = TartanAirMonocularDataset(Path(cfg.root, "image_left"))
         self.rcam_loader = TartanAirMonocularDataset(Path(cfg.root, "image_right"))
@@ -108,7 +108,7 @@ class TartanAir_StereoSequence(SequenceBase[Frame]):
             self.depth_loader = TartanAirGTDepthDataset(Path(cfg.root, "depth_left"), cfg.compressed)
         else:
             self.depth_loader = None
-        
+
         # Flow loader
         if cfg.gtFlow :
             self.flow_loader  = TartanAirGTFlowDataset (Path(cfg.root, "flow"), cfg.compressed)
@@ -116,7 +116,7 @@ class TartanAir_StereoSequence(SequenceBase[Frame]):
         else:
             self.flow_loader  = None
             length = len(self.lcam_loader)
-        
+
         # Pose Loader
         if cfg.gtPose:
             # gt_poses is originally on left camera sensor frame, need to convert to body frame
@@ -140,7 +140,7 @@ class TartanAir_StereoSequence(SequenceBase[Frame]):
                 width     = 640,
                 imageL    = self.lcam_loader[index],
                 imageR    = self.rcam_loader[index],
-                
+
                 # Ground truth and labels
                 gt_depth  = self.depth_loader[index] if self.depth_loader else None,
                 gt_flow   = gt_flow[0] if gt_flow else None,
@@ -149,7 +149,7 @@ class TartanAir_StereoSequence(SequenceBase[Frame]):
             time_ns   = [self.lcam_time[index].item()],  # Fake data, assume 10Hz image
             gt_pose   = cast(pp.LieTensor, self.gt_poses[index].unsqueeze(0)) if (self.gt_poses is not None) else None,
         )
-        
+
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
         cls._enforce_config_spec(config, {
@@ -166,7 +166,7 @@ class TartanAir_StereoSequence(SequenceBase[Frame]):
 class TartanAirMonocularDataset(Dataset):
     """
     Return images in the given directory ends with .png
-    Return the image in shape (1, 3, H, W) with dtype=float32 
+    Return the image in shape (1, 3, H, W) with dtype=float32
     and normalized (image in [0, 1])
     """
     def __init__(self, directory: Path) -> None:
@@ -213,9 +213,9 @@ class TartanAirGTDepthDataset(Dataset):
         self.file_names.sort()
         self.length = len(self.file_names)
         assert len(self.file_names) > 0, f"No depth with '.npy' suffix is found in {self.directory}"
-        
+
     def __len__(self): return self.length
-    
+
     @staticmethod
     def load_npy_format(path: Path):
         return np.load(str(path))
@@ -226,7 +226,7 @@ class TartanAirGTDepthDataset(Dataset):
         assert depth_rgba is not None, f"Unable to load depth image at {path}"
         depth = TartanAirGTDepthDataset.depth_rgba_float32(depth_rgba)
         return depth
-    
+
     @staticmethod
     def depth_rgba_float32(depth_rgba):
         """
@@ -260,22 +260,22 @@ class TartanAirGTFlowDataset(Dataset):
             self.file_names = [f for f in self.directory.iterdir() if f.name.endswith("_flow.png")]
         else:
             self.file_names = [f for f in self.directory.iterdir() if f.name.endswith("_flow.npy")]
-        
+
         self.file_names.sort()
         self.length = len(self.file_names)
         assert self.length > 0, f"No flow with *.png is found under {self.directory}"
-    
+
     @staticmethod
     def load_npy_format(path: Path) -> np.ndarray:
         return np.load(str(path))
-    
+
     @staticmethod
     def load_png_format(path: Path) -> tuple[np.ndarray, np.ndarray]:
         flow16 = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
         assert flow16 is not None, f"Error reading flow at {path}"
         flow32, mask = TartanAirGTFlowDataset.flow16to32(flow16)
         return flow32, mask
-    
+
     @staticmethod
     def flow16to32(flow16):
         """
@@ -289,10 +289,10 @@ class TartanAirGTFlowDataset(Dataset):
 
         mask8 = flow16[:,:,2].astype(np.uint8)
         return flow32, mask8
-    
+
     def __len__(self):
         return self.length
-    
+
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
         if self.compressed:
             flow_np, mask = self.load_png_format(self.file_names[index])
@@ -398,21 +398,21 @@ class TartanAirIMULoader(Dataset[tuple[IMUData, AttitudeData]]):
             T_BS=self.limu_T_BS,
             gravity=[self.limu_g],
             time_ns=self.timestamp[:, start_imu_idx:end_imu_idx],
-            
+
             acc =self.lin_acc [:, start_imu_idx:end_imu_idx],
             gyro=self.rot_vel [:, start_imu_idx:end_imu_idx],
         ), AttitudeData(
             T_BS=self.limu_T_BS,
             gravity=[self.limu_g],
             time_ns=self.timestamp[:, start_imu_idx:end_imu_idx],
-            
+
             gt_pos=self.gt_pos[:, start_imu_idx:end_imu_idx],
             gt_vel=self.gt_vel[:, start_imu_idx:end_imu_idx],
             gt_rot=cast(pp.LieTensor, self.gt_rot[:, start_imu_idx:end_imu_idx]),
-            
+
             init_pos=self.gt_pos[:, start_imu_idx : start_imu_idx + 1],
             init_vel=self.gt_vel[:, start_imu_idx : start_imu_idx + 1],
-            init_rot=cast(pp.LieTensor, self.gt_rot[:, start_imu_idx : start_imu_idx + 1]), 
+            init_rot=cast(pp.LieTensor, self.gt_rot[:, start_imu_idx : start_imu_idx + 1]),
         )
 
     def __getitem__(self, index) -> tuple[IMUData, AttitudeData]:
@@ -430,18 +430,18 @@ class TartanAirIMULoader(Dataset[tuple[IMUData, AttitudeData]]):
             T_BS=self.limu_T_BS,
             gravity=[self.limu_g],
             time_ns=self.timestamp[:, index : index + 1],
-            
+
             acc =self.lin_acc[:, index : index + 1],
             gyro=self.rot_vel[:, index : index + 1],
         ), AttitudeData(
             T_BS=self.limu_T_BS,
             gravity=[self.limu_g],
             time_ns=self.timestamp[:, index : index + 1],
-            
+
             gt_pos=self.gt_pos[:, index : index + 1],
             gt_vel=self.gt_vel[:, index : index + 1],
             gt_rot=cast(pp.LieTensor, self.gt_rot[:, index : index + 1]),
-            
+
             init_pos=self.gt_pos[:, index : index + 1],
             init_vel=self.gt_vel[:, index : index + 1],
             init_rot=cast(pp.LieTensor, self.gt_rot[:, index : index + 1]),
@@ -459,7 +459,7 @@ class TartanAirIMUSimulator(Dataset[tuple[IMUData, AttitudeData]]):
         self.fps = fps
         self.g_factor = 9.81
         self.imu_T_BS = pp.identity_SE3(1)
-        
+
         self.g      = np.array([0, 0, self.g_factor])
         self.gtPath = gtPath
         self.camFPS = 10.0
@@ -470,7 +470,7 @@ class TartanAirIMUSimulator(Dataset[tuple[IMUData, AttitudeData]]):
             self._interpolate_trajectory(img_time, raw_poses)
         )
         # time_interpolate, accel_body, vel, pose, gyro, angles, vel_body, accel
-    
+
         # IMU Data
         self.lin_acc = torch.tensor(accel_body, dtype=torch.float).unsqueeze(0)  # (1, N, 3)
         self.rot_vel = torch.tensor(gyro, dtype=torch.float)      .unsqueeze(0)  # (1, N, 3)
@@ -579,23 +579,23 @@ class TartanAirIMUSimulator(Dataset[tuple[IMUData, AttitudeData]]):
         assert (
             start_imu_idx != -1 and end_imu_idx != -1
         ), "Requested frame is not aligned with IMU Sequence"
-        
+
         return IMUData(
             T_BS=self.imu_T_BS,
             gravity=[self.g_factor],
             time_ns=self.timestamp[:, start_imu_idx:end_imu_idx],
-            
+
             acc    = self.lin_acc[:, start_imu_idx:end_imu_idx],
             gyro   = self.rot_vel[:, start_imu_idx:end_imu_idx],
         ), AttitudeData(
             T_BS=self.imu_T_BS,
             gravity=[self.g_factor],
             time_ns=self.timestamp[:, start_imu_idx:end_imu_idx],
-            
+
             gt_pos = self.gt_pos [:, start_imu_idx:end_imu_idx],
             gt_vel = self.gt_vel [:, start_imu_idx:end_imu_idx],
             gt_rot = cast(pp.LieTensor, self.gt_rot [:, start_imu_idx:end_imu_idx]),
-            
+
             init_pos=self.gt_pos [:, start_imu_idx:start_imu_idx+1],
             init_vel=self.gt_vel [:, start_imu_idx:start_imu_idx+1],
             init_rot=cast(pp.LieTensor, self.gt_rot [:, start_imu_idx:start_imu_idx+1]),
@@ -618,18 +618,18 @@ class TartanAirIMUSimulator(Dataset[tuple[IMUData, AttitudeData]]):
             T_BS=self.imu_T_BS,
             gravity=[self.g_factor],
             time_ns=self.timestamp[:, start_imu_idx:end_imu_idx],
-            
+
             acc    = self.lin_acc[:, start_imu_idx:end_imu_idx],
             gyro   = self.rot_vel[:, start_imu_idx:end_imu_idx],
         ), AttitudeData(
             T_BS=self.imu_T_BS,
             gravity=[self.g_factor],
             time_ns=self.timestamp[:, start_imu_idx:end_imu_idx],
-            
+
             gt_pos = self.gt_pos [:, start_imu_idx:end_imu_idx],
             gt_vel = self.gt_vel [:, start_imu_idx:end_imu_idx],
             gt_rot = cast(pp.LieTensor, self.gt_rot [:, start_imu_idx:end_imu_idx]),
-            
+
             init_pos=self.gt_pos [:, start_imu_idx:start_imu_idx+1],
             init_vel=self.gt_vel [:, start_imu_idx:start_imu_idx+1],
             init_rot=cast(pp.LieTensor, self.gt_rot [:, start_imu_idx:start_imu_idx+1]),
@@ -638,8 +638,8 @@ class TartanAirIMUSimulator(Dataset[tuple[IMUData, AttitudeData]]):
 
 class IMUNoiseGenerator(ConfigTestable):
     T_Vec3 = tuple[float, float, float]
-    
-    def __init__(self, acc_bias: T_Vec3, gyro_bias: T_Vec3, 
+
+    def __init__(self, acc_bias: T_Vec3, gyro_bias: T_Vec3,
                  acc_init_bias_noise: T_Vec3 , acc_bias_instability: T_Vec3 , acc_random_walk: T_Vec3,
                  gyro_init_bias_noise: T_Vec3, gyro_bias_instability: T_Vec3, gyro_random_walk: T_Vec3) -> None:
         """
@@ -650,14 +650,14 @@ class IMUNoiseGenerator(ConfigTestable):
             - scale noise
 
         Adding noise:
-            1. apply init bias noise 
+            1. apply init bias noise
             2. during each iteration, get the imu input and apply the random walk with bias statability noise
         """
         self.acc_bias = torch.tensor(acc_bias)
         self.acc_init_bias_noise = torch.tensor(acc_init_bias_noise)
         self.acc_bias_instability = torch.tensor(acc_bias_instability)
         self.acc_random_walk = torch.tensor(acc_random_walk)
-        
+
         self.gyro_bias = torch.tensor(gyro_bias)
         self.gyro_init_bias_noise = torch.tensor(gyro_init_bias_noise)
         self.gyro_bias_instatability = torch.tensor(gyro_bias_instability)
@@ -677,23 +677,23 @@ class IMUNoiseGenerator(ConfigTestable):
 
     def get_acc_bias(self):
         return self.acc_bias
-    
+
     def get_gyro_bias(self):
         return self.gyro_bias
-        
+
     def propogate(self, acc, gyro):
         acc += self.acc_bias
         acc += self._gaussian_xyz(acc, noise = self.acc_random_walk)
         gyro += self.gyro_bias
         gyro += self._gaussian_xyz(gyro, noise = self.gyro_random_walk)
-        
+
         ## propogate bias
         self.acc_bias_list.append(self.acc_bias.clone())
         self.gyro_bias_list.append(self.gyro_bias.clone())
 
         self.acc_bias += self._gaussian_xyz(self.acc_bias, noise = self.acc_bias_instability)
         self.gyro_bias += self._gaussian_xyz(self.gyro_bias, noise = self.gyro_bias_instatability)
-    
+
         return acc, gyro
 
     @classmethod
@@ -706,7 +706,7 @@ class IMUNoiseGenerator(ConfigTestable):
             "acc_init_bias_noise": lambda v: is_triplet_of(v, float),
             "acc_bias_instability": lambda v: is_triplet_of(v, float),
             "acc_random_walk": lambda v: is_triplet_of(v, float),
-            
+
             "gyro_bias": lambda v: is_triplet_of(v, float),
             "gyro_init_bias_noise": lambda v: is_triplet_of(v, float),
             "gyro_bias_instability": lambda v: is_triplet_of(v, float),

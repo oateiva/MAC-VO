@@ -20,7 +20,7 @@ def test_frontend(config: str):
         compressed=True,
         gtFlow=True, gtDepth=False, gtPose=True,
     ))
-    
+
     frameA, frameB = seq[0], seq[1]
     frontend       = IFrontend.instantiate(cfg.type, cfg.args)
     depth_output, flow_output    = frontend.estimate_pair(frameA.camera, frameB.camera)
@@ -28,7 +28,7 @@ def test_frontend(config: str):
 
     # Depth shape validity
     assert depth_output.depth.shape == torch.Size([B, 1, H, W])
-    
+
     if depth_output.cov is not None:
         assert depth_output.cov.shape == torch.Size([B, 1, H, W])
 
@@ -38,13 +38,13 @@ def test_frontend(config: str):
 
     # Flow shape validity
     assert flow_output.flow.shape == torch.Size([B, 2, H, W])
-    
+
     if flow_output.cov is not None:
         assert flow_output.cov.shape == torch.Size([B, 3, H, W])
 
     if flow_output.mask is not None:
         assert flow_output.mask.shape == torch.Size([B, 1, H, W])
         assert flow_output.mask.dtype == torch.bool
-    
+
     del frontend
     torch.cuda.empty_cache()

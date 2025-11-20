@@ -25,10 +25,10 @@ def main(args):
         if frame.frame_idx % 3 != 0:
             continue
         est_output = depth_est.estimate(frame.camera)
-        
+
         assert est_output.depth is not None
         assert frame.camera.gt_depth is not None
-        
+
         ref_depth = cropToMultiple(frame.camera.gt_depth, [64, 64], [2, 3])
 
         est_disparity = (frame.camera.fx * frame.camera.frame_baseline) / est_output.depth

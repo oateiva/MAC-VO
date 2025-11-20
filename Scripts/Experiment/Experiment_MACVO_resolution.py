@@ -13,7 +13,7 @@ def execute_experiment(name, cfg, cfg_dict, root_box: Sandbox) -> str:
     # Execute an experiment, and return the directory of result sandbox
     exp_space = root_box.new_child(name)
     exp_space.config = cfg_dict
-    
+
     sequence = SequenceBase[Frame].instantiate(**vars(cfg.Data))\
             .preload()\
             .transform(actions=[
@@ -22,7 +22,7 @@ def execute_experiment(name, cfg, cfg_dict, root_box: Sandbox) -> str:
             ])
     system = MACVO[Frame].from_config(cfg)
     system.receive_frames(sequence, exp_space)
-    
+
     return str(exp_space.folder)
 
 

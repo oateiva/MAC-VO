@@ -50,13 +50,13 @@ Model:
 
     # decoder
     decoder_depth: 12
-    critical_params: ["cost_heads_num", 
-                      "vert_c_dim", 
-                      "cnet", 
-                      "pretrain", 
-                      "add_flow_token", 
-                      "encoder_depth", 
-                      "gma", 
+    critical_params: ["cost_heads_num",
+                      "vert_c_dim",
+                      "cnet",
+                      "pretrain",
+                      "add_flow_token",
+                      "encoder_depth",
+                      "gma",
                       "cost_encoder_res"
                       ]
 
@@ -64,17 +64,17 @@ Model:
 
   clip           : 1.0
   num_steps      : &num_steps 120000
-  
+
   optimizer:
     type: "AdamW"
     args:
       lr          : &lr 12.5e-5
       weight_decay: 1.0e-5
       eps         : 1.0e-8
-  
+
   scheduler:
     type: "OneCycleLR"
-    args: 
+    args:
       total_steps: *num_steps
       pct_start: 0.05
       cycle_momentum: False
@@ -85,17 +85,17 @@ Model:
   autosave_freq: 5000
   num_workers: 0
   mixed_precision: False
-  datatype: bf16
+  # datatype: bf16
 
   seed: 1234
   log_freq: 100
   datatype: fp32
 
 Train:
-  data: !flatten_seq 
+  data: !flatten_seq
     - !include ../Sequence/Training_Dataset/TartanAir_Demo.yaml
 
 
 Evaluate:
-  data: !flatten_seq 
+  data: !flatten_seq
     - !include ../Sequence/Training_Dataset/TartanAir_Demo.yaml

@@ -244,7 +244,7 @@ class EIVASequence(SequenceBase[Frame]):
 class EIVAMonocularDataset(Dataset):
     """
     Return images in the given directory ends with .png
-    Return the image in shape (1, 3, H, W) with dtype=float32 
+    Return the image in shape (1, 3, H, W) with dtype=float32
     and normalized (image in [0, 1])
     """
     def __init__(self, directory: Path) -> None:

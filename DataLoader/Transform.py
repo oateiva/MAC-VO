@@ -194,7 +194,7 @@ class CastDataType(IDataTransform[Frame, Frame]):
         if cam.gt_flow is not None  : cam.gt_flow   = cam.gt_flow.to(dtype=self.dtype)
         if cam.gt_depth is not None : cam.gt_depth  = cam.gt_depth.to(dtype=self.dtype)
         if cam.flow_mask is not None: cam.flow_mask = cam.flow_mask.to(dtype=self.dtype)
-        
+
         frame.camera = cam
         return frame
 
@@ -204,7 +204,7 @@ class SmartResizeFrame(IDataTransform[Frame, Frame]):
     Automatically resize and crop the frame to target height and width to
     maximize the fov of resulted frame while achieving target shape.
 
-    This process will maintein the aspect ratio of the image (i.e. the image 
+    This process will maintein the aspect ratio of the image (i.e. the image
     will not be stretched)
     """
     @classmethod

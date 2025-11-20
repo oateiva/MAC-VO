@@ -1,9 +1,9 @@
 #
-# This configuration is used to report numbers in the paper 
+# This configuration is used to report numbers in the paper
 #   https://arxiv.org/abs/2409.09479
 #
 # This config file is "old" and didn't release the full power of our system.
-# Unless you are reproducing the results in the paper, you should always try the 
+# Unless you are reproducing the results in the paper, you should always try the
 # MACVO_Performant.yaml and MACVO_Fast.yaml first.
 #
 
@@ -51,9 +51,9 @@ Odometry:
       max_depth: *max_depth
       max_depth_cov: 250.0
       max_match_cov: 100.0
-  
+
   mappoint:
-    # Mapping feature can be conveniently turn off by using 
+    # Mapping feature can be conveniently turn off by using
     # "type: NoKeypointSelector" instead of the config below.
     type: MappingPointSelector
     args:
@@ -90,15 +90,15 @@ Odometry:
             max_depth: *max_depth
         - type: LikelyFrontOfCamFilter
           args:
-  
+
   postprocess:
     type: MotionInterpolate
     args:
-  
+
   keyframe:
     type: AllKeyframe
     args:
-  
+
   optimizer:
     type: TwoFrame_PGO
     args:

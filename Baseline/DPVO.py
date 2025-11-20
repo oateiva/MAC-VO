@@ -31,7 +31,7 @@ if __name__ == "__main__":
     # Initialize data source
     sequence = SequenceBase[Frame].instantiate(datacfg.type, datacfg.args).clip(0, args.to).preload()
     frame0 = sequence[0]
-    
+
     odometry = DeepPatchVO(
         **vars(odomcfg.args), width=frame0.camera.width, height=frame0.camera.height
     )

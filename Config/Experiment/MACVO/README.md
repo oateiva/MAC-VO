@@ -231,7 +231,7 @@ args:
 type: TwoFramePoseOptimizer
 args:
     device      : cpu | cuda | cuda:<idx>
-    vectorize   : true | false 
+    vectorize   : true | false
     # False will be significantly slower! (& takes less RAM)
     parallel    : true | false
     # True will spawn a background process to run optimization loop. recommended to use `cpu` when

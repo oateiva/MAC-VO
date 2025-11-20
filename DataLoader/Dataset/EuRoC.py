@@ -41,12 +41,12 @@ class EuRoC_Sequence(SequenceBase[StereoInertialFrame]):
     def __getitem__(self, local_index: int) -> StereoInertialFrame:
         index = self.get_index(local_index)
         stereo_frame = self.stereo_seq[self.offset + index]
-        
+
         if index == 0:
             imu, attitude = self.imu_seq[self.imu_seq.idx_imu_align_start]
         else:
             imu, attitude = self.imu_seq.frameRangeQuery(self.offset + index - 1, self.offset + index)
-        
+
         return StereoInertialFrame(
             idx=[local_index],
             time_ns=stereo_frame.time_ns,
@@ -54,7 +54,7 @@ class EuRoC_Sequence(SequenceBase[StereoInertialFrame]):
             camera=stereo_frame.camera,
             imu=imu, gt_attitude=attitude
         )
-    
+
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
         cls._enforce_config_spec(config, {
@@ -70,23 +70,23 @@ class EuRoC_StereoSequence(SequenceBase[Frame]):
     def __init__(self, config: SimpleNamespace | dict[str, Any]) -> None:
         cfg = self.config_dict2ns(config)
         self.seqRoot  = Path(cfg.root)
-        
+
         # ref: https://github.com/raulmur/ORB_SLAM2/blob/master/Examples/Stereo/EuRoC.yaml
         # in this file only bl * fx is provided , the baseline here is derived by bf/fx
         self.baseline = 0.1100778422
         self.width = 752
         self.height = 480
-        
+
         # Left Camera
         l_sensor_config, _ = load_config(Path(self.seqRoot, "cam0", "sensor.yaml"))
         T_BS_lcam = np.array(l_sensor_config.T_BS.data).reshape(4, 4)
         self.ImageL = EurocMonocularDataset(
-            Path(self.seqRoot, "cam0", "data"), 
+            Path(self.seqRoot, "cam0", "data"),
             K=self.build_intrinsic(l_sensor_config.intrinsics),
             T_BS=T_BS_lcam,
             undistort=np.array([-0.28340811, 0.07395907, 0.00019359, 1.76187114e-05, 0.0])
         )
-        
+
         # Right Camera
         r_sensor_config, _ = load_config(Path(self.seqRoot, "cam1", "sensor.yaml"))
         T_BS_rcam = np.array(r_sensor_config.T_BS.data).reshape(4, 4)
@@ -96,18 +96,18 @@ class EuRoC_StereoSequence(SequenceBase[Frame]):
             T_BS=T_BS_rcam,
             undistort=np.array([-0.28368365, 0.07451284, -0.00010473, -3.555907e-05, 0.0])
         )
-        
+
         # Sync left-right camera
         rectified_K = self.sync_LR(self.ImageL, self.ImageR)
         self.K = torch.tensor(rectified_K[:3, :3], dtype=torch.float).unsqueeze(0)
         self.cam_timestamps = self.ImageL.cam_timestamps
         assert len(self.ImageL) == len(self.ImageR), f"ImageL={len(self.ImageL)} and ImageR={len(self.ImageR)} is not sync'd as expected."
-        
+
         # Setup metadata
         self.T_BS_lcam = pp.from_matrix(
             torch.tensor(T_BS_lcam, dtype=torch.float32).unsqueeze(0), pp.SE3_type
         ) @ NED2EDN.unsqueeze(0)
-        
+
         # Load ground truth pose
         if cfg.gt_pose:
             self.gt_pose_data, self.cam_time_mask = load_EurocGTPose(
@@ -118,7 +118,7 @@ class EuRoC_StereoSequence(SequenceBase[Frame]):
             self.ImageR.apply_mask(self.cam_time_mask)
         else:
             self.gt_pose_data = None
-        
+
         super().__init__(len(self.ImageL))
 
     def __getitem__(self, local_index: int) -> Frame:
@@ -126,7 +126,7 @@ class EuRoC_StereoSequence(SequenceBase[Frame]):
 
         return Frame(
             idx=[local_index],
-            time_ns=[int(self.cam_timestamps[index].item())], 
+            time_ns=[int(self.cam_timestamps[index].item())],
             camera=StereoData(
                 T_BS=self.T_BS_lcam,
                 K   =self.K,
@@ -139,30 +139,30 @@ class EuRoC_StereoSequence(SequenceBase[Frame]):
             ),
             gt_pose= None if self.gt_pose_data is None else cast(pp.LieTensor, self.gt_pose_data[index].unsqueeze(0))
         )
-    
+
     @staticmethod
     def sync_LR(left: EurocMonocularDataset, right: EurocMonocularDataset) -> np.ndarray:
         # Constant - Transformation from cam 1 to cam 2 (L -> R)
         T_LR = np.linalg.inv(right.T_BS) @ left.T_BS
-        
+
         # Align timestamps, discard time stamp with only Left/Right image.
         left_time = {t_l.item() for t_l in left.cam_timestamps}
         right_time = {t_r.item() for t_r in right.cam_timestamps}
         common_time = left_time.intersection(right_time)
         common_time = np.array(sorted(list(common_time)))
-        
+
         left_sync_mask  = np.isin(left.cam_timestamps, common_time, assume_unique=True)
         right_sync_mask = np.isin(right.cam_timestamps, common_time, assume_unique=True)
-        
+
         left.cam_timestamps = left.cam_timestamps[left_sync_mask]
         right.cam_timestamps = right.cam_timestamps[right_sync_mask]
         left.file_names = [f for idx, f in enumerate(left.file_names) if left_sync_mask[idx].item()]
         right.file_names = [f for idx, f in enumerate(right.file_names) if right_sync_mask[idx].item()]
         left.length = len(left.file_names)
         right.length = len(right.file_names)
-        
+
         # Rectify stereo and undistort based on Left and Right camera.
-        R1, R2, P1, P2, Q, validRoi1, validRoi2 = cv2.stereoRectify(left.K, left.distort_factor, 
+        R1, R2, P1, P2, Q, validRoi1, validRoi2 = cv2.stereoRectify(left.K, left.distort_factor,
                           right.K, right.distort_factor, (752, 480),
                           T_LR[:3, :3], T_LR[:3, 3], flags=cv2.CALIB_ZERO_DISPARITY, alpha=-1)
 
@@ -170,14 +170,14 @@ class EuRoC_StereoSequence(SequenceBase[Frame]):
         right.undistort_map = cv2.initUndistortRectifyMap(right.K, right.distort_factor, R2, P2, (752, 480), cv2.CV_32FC1)
         left.K = P1[:3, :3]
         right.K = P2[:3, :3]
-        
+
         return P1
 
     @staticmethod
     def build_intrinsic(intrinsic: list[float]) -> np.ndarray:
         fx, fy, cx, cy = intrinsic
         return np.array([[fx, 0., cx], [0., fy, cy], [0., 0., 1.]])
-    
+
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
         cls._enforce_config_spec(config, {
@@ -197,14 +197,14 @@ class EurocMonocularDataset(Dataset):
         self.T_BS = T_BS
         self.distort_factor = undistort
         self.undistort_map: None | tuple[np.ndarray, np.ndarray] = None
-        
+
         assert self.directory.exists(), f"Monocular image directory {self.directory} does not exist"
 
         self.file_names = [f for f in self.directory.iterdir() if f.suffix == ".png"]
         self.file_names.sort()
         self.length = len(self.file_names)
         assert self.length > 0, f"No flow with '.png' suffix is found under {self.directory}"
-        
+
         self.cam_timestamps = np.loadtxt(Path(directory, "..", "data.csv"), delimiter=",", skiprows=1, usecols=0, dtype=np.int64)
 
     def apply_mask(self, cam_mask: np.ndarray):
@@ -218,12 +218,12 @@ class EurocMonocularDataset(Dataset):
 
     def __len__(self):
         return self.length
-    
+
     def __getitem__(self, index: int) -> torch.Tensor:
         # Output image tensor in shape of (1, C, H, W)
         result = self.load_png(self.file_names[index])
         result = torch.tensor(result, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0)
-        result /= 255.        
+        result /= 255.
         return result
 
     def correct_distortion(self, image: np.ndarray) -> np.ndarray:
@@ -236,17 +236,17 @@ class EurocMonocularDataset(Dataset):
 
 def load_EurocGTPose(csv_file_path: Path, cam_time: np.ndarray) -> tuple[pp.LieTensor, np.ndarray]:
     csv_path = csv_file_path
-    
+
     raw_data = np.loadtxt(csv_path, delimiter=",", skiprows=1)
     pose_time = np.loadtxt(csv_path, delimiter=",", skiprows=1, dtype=np.int64, usecols=0)
     position_xyz, rotation_wxyz = raw_data[..., 1:4], raw_data[..., 4:8]
     rotation_xyzw = np.roll(rotation_wxyz, axis=1, shift=-1)
     pose_SE3 = pp.SE3(np.concatenate([position_xyz, rotation_xyzw], axis=1))
-    
+
     # Need to mask only the valid part of cam_time (cannot be smaller than or greater to gt_pose)
     cam_time_mask = (cam_time > pose_time[0]) & (cam_time < pose_time[-1])
     # end
-    
+
     bodyPose_SE3, _ = interpolate_pose(pose_SE3, torch.tensor(pose_time), torch.tensor(cam_time[cam_time_mask]))
     return bodyPose_SE3, cam_time_mask
 
@@ -266,7 +266,7 @@ class EurocIMULoader(Dataset[tuple[IMUData, AttitudeData]]):
         gt_time = rawGT[:, 0:1]
         imu_time = rawIMU[..., 0:1]
         self.timestamp = torch.tensor(imu_time, dtype=torch.long)
-        
+
         t_start = np.max([self.timestamp.numpy()[0] , gt_time.numpy()[0]])
         t_end   = np.min([self.timestamp.numpy()[-1], gt_time.numpy()[-1]])
 
@@ -291,15 +291,15 @@ class EurocIMULoader(Dataset[tuple[IMUData, AttitudeData]]):
         self.camtime = self.read_camera_time(cam_data)
         self.idx_start_cam = np.searchsorted(self.camtime.numpy(), t_start)
         self.idx_end_cam   = np.searchsorted(self.camtime.numpy(), t_end, 'right')
-    
+
         self.cam2imuIdx = torch.ones_like(self.camtime, dtype=torch.long) * -1
-        
+
         self.length    = self.timestamp.size(0) - 1
         self.alignWithCameraTime()
         self.idx_imu_align_start = int(self.cam2imuIdx[self.idx_start_cam].item())
-        
+
         self.timestamp = self.timestamp.unsqueeze(0)    # Add batch dimension
-        
+
     def __len__(self):
         return self.length
 
@@ -314,11 +314,11 @@ class EurocIMULoader(Dataset[tuple[IMUData, AttitudeData]]):
             T_BS    =pp.identity_SE3(0),
             time_ns = self.timestamp[:, index:index + 1],
             gravity = [9.81007],
-            
+
             gt_pos=self.gt_pos[:, index : index + 1],
             gt_vel=self.gt_vel[:, index : index + 1],
             gt_rot=cast(pp.LieTensor, self.gt_rot[:, index : index + 1]),
-            
+
             init_pos=self.gt_pos[:, index : index + 1],
             init_vel=self.gt_vel[:, index : index + 1],
             init_rot=cast(pp.LieTensor, self.gt_rot[:, index : index + 1]),
@@ -337,7 +337,7 @@ class EurocIMULoader(Dataset[tuple[IMUData, AttitudeData]]):
         start_imu_idx = self.cam2imuIdx[start_frame]
         end_imu_idx   = self.cam2imuIdx[end_frame]
         assert (start_imu_idx != -1 and end_imu_idx != -1), "Requested frame is not aligned with IMU Sequence"
-        
+
         return IMUData(
             T_BS    =pp.identity_SE3(0),
             time_ns = self.timestamp[:, start_imu_idx:end_imu_idx],
@@ -348,11 +348,11 @@ class EurocIMULoader(Dataset[tuple[IMUData, AttitudeData]]):
             T_BS    =pp.identity_SE3(0),
             time_ns = self.timestamp[:, start_imu_idx:end_imu_idx],
             gravity = [9.81007],
-            
+
             gt_pos=self.gt_pos[:, start_imu_idx:end_imu_idx],
             gt_vel=self.gt_vel[:, start_imu_idx:end_imu_idx],
             gt_rot=cast(pp.LieTensor, self.gt_rot[:, start_imu_idx:end_imu_idx]),
-            
+
             init_pos=self.gt_pos[:, start_imu_idx:start_imu_idx + 1],
             init_vel=self.gt_vel[:, start_imu_idx:start_imu_idx + 1],
             init_rot=cast(pp.LieTensor, self.gt_rot[:, start_imu_idx:start_imu_idx + 1]),

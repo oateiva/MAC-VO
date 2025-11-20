@@ -37,9 +37,9 @@ def print_as_table(headers: list[str], rows: list[list[Any]], title=None, sort_r
         if isinstance(i, float): return str(round(i, 4))
         if i is None: return ""
         return str(i)
-    
+
     if sort_rows is not None: rows.sort(key=sort_rows)
-    
+
     table = Table(title=title, box=box.MINIMAL_DOUBLE_HEAD)
     for hdr in headers:
         table.add_column(hdr, justify="left")
@@ -66,11 +66,11 @@ class ColoredTqdm(tqdm):
             self.desc = "❌" + self.desc
         else:
             self.colour = "#35aca4"
-            self.desc = "✅" + self.desc 
+            self.desc = "✅" + self.desc
         super().close(*args, **kwargs)
-        
+
         if self.rich_displayer: self.rich_displayer.stop()
-    
+
     def display(self, msg: str | None = None, pos: int | None = None) -> None:
         if IS_TERMINAL_MODE and self.rich_displayer:
             # Custom display logic
@@ -82,14 +82,14 @@ class ColoredTqdm(tqdm):
                 self.rich_displayer.stop()
                 self.rich_displayer = None
             super().display(msg, pos)
-    
+
     def __call__(self, arg, *args, **kwds: Any):
         return super().__call__(arg, *args, **kwds) # type: ignore
 
 
 class GlobalLog:
     LogLevel = Literal["info", "error", "warn", "fatal"]
-    
+
     LOCK: "None | GlobalLog" = None
     Translate = {
         "info": logging.INFO,
@@ -97,7 +97,7 @@ class GlobalLog:
         "warn": logging.WARNING,
         "fatal": logging.FATAL,
     }
-    
+
     def __new__(cls, *args, **kwargs) -> "GlobalLog":
         if GlobalLog.LOCK is not None: return GlobalLog.LOCK
         return super().__new__(cls)
@@ -105,11 +105,11 @@ class GlobalLog:
     def __init__(self) -> None:
         if GlobalLog.LOCK: return
         GlobalLog.LOCK = self
-        
+
         logging.getLogger("evo").setLevel(logging.CRITICAL)
         logging.getLogger("timm").setLevel(logging.CRITICAL)
         logging.getLogger("numexpr").setLevel(logging.CRITICAL)
-        
+
         logging.basicConfig(
             level="INFO",
             format="PID %(process)d %(message)s",
@@ -121,7 +121,7 @@ class GlobalLog:
     def write(self, level: LogLevel, msg: Any, marked: bool = False) -> None:
         lg_level = self.Translate[level]
         self.__logger.log(lg_level, msg, stacklevel=2, extra={"markup": marked})
-    
+
     def show_exception(self) -> None:
         GlobalConsole.print_exception()
 
@@ -129,7 +129,7 @@ Logger = GlobalLog()
 
 def save_as_csv(headers: list[str], rows: list[list[float]], filename: str, sort_rows: None | Callable[[list[Any],], Any]=None):
     if sort_rows: rows.sort(key=sort_rows)
-    
+
     with open(filename, "w") as f:
         f.write(",".join(headers) + "\n")
         for row in rows:

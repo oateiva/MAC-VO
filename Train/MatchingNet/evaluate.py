@@ -36,14 +36,14 @@ def evaluate(model: nn.DataParallel[FlowFormerCov], loader: DataLoader, length: 
             # flow, cov = model.module.inference(img1, img2)
             flow_pre, cov_pre = model.forward(img1, img2)
             flow, cov = flow_pre[0], torch.exp(2 * cov_pre[0])
-            
+
             error_mask = (gt_flow.norm(dim=1) < 240)
             flow_mask = error_mask.unsqueeze(1).expand_as(gt_flow) # for masking the flow
-            
+
             MSE = (flow - gt_flow)**2
             EPE = (flow - gt_flow).norm(dim=1)
             masked_EPE = EPE[error_mask]
-            
+
             cov_dist = cov.sqrt().norm(dim=1)
             cov_ratio = (cov_dist / EPE)
             eval_loss = MSE / (2 * cov) + 0.5 * torch.log(cov)

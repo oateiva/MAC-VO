@@ -132,7 +132,7 @@ class PWCDCNet(nn.Module):
 
         """
         B, C, H, W = x.size()
-        # mesh grid 
+        # mesh grid
         xx = torch.arange(0, W).view(1, -1).repeat(H, 1)
         yy = torch.arange(0, H).view(-1, 1).repeat(1, W)
         xx = xx.view(1, 1, H, W).repeat(B, 1, 1, 1)
@@ -144,7 +144,7 @@ class PWCDCNet(nn.Module):
         # print(x.shape, grid.shape, flo.shape)
         vgrid = grid + flo
 
-        # scale grid to [-1,1] 
+        # scale grid to [-1,1]
         vgrid[:, 0, :, :] = 2.0 * vgrid[:, 0, :, :].clone() / max(W - 1, 1) - 1.0
         vgrid[:, 1, :, :] = 2.0 * vgrid[:, 1, :, :].clone() / max(H - 1, 1) - 1.0
 
@@ -189,7 +189,7 @@ class PWCDCNet(nn.Module):
         up_feat6 = self.upfeat6(x)
 
         warp5 = self.warp(c25, up_flow6 * 0.625)
-        # corr5 = self.corr(c15, warp5) 
+        # corr5 = self.corr(c15, warp5)
         corr5 = FunctionCorrelation(tenFirst=c15, tenSecond=warp5)
         corr5 = self.leakyRELU(corr5)
         x = torch.cat((corr5, c15, up_flow6, up_feat6), 1)

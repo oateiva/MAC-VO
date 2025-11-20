@@ -9,12 +9,12 @@ from DataLoader import Frame, T_Data
 class IKeyframeSelector(ABC, T.Generic[T_Data], ConfigTestableSubclass):
     """
     Keyframe selector - decide whether a frame is considered as "keyframe" for backend optimization.
-    
+
     In current implementation of MAC-VO, non-keyframes will be linearly interpolated on termination of system.
     """
     def __init__(self, config: SimpleNamespace):
         self.config = config
-    
+
     @abstractmethod
     def isKeyframe(self, frame: T_Data) -> bool: ...
 
@@ -28,7 +28,7 @@ class AllKeyframe(IKeyframeSelector[Frame]):
         cls._enforce_config_spec(config, {})
 
 
-class UniformKeyframe(IKeyframeSelector[Frame]):    
+class UniformKeyframe(IKeyframeSelector[Frame]):
     def isKeyframe(self, frame: Frame) -> bool:
         return (frame.frame_idx % self.config.keyframe_freq) == 0
 

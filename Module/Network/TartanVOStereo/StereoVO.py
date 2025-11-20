@@ -22,7 +22,7 @@ class StereoVONet(nn.Module):
         self.flowNormFactor = flowNormFactor
         self.stereoNormFactor = stereoNormFactor
         self.poseDepthNormFactor = poseDepthNormFactor
-    
+
     def forward_flow(self, x0_flow, x0n_flow):
         inputTensor = torch.cat((x0_flow, x0n_flow), dim=1).contiguous()
         return self.flowNet(inputTensor)[0][0]
@@ -38,7 +38,7 @@ class StereoVONet(nn.Module):
         """
         assert intrin is not None
         stereo_out, _ = self.stereoNet(torch.cat((x0_stereo, x1_stereo), dim=1))
-        
+
         flow_input = self.forward_flow(x0_flow, x0n_flow)
 
         # scale the disparity size

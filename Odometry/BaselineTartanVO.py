@@ -13,24 +13,24 @@ class TartanVO(IOdometry[Frame], ConfigTestableSubclass):
     def __init__(self, match_estimator: IMatcher, depth_estimator: IDepth, kf_selector: IKeyframeSelector, tvo_cfg):
         super().__init__()
         self.gmap = VisualMap()
-        
+
         self.tartanvo = TartanMotionNet(tvo_cfg)
-        
+
         self.match_estimator = match_estimator
         self.depth_estimator = depth_estimator
         self.keyframe_select = kf_selector
         self.map_refiner = IMapProcessor.instantiate("Naive", None)
         self.prev_frame = None
-    
+
     @classmethod
     def from_config(cls: type["TartanVO"], cfg: SimpleNamespace, seq: SequenceBase[Frame]) -> "TartanVO":
         match_estimator   = IMatcher.instantiate(cfg.match.type, cfg.match.args)
         depth_estimator   = IDepth.instantiate(cfg.depth.type, cfg.depth.args)
         keyframe_selector = IKeyframeSelector.instantiate(cfg.keyframe.type, cfg.keyframe.args)
-        
+
         return cls(match_estimator=match_estimator, depth_estimator=depth_estimator, kf_selector=keyframe_selector,
                    tvo_cfg=cfg.tartanvo)
-    
+
     @torch.no_grad()
     @torch.inference_mode()
     def run(self, frame: Frame) -> None:
@@ -44,13 +44,13 @@ class TartanVO(IOdometry[Frame], ConfigTestableSubclass):
                 "T_BS"       : self.gmap.frames.data["T_BS"][-1:],
             }))
             return
-        
+
         if self.prev_frame is not None:
             match_output = self.match_estimator.estimate(self.prev_frame.camera, frame.camera)
             flow_map     = match_output.flow
         else:
             flow_map = None
-        
+
         est_depth = self.depth_estimator.estimate(frame.camera)
         est_pose = self.tartanvo.predict(frame, flow_map, est_depth.depth)
         self.gmap.frames.push(FrameNode.init({
@@ -63,7 +63,7 @@ class TartanVO(IOdometry[Frame], ConfigTestableSubclass):
         }))
         self.tartanvo.update(est_pose)
         self.prev_frame = frame
-    
+
     def get_map(self) -> VisualMap:
         return self.gmap
 

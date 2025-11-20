@@ -18,7 +18,7 @@ class ModelSelector:
 
         if model_cls is None:
             raise ValueError(f"Model '{model_name}' not found in registry")
-        
+
         args = vars(config.args)
         return model_cls(
             **args

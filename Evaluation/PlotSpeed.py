@@ -12,7 +12,7 @@ from Utility.Plot import plot_cumulative_density
 def plot_compare_plot(spaces: list[str]):
     fig = plt.figure(figsize=(5, 5), dpi=300)
     ax = fig.add_subplot(1, 1, 1)
-    
+
     for space in spaces:
         box = Sandbox.load(space)
         if not box.path("time_elapsed.json").exists():
@@ -23,7 +23,7 @@ def plot_compare_plot(spaces: list[str]):
         timestamps = np.array(timestamps)
         elapsed = timestamps[1:] - timestamps[:-1]
         plot_cumulative_density(elapsed, label=box.folder.parent.name)(ax)
-    
+
     ax.legend(frameon=False)
     ax.set_xlim(left=0.0, right=1.0)
     ax.set_ylabel("Proportion of frame")
@@ -39,7 +39,7 @@ if __name__ == "__main__":
     args.add_argument("--spaces", type=str, nargs="+", default=[])
     args.add_argument("--recursive", action="store_true", help="Find and evaluate on leaf sandboxes only.")
     args = args.parse_args()
-    
+
     if args.recursive:
         spaces = []
         for space in args.spaces:
@@ -47,5 +47,5 @@ if __name__ == "__main__":
         Logger.write("info", f"Found {len(spaces)} spaces to plot.")
     else:
         spaces = args.spaces
-    
+
     plot_compare_plot(spaces)

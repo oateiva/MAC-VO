@@ -20,17 +20,17 @@ def test_matching(config: str):
         compressed=True,
         gtFlow=True, gtDepth=False, gtPose=True,
     ))
-    
+
     frameA, frameB = seq[0], seq[1]
     matcher        = IMatcher.instantiate(cfg.type, cfg.args)
     flow_output    = matcher.estimate(frameA.camera, frameB.camera)
 
     assert flow_output.flow is not None
     B, C, H, W = seq[0].camera.imageL.shape
-    
+
     # Check flow shape validity
     assert flow_output.flow.shape == torch.Size([B, 2, H, W])
-    
+
     if flow_output.cov is not None:
         assert flow_output.cov.shape == torch.Size([B, 3, H, W])
 

@@ -19,7 +19,7 @@ def main(seq_cfg, match_cfgs):
         mid_errs = []
         low_q_errs = []
         high_q_errs = []
-        
+
         low_est_q_errs = []
 
         for idx in ColoredTqdm(range(1, len(sequence))):
@@ -36,7 +36,7 @@ def main(seq_cfg, match_cfgs):
             low_q_errs.append(err_flow.quantile(0.25).item())
             mid_errs.append(err_flow.median().item())
             high_q_errs.append(err_flow.quantile(0.75).item())
-            
+
             if est_match_cov is not None:
                 low_est_q_errs.append(est_match_cov.median().sqrt().item())
 
@@ -60,7 +60,7 @@ if __name__ == "__main__":
         default="./Config/Sequence/TartanAir_abandonfac_001.yaml",
     )
     args = parser.parse_args()
-    
+
     seq_cfg, _ = build_dynamic_config(LoadFrom(Path(args.seqcfg)))
     match_cfgs, _ = build_dynamic_config([
             {

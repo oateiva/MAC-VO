@@ -13,14 +13,14 @@ def execute_experiment(name, cfg, cfg_dict, root_box: Sandbox) -> str:
     # Execute an experiment, and return the spaceID
     exp_space = root_box.new_child(name)
     exp_space.config = cfg_dict
-    
+
     sequence = smart_transform(
         SequenceBase[Frame].instantiate(cfg.Data.type, cfg.Data.args),
         cfg.Preprocess
     ).preload()
     system = DeepPatchVO.from_config(cfg, sequence)
     system.receive_frames(sequence, exp_space)
-    
+
     return str(exp_space.folder)
 
 

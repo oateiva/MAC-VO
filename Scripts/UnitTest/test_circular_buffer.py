@@ -36,7 +36,7 @@ def test_circular_scalar():
 
 if __name__ == "__main__":
     from tqdm import tqdm
-    
+
     device = 'cpu'
     start        = 0
     length_range_from = 1

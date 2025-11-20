@@ -42,10 +42,10 @@ class AnalyticModule(nn.Module, ABC):
         It should return the jacobian of the model's previous forward call with respect to model's parameters.
         Should be called only after forward() has been called.
         """
-        pass 
-    
+        pass
+
     @final
-    @torch.no_grad()  
+    @torch.no_grad()
     def jacobian(self) -> torch.Tensor:
         """
         Returns the jacobian of the model's previous forward call with respect to model's parameters.
@@ -55,12 +55,12 @@ class AnalyticModule(nn.Module, ABC):
         if self.verify:
             assert self.verify_jacobian(J_analytic), "Analytic Jacobian from build_jacobian() does not match with autograd jacobian!"
         return J_analytic
-        
+
 
     @torch.no_grad()
-    def verify_jacobian(self, J_analytic: torch.Tensor) -> bool: 
+    def verify_jacobian(self, J_analytic: torch.Tensor) -> bool:
         """
-        Verifies whether the input J_analytic coincides with autograd jacobian of the previous forward call. 
+        Verifies whether the input J_analytic coincides with autograd jacobian of the previous forward call.
         Should be called only after forward() has been called.
         """
         assert self._call_args is not None, "Jacobian verification failed! No forward call was made."
@@ -166,7 +166,7 @@ class LM_analytic(_Optimizer):
             self.last = self.loss = self.loss if hasattr(self, 'loss') else self.model.loss(input, target)
             self.reject_count = 0
             R, J = self.corrector[0](R, J)
-            J_T = J.mT 
+            J_T = J.mT
             if weight is None:
                 A = J_T @ J
                 b = -J_T @ R.view(-1, 1)
@@ -182,7 +182,7 @@ class LM_analytic(_Optimizer):
                 except Exception as e:
                     print(e, "\nLinear solver failed. Breaking optimization step...")
                     break
-            
+
                 self.update_parameter(pg['params'], D)
                 self.loss = self.model.loss(input, target)
                 self.strategy.update(pg, last=self.last, loss=self.loss, J=J, D=D, R=R.view(-1, 1))

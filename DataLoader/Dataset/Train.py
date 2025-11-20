@@ -15,7 +15,7 @@ class TrainDataset(SequenceBase[DataFramePair[T_Data]]):
         )
         self.length   = len(self.sequence) - 1
         super().__init__(self.length)
-    
+
     def __getitem__(self, local_index: int) -> DataFramePair[T_Data]:
         index = self.get_index(local_index)
         frame, next_frame = self.sequence[index], self.sequence[index + 1]
@@ -25,7 +25,7 @@ class TrainDataset(SequenceBase[DataFramePair[T_Data]]):
     def transform_source(self, actions: list[T.Callable[[T_Data], T_Data]]):
         self.sequence = self.sequence.transform(actions)
         return self
-    
+
     @staticmethod
     def _instantiate_dataset(config: SimpleNamespace, from_idx: int, to_idx: int, do_instantiate: bool) -> "TrainDataset[T_Data] | None":
         if not do_instantiate: return None
@@ -39,13 +39,13 @@ class TrainDataset(SequenceBase[DataFramePair[T_Data]]):
     def mp_instantiation(cls, data_config: list[SimpleNamespace], from_idx: int, to_idx: int, pred: T.Callable[[SimpleNamespace,], bool]) -> "T.Sequence[TrainDataset[T_Data] | None]":
         """
         Instantiate a huge set of TrainDataset. If not supported it will just return None.
-        
+
         pred: SimpleNamespace -> bool
-            A function to check whether to instantiate a TrainDataset for this configuration. 
+            A function to check whether to instantiate a TrainDataset for this configuration.
             (True = include, False = exclude and corresponding list item will be None)
         """
         num_worker = 4
-        
+
         # Start loading everything
         args: list[tuple[SimpleNamespace, int, int, bool]] = [(data_cfg, from_idx, to_idx, pred(data_cfg)) for data_cfg in data_config]
         with mp.Pool(processes=num_worker) as pool:

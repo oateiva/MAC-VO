@@ -104,7 +104,7 @@ class TwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
 
     def write_graph_data(self, result: GraphOutput | None, global_map: VisualMap) -> None:
         if result is None: return
-        
+
         to_pose     = pp.SE3(result.motion[0].data.double().cpu())
         global_map.frames.data["pose"][result.frame_idx] = to_pose.float()
 
@@ -160,7 +160,7 @@ class Empty_TwoFrame_PGO(TwoFrame_PGO):
         return context, GraphOutput(motion=graph_data.init_motion,
                                     frame_idx=graph_data.frame_idx,
                                     from_idx=graph_data.from_idx)
-    
+
 
 # ------- Monocular variant ------- #
 
@@ -179,7 +179,7 @@ class MonoTwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
         edges_idx = torch.repeat_interleave(torch.arange(lengths.size(0)), lengths.long())
         init_motion = pp.SE3(frame2opt.data["pose"])
         return GraphInput(frame_idx, frame_idx - 1, init_motion, None, obs, pts, im_intrinsics, edges_idx, "cpu")
- 
+
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
         cls._enforce_config_spec(config, {

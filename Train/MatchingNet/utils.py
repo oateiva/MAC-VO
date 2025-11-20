@@ -33,7 +33,7 @@ def get_datatype(type_string: T_DataType) -> torch.dtype:
 
 def get_scheduler(scheduler_string: T_Scheduler) -> type[torch.optim.lr_scheduler.LRScheduler]:
     AssertLiteralType(scheduler_string, T_Scheduler)
-    
+
     match scheduler_string:
         case "OneCycleLR":
             return torch.optim.lr_scheduler.OneCycleLR
@@ -42,7 +42,7 @@ def get_scheduler(scheduler_string: T_Scheduler) -> type[torch.optim.lr_schedule
 
 def get_optimizer(optim_string: T_Optimizer) -> type[torch.optim.Optimizer]:
     AssertLiteralType(optim_string, T_Optimizer)
-    
+
     match optim_string:
         case "AdamW":
             return torch.optim.AdamW

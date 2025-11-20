@@ -46,8 +46,8 @@ if __name__ == "__main__":
     sequence = SequenceBase[Frame].instantiate(**vars(datacfg)).clip(0, args.to)
     # Initialize modules for VO
     system = TartanVO.from_config(asNamespace(exp_space.config).Odometry, sequence)
-    
+
     system.receive_frames(sequence, exp_space)
-    
+
     header, result = EvaluateSequences([str(exp_space.folder)], correct_scale=False)
     print_as_table(header, result)

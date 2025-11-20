@@ -1,36 +1,36 @@
-KITTI: 
+KITTI:
   - type: SmartResizeFrame
-    args: 
+    args:
       height: 376
       width : 780
       interp: nearest
 Zed:
   - type: SmartResizeFrame
-    args: 
+    args:
       height: 640
       width : 640
       interp: nearest
 VBR_Stereo:
   - type: SmartResizeFrame
-    args: 
+    args:
       height: 640
       width : 640
       interp: nearest
 TartanAir_NoIMU:
   - type: SmartResizeFrame
-    args: 
+    args:
       height: 476
       width : 630
       interp: nearest
 EIVA_NoIMU:
   - type: SmartResizeFrame
-    args: 
+    args:
       height: 700
       width : 700
       interp: nearest
 EIVA_StereoSequenceORM:
   - type: SmartResizeFrame
-    args: 
+    args:
       height: 480
       width : 640
       interp: nearest

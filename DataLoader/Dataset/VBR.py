@@ -30,21 +30,21 @@ class VBRMonocularDataset(Dataset):
         self.T_BS = T_BS
         self.distort_factor = undistort
         self.undistort_map: None | tuple[np.ndarray, np.ndarray] = None
-        
+
         self.file_names = sorted([file for file in image_path.glob("*.png")])
         self.length     = len(self.file_names)
         self.cam_stamps = (np.loadtxt(
             Path(image_path,"..", "timestamps.txt"), delimiter=" ", dtype="str"
         )).astype("datetime64[ns]").astype(np.int64)
-    
+
     def apply_mask(self, cam_mask: np.ndarray):
         self.file_names = [f for idx, f in enumerate(self.file_names) if (idx < cam_mask.shape[0]) and cam_mask[idx].item()]
         self.file_names.sort()
         self.length = len(self.file_names)
         self.cam_stamps = self.cam_stamps[cam_mask]
-    
+
     def __len__(self) -> int: return self.length
-    
+
     def __getitem__(self, index) -> torch.Tensor:
         image = cv2.imread(str(self.file_names[index]), cv2.IMREAD_UNCHANGED)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -52,7 +52,7 @@ class VBRMonocularDataset(Dataset):
         image_tensor = torch.tensor(image, dtype=torch.float).permute(2, 0, 1).unsqueeze(0)
         image_tensor /= 255.
         return image_tensor
-    
+
     def correct_distortion(self, image: np.ndarray) -> np.ndarray:
         if self.undistort_map is None:
             raise Exception("Monocular sequence is not rectified.")
@@ -63,13 +63,13 @@ class VBRMonocularDataset(Dataset):
 class VBR_StereoSequence(SequenceBase[Frame]):
     @classmethod
     def name(cls) -> str: return "VBR_Stereo"
-    
+
     def __init__(self, config: SimpleNamespace | dict[str, Any], **_):
         cfg = self.config_dict2ns(config)
-        
+
         self.root = Path(cfg.root)
         self.sequence_name = self.root.name
-        
+
         self.width = 1388
         self.high = 700
         with open(Path(self.root, "vbr_calib.yaml"), "r") as f:
@@ -85,7 +85,7 @@ class VBR_StereoSequence(SequenceBase[Frame]):
                 self.cam_l_t = cam_l_T[:3, 3]
                 self.cam_l_R = cam_l_T[:3, :3]
                 self.cam_l_K = torch.tensor(self.cam_l_K_np).float().unsqueeze(0)
-                
+
                 # right camera
                 cam_r = calib_data["cam_r"]
                 distortion_r = np.array(cam_r["distortion_coeffs"])
@@ -97,11 +97,11 @@ class VBR_StereoSequence(SequenceBase[Frame]):
                 self.cam_r_t = cam_r_T[:3, 3]
                 self.cam_r_R = cam_r_T[:3, :3]
                 self.cam_r_K = torch.tensor(self.cam_r_K_np).float().unsqueeze(0)
-            
+
         # TODO: check the undistort
         self.imageL = VBRMonocularDataset(Path(self.root, "camera_left","data"), K=self.cam_l_K_np, T_BS=cam_l_T, undistort=distortion_l)
         self.imageR = VBRMonocularDataset(Path(self.root, "camera_right","data"), K=self.cam_r_K_np, T_BS=cam_r_T, undistort=distortion_r)
-        
+
         rectified_K = self.sync_LR(self.imageL, self.imageR)
         self.K = torch.tensor(rectified_K[:3, :3], dtype=torch.float).unsqueeze(0)
         self.cam_stamps = self.imageL.cam_stamps
@@ -110,15 +110,15 @@ class VBR_StereoSequence(SequenceBase[Frame]):
         if cfg.gt_pose:
             self.gtPose_data, self.cam_time_mask = loadVBRGTPoses(Path(self.root, self.sequence_name + "_gt.txt"), self.imageL.cam_stamps)
             self.imageL.apply_mask(self.cam_time_mask)
-            self.imageR.apply_mask(self.cam_time_mask)            
+            self.imageR.apply_mask(self.cam_time_mask)
         else:
             self.gtPose_data = None
-        
-  
+
+
         self.baseline = np.linalg.norm(self.cam_l_t - self.cam_r_t).item()
         T_BS_ext = cam_l_T[np.newaxis, ...]
         self.T_BS = pp.from_matrix(T_BS_ext, pp.SE3_type).float() @ NED2EDN.unsqueeze(0)
-        
+
         super().__init__(self.imageL.length)
 
     def __getitem__(self, local_index: int) -> Frame:
@@ -146,12 +146,12 @@ class VBR_StereoSequence(SequenceBase[Frame]):
         mask = np.zeros_like(stamps, dtype=bool)
         mask[first_indices] = np.isin(stamps[first_indices], common_time)
         return mask
-    
+
     @staticmethod
     def sync_LR(left: VBRMonocularDataset, right: VBRMonocularDataset) -> np.ndarray:
         # Constant - Transformation from cam 1 to cam 2 (L -> R)
         T_LR = np.linalg.inv(right.T_BS) @ left.T_BS
-        
+
         # Align timestamps, discard time stamp with only Left/Right image.
         left_time = {t_l.item() for t_l in left.cam_stamps}
         right_time = {t_r.item() for t_r in right.cam_stamps}
@@ -159,16 +159,16 @@ class VBR_StereoSequence(SequenceBase[Frame]):
 
         left_sync_mask = VBR_StereoSequence.unique_sync_mask(left.cam_stamps, common_time)
         right_sync_mask = VBR_StereoSequence.unique_sync_mask(right.cam_stamps, common_time)
-        
+
         left.cam_stamps = left.cam_stamps[left_sync_mask]
         right.cam_stamps = right.cam_stamps[right_sync_mask]
         left.file_names = [f for idx, f in enumerate(left.file_names) if left_sync_mask[idx].item()]
         right.file_names = [f for idx, f in enumerate(right.file_names) if right_sync_mask[idx].item()]
         left.length = len(left.file_names)
         right.length = len(right.file_names)
-        
+
         # Rectify stereo and undistort based on Left and Right camera.
-        R1, R2, P1, P2, Q, validRoi1, validRoi2 = cv2.stereoRectify(left.K, left.distort_factor, 
+        R1, R2, P1, P2, Q, validRoi1, validRoi2 = cv2.stereoRectify(left.K, left.distort_factor,
                           right.K, right.distort_factor, (1388, 700),
                           T_LR[:3, :3], T_LR[:3, 3], flags=cv2.CALIB_ZERO_DISPARITY, alpha=-1)
 
@@ -176,7 +176,7 @@ class VBR_StereoSequence(SequenceBase[Frame]):
         right.undistort_map = cv2.initUndistortRectifyMap(right.K, right.distort_factor, R2, P2,  (1388, 700), cv2.CV_32FC1)
         left.K = P1[:3, :3]
         right.K = P2[:3, :3]
-        
+
         return P1
 
     @classmethod
@@ -191,10 +191,10 @@ class VBR_StereoSequence(SequenceBase[Frame]):
 def loadVBRGTPoses(pose_dir: Path, cam_time: np.ndarray)  -> tuple[pp.LieTensor, np.ndarray]:
     ##timestamp tx ty tz qx qy qz qw
     gt_data = np.loadtxt(pose_dir)
-    pose_time = gt_data[:,0] *  1_000_000_000 
-    
+    pose_time = gt_data[:,0] *  1_000_000_000
+
     pose_SE3 = pp.SE3(torch.tensor(gt_data[:,1:]))
     cam_time_mask = (cam_time > pose_time[0]) & (cam_time < pose_time[-1])
     bodyPose_SE3, _ = interpolate_pose(pose_SE3, torch.tensor(pose_time), torch.tensor(cam_time[cam_time_mask]))
-   
+
     return bodyPose_SE3, cam_time_mask

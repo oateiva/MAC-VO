@@ -25,7 +25,7 @@ class Plotable(Generic[T]):
 
     def apply(self, func: Callable[[T,], T2]) -> Plotable[T2]:
         return Plotable(func(self.data), self.name, self.plot_kwargs)
-    
+
     def __repr__(self) -> str:
         return f"Plotable<{self.data.__class__.__name__}>(data={self.data}, name='{self.name}')"
 
@@ -35,14 +35,14 @@ class Trajectory:
         self.poses = poses
         self.time  = time
         self.frame_status = frame_status
-    
+
     def __getitem__(self, index) -> Trajectory:
         return Trajectory(
             pp.LieTensor(self.poses.__getitem__(index), ltype=self.poses.ltype),
             self.time.__getitem__(index),
             self.frame_status.__getitem__(index),
         )
-    
+
     @classmethod
     def from_SE3_txt(cls, file: Path,
                      timestamp: torch.Tensor | None = None,
@@ -55,7 +55,7 @@ class Trajectory:
         else:
             assert frame_status.dtype == torch.bool
         return cls(SE3_matrix, timestamp, frame_status)
-    
+
     @classmethod
     def from_SE3_numpy(cls, file: Path,
                        timestamp: torch.Tensor | None = None,
@@ -78,7 +78,7 @@ class Trajectory:
         else:
             assert frame_status.dtype == torch.bool
         return cls(SE3_matrix, timestamp, frame_status)
-    
+
     @classmethod
     def from_timed_SE3_numpy(cls, file: Path, frame_status: torch.Tensor | None = None) -> Trajectory:
         data = np.load(file).astype(float)
@@ -86,7 +86,7 @@ class Trajectory:
         if frame_status is None:
             frame_status = torch.zeros((SE3_matrix.size(0),), dtype=torch.bool)
         return cls(SE3_matrix, timestamp, frame_status)
-    
+
     @classmethod
     def from_sandbox(cls, box: Sandbox, align_time: Literal["est->gt", "gt->est", None]="est->gt") -> tuple[Plotable[Trajectory], Plotable[Trajectory]]:
         """
@@ -103,10 +103,10 @@ class Trajectory:
         est_traj = cls.from_timed_SE3_numpy(box.path("poses.npy"), frame_status=frame_status)
         gt_traj  = cls.from_timed_SE3_numpy(box.path("ref_poses.npy"))
         est_traj = est_traj.align_origin(gt_traj)
-        
+
         gt_traj.time  = gt_traj.time - gt_traj.time[0]   #FIXME: this is only fore debugging purpose
         est_traj.time = est_traj.time - est_traj.time[0] #FIXME: this is only fore debugging purpose
-        
+
         if align_time == "est->gt":
             est_traj = est_traj.align_time(gt_traj.time)
         elif align_time == "gt->est":
@@ -116,12 +116,12 @@ class Trajectory:
 
         est_name = box.config.Project if hasattr(box.config, "Project") else box.folder.parent.name
         return Plotable(gt_traj, "Ref",  dict()), Plotable(est_traj, est_name, dict())
-    
+
     @classmethod
     def from_sandbox_mayberef(cls, box: Sandbox) -> tuple[PlotableTrajectory | None, PlotableTrajectory]:
         if box.path("ref_poses.npy").exists():
             return cls.from_sandbox(box)
-        
+
         flag_path = box.path("frame_status.pth")
         if flag_path.exists():
             frame_status = torch.load(flag_path)
@@ -170,7 +170,7 @@ class Trajectory:
 
     def align_time(self, new_time: torch.Tensor) -> Trajectory:
         aligned_pose, frame_status = interpolate_pose(self.poses, self.time, new_time)
-        # TODO: may want to also do 'interpolate' on frame_status (e.g. find nearest neighbor and 
+        # TODO: may want to also do 'interpolate' on frame_status (e.g. find nearest neighbor and
         # get corresponding frame_status flag).
         return Trajectory(aligned_pose, new_time, frame_status)
 
@@ -188,24 +188,24 @@ class Trajectory:
         self_evo, ref_evo = self[~self.frame_status].as_evo, ref_traj[~self.frame_status].as_evo
         _, _, scale = self_evo.align(ref_evo, correct_scale=True, correct_only_scale=False)
         return self.scale(scale)
-    
+
     def align_origin(self, ref_traj: Trajectory) -> Trajectory:
         self_evo, ref_evo = self.as_evo, ref_traj.as_evo
         self_evo.align_origin(ref_evo)
         return Trajectory.from_evo(self_evo, self.frame_status)
-    
+
     def crop(self, from_idx: int | None = None, to_idx: int | None = None):
         return Trajectory(
             cast(pp.LieTensor, self.poses[from_idx:to_idx]),
             self.time[from_idx:to_idx],
             self.frame_status[from_idx:to_idx]
         )
-    
+
     def scale(self, s: float) -> Trajectory:
         self_evo = self.as_evo
         self_evo.scale(s)
         return Trajectory.from_evo(self_evo)
-    
+
     def __repr__(self) -> str:
         return f"Trajectory(length={self.length})"
 
@@ -218,7 +218,7 @@ class MotionSequence:
         self.frame_status = frame_status
         assert self.motions.size(0) == self.duration.size(0)
         assert self.motions.size(0) == self.frame_status.size(0)
-        
+
         self.initial_pose = initial_pose
         self.start_time = start_time
 
@@ -229,7 +229,7 @@ class MotionSequence:
     @property
     def translation(self) -> torch.Tensor:
         return self.motions.translation()
-    
+
     @property
     def rotation(self) -> pp.LieTensor:
         return self.motions.rotation()

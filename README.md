@@ -15,7 +15,7 @@
 </p>
 
 
-> [!NOTE]  
+> [!NOTE]
 > We plan to release TensorRT accelerated implementation and adapting more matching networks for MAC-VO. If you are interested, please star ⭐ this repo to stay tuned.
 
 > [!NOTE]
@@ -25,10 +25,10 @@
 
 ## 🔥 Updates
 
-* [Jun 2025] We release the **MAC-VO Fast Mode** - with faster pose graph optimization and mixed-precision inference, we achieve 2x speedup compare to previous version and reach speed of 12.5fps on 480x640 images. 
+* [Jun 2025] We release the **MAC-VO Fast Mode** - with faster pose graph optimization and mixed-precision inference, we achieve 2x speedup compare to previous version and reach speed of 12.5fps on 480x640 images.
 
-  See `Config/Experiment/MACVO/MACVO_Fast.yaml` for detail. 
-  
+  See `Config/Experiment/MACVO/MACVO_Fast.yaml` for detail.
+
   Original example is also boosted from 5fps to 7fps and the config file is moved to `MACVO_Performant.yaml`.
 * [Apr 2025] Our work was nominated as the **ICRA 2025 Best Paper Award Finalist** (top 1%)! Keep an eye on our presentation on May 20, 16:35-16:40 Room 302. We also plan to provide a real-world demo at the conference.
 * [Mar 2025] We boost the performance of MAC-VO with a new backend optimizer, the MAC-VO now also supports *dense mapping* without any additional computation.
@@ -58,7 +58,7 @@ Clone the repository using the following command to include all submodules autom
 
     <details>
       <summary>How to adapt MAC-VO codebase to Python &lt; 3.10?</summary>
-      
+
       The Python version requirement we required is mostly due to the [`match`](https://peps.python.org/pep-0634/) syntax used and the [type annotations](https://peps.python.org/pep-0604/).
 
       The `match` syntax can be easily replaced with `if ... elif ... else` while the type annotations can be simply removed as it does not interfere runtime behavior.
@@ -82,11 +82,11 @@ Test MAC-VO immediately using the provided demo sequence. The demo sequence is a
 2. Download pre-trained model for [frontend model](https://github.com/MAC-VO/MAC-VO/releases/download/model/MACVO_FrontendCov.pth) and [posenet](https://github.com/MAC-VO/MAC-VO/releases/download/model/MACVO_posenet.pkl).
 
 ### 2/4 Start the Docker
-To run the Docker: 
+To run the Docker:
 
     $ docker run --gpus all -it --rm  -v [DATA_PATH]:/data -v [CODE_PATH]:/home/macvo/workspace macvo:latest
 
-To run the Docker with visualization: 
+To run the Docker with visualization:
 
     $ xhost +local:docker; docker run --gpus all -it --rm  -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix  -v [DATA_PATH]:/data -v [CODE_PATH]:/home/macvo/workspace macvo:latest
 
@@ -167,11 +167,11 @@ We used [the Rerun](https://rerun.io) visualizer to visualize 3D space including
 * **On Machine with GUI**
 
   1. Run `MACVO.py` with the following command line
-    
+
         ```bash
         $ python MACVO.py --useRR --odom [ODOM_CONFIG] --data [DATA_CONFIG]
         ```
-     
+
         A rerun visualizer should pop up with the trajectory and *per-frame* point cloud & tracking features visualized.
   2. To accumulate the point cloud for dense mapping visualization, please follow the instruction here: https://github.com/MAC-VO/MAC-VO/issues/4#issuecomment-2495620352
 

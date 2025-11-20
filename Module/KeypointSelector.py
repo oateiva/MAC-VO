@@ -17,13 +17,13 @@ from Utility.Timer import Timer
 class IKeypointSelector(ABC, ConfigTestableSubclass):
     """
     This module selects keypoint given current frame and (optionally) estimated depth, depth_cov, and flow_cov.
-    
-    The selector also receives an argument `numPoint` as hint to how many keypoints to select. This hint may *not* be 
+
+    The selector also receives an argument `numPoint` as hint to how many keypoints to select. This hint may *not* be
     followed strictly.
     """
     def __init__(self, config: SimpleNamespace):
         self.config = config
-    
+
     @abstractmethod
     def select_point(
         self,
@@ -35,22 +35,22 @@ class IKeypointSelector(ABC, ConfigTestableSubclass):
     ) -> torch.Tensor:
         """
         Select keypoint for tracking using given frame, (optionally) estimated depth, depth_cov, and flow_cov.
-        
+
         Return keypoint as a FloatTensor with shape (N, 2) where keypoints are arranged in (u, v) format.
-        
+
         ## NOTE
-        
+
         this means that you need to output the index of keypoints in *different* coordinate system as pytorch.
-        
+
         Use `image[kp[..., 1], kp[..., 0]]` to read value of image on all u-v coords of keypoints.
         The default output of this function is (0x2 torch.Tensor) which means no keypoints are selected.
         """
         return torch.zeros((0, 2), dtype=torch.long, device=self.config.device)
-    
+
 
 class SelectorCompose(IKeypointSelector):
     """
-    Given multiple keypoint selectors and their weight, distribute keypoint selection 
+    Given multiple keypoint selectors and their weight, distribute keypoint selection
     requirement to these according to the provided weight.
     """
     def __init__(self, config: SimpleNamespace):
@@ -59,13 +59,13 @@ class SelectorCompose(IKeypointSelector):
 
         self.weight = torch.tensor(self.config.weight)
         self.weight = self.weight / self.weight.sum()
-    
+
     def select_point(self, frame: CameraData, numPoint: int, depth0_est: IDepth.Output, depth1_est: IDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
         keypoints = []
         for selector, weight in zip(self.selectors, self.weight):
             keypoints.append(selector.select_point(frame, int(numPoint * weight), depth0_est, depth1_est, match_est))
         return torch.cat(keypoints, dim=0)
-    
+
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
         assert config is not None
@@ -83,7 +83,7 @@ class MappingPointSelector(IKeypointSelector):
             "max_depth_cov": lambda v: isinstance(v, float),
             "mask_width": lambda v: isinstance(v, int)
         })
-    
+
     def select_point(self, frame: CameraData, numPoint: int, depth0_est: IDepth.Output, depth1_est: IDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
         assert depth0_est.cov is not None
         depth_mask     = depth0_est.depth < self.config.max_depth
@@ -92,7 +92,7 @@ class MappingPointSelector(IKeypointSelector):
         border_mask[
             ..., self.config.mask_width : -self.config.mask_width, self.config.mask_width : -self.config.mask_width
         ] = True
-        
+
         candidates     = depth_mask & depth_cov_mask & border_mask
         selected_points = torch.nonzero(candidates, as_tuple=False)
         perm = torch.randperm(selected_points.size(0))[:numPoint]
@@ -109,7 +109,7 @@ class RandomSelector(IKeypointSelector):
         w_indices = torch.randint(self.config.mask_width, frame.width  - self.config.mask_width, (numPoint, 1), device=self.config.device)
         kps = torch.cat([w_indices, h_indices], dim=1)
         return kps
-    
+
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
         cls._enforce_config_spec(config, {
@@ -120,7 +120,7 @@ class RandomSelector(IKeypointSelector):
 
 class GradientSelector(IKeypointSelector):
     """
-    Select keypoint based on gradient information. Will random select points with 
+    Select keypoint based on gradient information. Will random select points with
     local image gradient > config.grad_std.
     """
     def select_point(self, frame: CameraData, numPoint: int, depth0_est: IDepth.Output, depth1_est: IDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
@@ -160,9 +160,9 @@ class GradientSelector(IKeypointSelector):
 
 class SparseGradienSelector(IKeypointSelector):
     """
-    Select keypoint based on gradient information. Will random select points with 
+    Select keypoint based on gradient information. Will random select points with
     local image gradient > config.grad_std.
-    
+
     Ensured sparsity of keypoint by applying non-maximum suppresion (NMS) on image gradient
     of keypoint candidates.
     """
@@ -216,8 +216,8 @@ class SparseGradienSelector(IKeypointSelector):
 class GridSelector(IKeypointSelector):
     """
     Select keypoint following the grid - strictly uniform across the entire image.
-    
-    The requested `numPoint` will be used to estimate the spacing between keypoints, but the 
+
+    The requested `numPoint` will be used to estimate the spacing between keypoints, but the
     selector may not generate exactly `numPoint` amount of keypoints.
     """
     def select_point(self, frame: CameraData, numPoint: int, depth0_est: IDepth.Output, depth1_est: IDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
@@ -250,8 +250,8 @@ class GridSelector(IKeypointSelector):
 class CovAwareSelector(IKeypointSelector):
     """
     The keypoint selector used by the MAC-VO.
-    
-    Selecting keypoints based on estimated depth, depth_cov, and flow_cov. See sect III.B 
+
+    Selecting keypoints based on estimated depth, depth_cov, and flow_cov. See sect III.B
     of paper for detail.
     """
     @Timer.cpu_timeit("KPSelector.select")
@@ -277,7 +277,7 @@ class CovAwareSelector(IKeypointSelector):
         if flow_cov_map is not None:
             flow_cov_map = (flow_cov_map[:, 0] + flow_cov_map[:, 1] - 2 * flow_cov_map[:, 2]).unsqueeze(1)
             quality_map *= flow_cov_map
-        
+
         # Apply NMS on quality map
         quality_map_erode = -torch.nn.functional.max_pool2d(
             -quality_map,
@@ -286,13 +286,13 @@ class CovAwareSelector(IKeypointSelector):
             padding=(self.config.kernel_size // 2),
         )
         quality_nms = torch.logical_and(quality_map == quality_map_erode, ~quality_map.isnan())
-        
+
         # Positions that are not too close to the edge of image
         border_mask = torch.zeros_like(quality_nms, dtype=torch.bool)
         border_mask[
             ..., self.config.mask_width : -self.config.mask_width, self.config.mask_width : -self.config.mask_width
         ] = True
-        
+
         # Positions that are sufficiently close to camera.
         depth_mask = (depth0_map < self.config.max_depth) & (depth1_map < self.config.max_depth)
 
@@ -311,16 +311,16 @@ class CovAwareSelector(IKeypointSelector):
         point_mask = torch.logical_and(quality_nms, border_mask)
         point_mask = torch.logical_and(point_mask, depth_mask)
         point_mask = torch.logical_and(point_mask, depth0_cov_mask)
-        
+
         if flow_cov_mask is not None:
             point_mask = torch.logical_and(point_mask, flow_cov_mask)
-        
+
         if depth0_est.mask is not None:
             point_mask = torch.logical_and(point_mask, depth0_est.mask.to(point_mask.device))
-        
+
         if match_est is not None and match_est.mask is not None:
             point_mask = torch.logical_and(point_mask, match_est.mask.to(point_mask.device))
-        
+
         # Select points
         # NOTE: potential performance bottleneck
         # this will trigger host-device sync and hang the CPU until CUDA stream finishes.
@@ -348,14 +348,14 @@ class CovAwareSelector(IKeypointSelector):
 
 class CovAwareSelector_NoDepth(IKeypointSelector):
     """
-    Selecting keypoints based on estimated flow_cov. 
-    
+    Selecting keypoints based on estimated flow_cov.
+
     The main difference with CovAwareSelector is dropping filters related with depth (i.e. max_depth and depth_cov).
     """
     def __init__(self, config: SimpleNamespace):
         super().__init__(config)
         self.fallback_grid_selector = GridSelector(SimpleNamespace(mask_width = self.config.mask_width, device=self.config.device))
-    
+
     @Timer.cpu_timeit("KPSelector.select")
     @Timer.gpu_timeit("KPSelector.select")
     @torch.inference_mode()
@@ -368,7 +368,7 @@ class CovAwareSelector_NoDepth(IKeypointSelector):
         # Derive quality map
         quality_map = (flow_cov_map[:, 0] + flow_cov_map[:, 1] - 2 * flow_cov_map[:, 2]).unsqueeze(1)
         flow_cov_map = quality_map
-        
+
         # Apply NMS on quality map
         quality_map_erode = -torch.nn.functional.max_pool2d(
             -quality_map,
@@ -377,7 +377,7 @@ class CovAwareSelector_NoDepth(IKeypointSelector):
             padding=(self.config.kernel_size // 2),
         )
         quality_nms = torch.logical_and(quality_map == quality_map_erode, ~quality_map.isnan())
-        
+
         # Positions that are not too close to the edge of image
         border_mask = torch.zeros_like(quality_nms, dtype=torch.bool)
         border_mask[
@@ -390,10 +390,10 @@ class CovAwareSelector_NoDepth(IKeypointSelector):
 
         point_mask = torch.logical_and(quality_nms, border_mask)
         point_mask = torch.logical_and(point_mask, flow_cov_mask)
-        
+
         if match_est is not None and match_est.mask is not None:
             point_mask = torch.logical_and(point_mask, match_est.mask.to(point_mask.device))
-        
+
         # Select points
         # NOTE: potential performance bottleneck
         # this will trigger host-device sync and hang the CPU until CUDA stream finishes.

@@ -25,21 +25,21 @@ class IOptimizer(ABC, Generic[T_GraphInput, T_Context, T_GraphOutput], SubclassR
     """
     Interface for optimization module. When config.parallel set to `true`, will spawn a child process
     to run optimization loop in "background".
-    
+
     `IOptimizer.optimize(global_map: TensorMap, frames: BatchFrames) -> None`
-    
+
     * In sequential mode, will run optimization loop in blocking mannor and retun when optimization is finished.
-    
+
     * In parallel mode, will send optimization job to child process and return immediately (non-blocking).
-    
+
     `IOptimizer.write_back(global_map: TensorMap) -> None`
-    
+
     * In sequential mode, will write back optimization result to global_map immediately and return.
-    
+
     * In parallel mode, will wait for child process to finish optimization job and write back result to global_map. (blocking)
 
     `IOptimizer.terminate() -> None`
-    
+
     Force terminate child process if in parallel mode. no-op if in sequential mode.
     """
     ### Internal interface to be implemented
@@ -56,20 +56,20 @@ class IOptimizer(ABC, Generic[T_GraphInput, T_Context, T_GraphOutput], SubclassR
     def init_context(config) -> T_Context:
         """
         Given config, initialize a *mutable* context object that is preserved between optimizations.
-        
+
         Can also be used to avoid repetitive initialization of some objects (e.g. optimizer, robust kernel).
         """
         ...
-    
+
     @staticmethod
     @abstractmethod
     def _optimize(context: T_Context, graph_args: T_GraphInput) -> tuple[T_Context, T_GraphOutput]:
         """
-        Given context and argument, construct the optimization problem, solve it and return the 
+        Given context and argument, construct the optimization problem, solve it and return the
         updated context and result.
         """
         ...
-    
+
     @staticmethod
     @abstractmethod
     def _write_map(result: T_GraphOutput | None, global_map: TensorMap) -> None:
@@ -88,4 +88,3 @@ Below we demonstrate how the internal interfaces mentioned above are orchestrate
 **Sequential Mode**
 
 ![SequentialMode](https://github.com/user-attachments/assets/b297a5db-f348-46b0-8213-fd60b5c4a006)
-

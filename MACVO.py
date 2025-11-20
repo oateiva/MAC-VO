@@ -22,7 +22,7 @@ def VisualizeRerunCallback(frame: Frame, system: MACVO, pb: ColoredTqdm):
     # Non-key frame does not need visualization
     if system.graph.frames.data["need_interp"][-1]: return
 
-    if frame.frame_idx > 0:    
+    if frame.frame_idx > 0:
         rr_plt.log_trajectory("/world/est", pp.SE3(system.graph.frames.data["pose"].tensor))
 
     rr_plt.log_camera("/world/macvo/cam_left", pp.SE3(system.graph.frames.data["pose"][-1]), system.graph.frames.data["K"][-1])
@@ -43,7 +43,7 @@ def VisualizeVRAMUsage(frame: Frame, system: MACVO, pb: ColoredTqdm):
         allocated_memory = f"{round(allocated_memory, 3)} GB"
     else:
         allocated_memory = "N/A"
-    
+
     pb.set_description(desc=f"{system.graph}, VRAM={allocated_memory}")
 
 
@@ -90,7 +90,7 @@ def get_args():
         help="Cleanup result sandbox after script finishs / crashed. Helpful during testing & debugging."
     )
     parser.add_argument(
-        "--noeval", 
+        "--noeval",
         action="store_true",
         help="Evaluate sequence after running odometry."
     )

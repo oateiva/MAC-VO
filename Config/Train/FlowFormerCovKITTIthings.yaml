@@ -47,13 +47,13 @@ Model:
 
     # decoder
     decoder_depth: 12
-    critical_params: ["cost_heads_num", 
-                      "vert_c_dim", 
-                      "cnet", 
-                      "pretrain", 
-                      "add_flow_token", 
-                      "encoder_depth", 
-                      "gma", 
+    critical_params: ["cost_heads_num",
+                      "vert_c_dim",
+                      "cnet",
+                      "pretrain",
+                      "add_flow_token",
+                      "encoder_depth",
+                      "gma",
                       "cost_encoder_res"
                       ]
 
@@ -78,10 +78,10 @@ Model:
   datatype: fp32
 
 Train:
-  data: !flatten_seq 
+  data: !flatten_seq
     - !include ../Sequence/Training_Dataset/TartanAir_Train.yaml
     - !include ../Sequence/Training_Dataset/TartanAir_TrainHard.yaml
 
 Evaluate:
-  data: !flatten_seq 
+  data: !flatten_seq
     - !include ../Sequence/Training_Dataset/TartanAirV2_Test.yaml
