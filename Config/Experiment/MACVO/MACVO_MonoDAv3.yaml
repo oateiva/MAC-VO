@@ -18,7 +18,7 @@ Common:
   device: &device cuda
 
 Odometry:
-  name: MACVO-DAv2
+  name: MACVO-DAv3
   args:
     # Device directive to the VO system
     # NOTE: the system may not follow this device config strictly since some module
@@ -48,14 +48,14 @@ Odometry:
         min_flow_cov: 0.25
 
   keypoint:
-    type: CovAwareSelector_NoDepth
+    type: CovAwareSelector
     args:
       device: *device
       kernel_size: 7
       mask_width: 32
-      max_match_cov: 1.
+      max_match_cov: 100.
       max_depth: 20.0
-      max_depth_cov: 1.
+      max_depth_cov: 3.
 
   mappoint:
     # Mapping feature can be conveniently turn off by using
@@ -64,7 +64,7 @@ Odometry:
     args:
       device: *device
       max_depth: 20.0
-      max_depth_cov: 1.1
+      max_depth_cov: 3.0
       mask_width: 32
 
   frontend:
@@ -78,16 +78,11 @@ Odometry:
       flow:
         weight: ./Model/MACVO_FrontendCov.pth
       monodepth:
-        type: DepthAnythingV2
+        type: DepthAnythingV3
         args:
-          weight: C:/ai_checkpoints/monodepth/depth_anything_v2_vitl.pth
-          encoder: vitl
-          scale_factor: 1000.
-        # type: MetricDepthAnythingV2
-        # args:
-        #   weight: ./Model/depth_anything_v2_metric_vkitti_vitl.pth
-        #   encoder: vitl
-        #   max_depth: 80.
+          model_name: da3nested-giant-large
+          weight: depth-anything/DA3NESTED-GIANT-LARGE
+          device: *device
 
 
   motion:
