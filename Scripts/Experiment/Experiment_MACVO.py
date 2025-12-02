@@ -95,7 +95,7 @@ if __name__ == "__main__":
 
         # Run experiments for each config and repetition
         for run_cfg_template in run_configs:
-            for run_idx in range(args.n_runs-1):
+            for run_idx in range(args.n_runs):
                 Logger.write(
                     "info",
                     f"Starting experiment: {run_cfg_template['Project']} (Run {run_idx + 1}/{args.n_runs})",
