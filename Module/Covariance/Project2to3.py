@@ -159,15 +159,17 @@ class MatchCovariance(ICovariance2to3):
 
         # Weighted Average
         wavg_depth = (local_filters * patches).sum(dim=[1, 2])
-        if (has_flow_cov_flag or (depth_cov is None)):
-            # Weighted Variance
-            wvar_depth = torch.sum(
-                local_filters * (patches - (wavg_depth.unsqueeze(1).unsqueeze(1))).square(),
-                dim=[1, 2],
-            )
-        else:
-            assert depth_cov is not None
-            wvar_depth = depth_cov
+        # TODO: make the way of estimating depth variance more flexible
+        # Maybe in the config file
+        # if (has_flow_cov_flag or (depth_cov is None)):
+        #     # Weighted Variance
+        #     wvar_depth = torch.sum(
+        #         local_filters * (patches - (wavg_depth.unsqueeze(1).unsqueeze(1))).square(),
+        #         dim=[1, 2],
+        #     )
+        # else:
+        #     assert depth_cov is not None
+        wvar_depth = depth_cov
 
         wvar_depth = wvar_depth.clamp(min=self.config.min_depth_cov)
 
