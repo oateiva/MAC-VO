@@ -102,5 +102,5 @@ Odometry:
       graph_type: disp
       autodiff: false
 
-Data: !include ../../Sequence/TartanAir_example.yaml
+Datas: !include ../Common/DeepODO_experiments.yaml
 Preprocess: !include ../Common/Preprocess.yaml

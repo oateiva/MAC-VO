@@ -95,5 +95,5 @@ Odometry:
       graph_type: icp
       autodiff: true
 
-Data: !include ../../Sequence/TartanAir_example.yaml
+Datas: !include ../Common/DeepODO_experiments.yaml
 Preprocess: !include ../Common/Preprocess.yaml

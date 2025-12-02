@@ -1,0 +1,162 @@
+-   type: TartanAir_NoIMU
+    name: abf001
+    args:
+        root: D:\Datasets\TartanAir_Sample\abandonedfactory_sample_P001\P001
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: amusement
+    args:
+        root: D:\Datasets\TartanAir_Sample\amusement_sample_P008\P008
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+
+        compressed: false
+-   type: TartanAir_NoIMU
+    name: amusement
+    args:
+        root: D:\Datasets\TartanAir_Sample\amusement_sample_P008\P008
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: endofworld
+    args:
+        root: D:\Datasets\TartanAir_Sample\endofworld_sample_P001\P001
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: gascola
+    args:
+        root: D:\Datasets\TartanAir_Sample\gascola_sample_P001\P001
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: gascola
+    args:
+        root: D:\Datasets\TartanAir_Sample\hospital_sample_P000\P000
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: japanese
+    args:
+        root: D:\Datasets\TartanAir_Sample\japanesealley_sample_P007\P007
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: neighborhood
+    args:
+        root: D:\Datasets\TartanAir_Sample\neighborhood_sample_P002\P002
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: ocean
+    args:
+        root: D:\Datasets\TartanAir_Sample\ocean_sample_P006\P006
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: office
+    args:
+        root: D:\Datasets\TartanAir_Sample\office2_sample_P003\P003
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: seaside
+    args:
+        root: D:\Datasets\TartanAir_Sample\seasidetown_sample_P003\P003
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: seasons
+    args:
+        root: D:\Datasets\TartanAir_Sample\seasonsforest_sample_P002\P002
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: seasonsw
+    args:
+        root: D:\Datasets\TartanAir_Sample\seasonsforest_winter_sample_P006\P006
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: soulcity
+    args:
+        root: D:\Datasets\TartanAir_Sample\soulcity_sample_P003\P003
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: western
+    args:
+        root: D:\Datasets\TartanAir_Sample\westerndesert_sample_P002\P002
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+
+        compressed: false
