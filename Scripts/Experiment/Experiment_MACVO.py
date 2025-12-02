@@ -1,6 +1,11 @@
+
+# Experiment runner for MACVO system
+# This script loads configuration(s), runs experiments, logs results, and evaluates sequences.
+
 import argparse
 from pathlib import Path
 
+# Import custom modules for data loading, evaluation, odometry, config, logging, and visualization
 from DataLoader import SequenceBase, Frame, smart_transform
 from Evaluation.EvalSeq import EvaluateSequences
 from Odometry.MACVO import MACVO
@@ -8,24 +13,42 @@ from Utility.Config import build_dynamic_config, load_config
 from Utility.PrettyPrint import ColoredTqdm, Logger, print_as_table
 from Utility.Sandbox import Sandbox
 
+# Visualization tools
 import rerun as rr
 from Utility.Visualize import fig_plt, rr_plt
 from MACVO import VisualizeRerunCallback, VisualizeVRAMUsage
 
 def onFrameFinished(frame: Frame, system: MACVO, pb: ColoredTqdm):
+    """
+    Callback executed after each frame is processed.
+    Handles visualization and VRAM usage logging.
+    """
     VisualizeRerunCallback(frame, system, pb)
     VisualizeVRAMUsage(frame, system, pb)
 
 
 def execute_experiment(name, cfg, cfg_dict, root_box: Sandbox) -> str:
-    # Execute an experiment, and return the directory of result sandbox
+    """
+    Execute a single experiment run.
+    Args:
+        name (str): Name of the experiment/project.
+        cfg: Configuration object for the run.
+        cfg_dict: Dictionary version of the config.
+        root_box (Sandbox): Root sandbox for results.
+    Returns:
+        str: Path to the result folder for this experiment.
+    """
     exp_space = root_box.new_child(name)
     exp_space.config = cfg_dict
 
+    # Instantiate and preprocess the sequence
     sequence = smart_transform(
         SequenceBase[Frame].instantiate(cfg.Data.type, cfg.Data.args),
         cfg.Preprocess
-    )#.preload() # Preload can be enabled here if needed. And if you have a big ass RAM.
+    )
+    # .preload() can be enabled for large RAM systems
+
+    # Initialize MACVO system and process frames
     system = MACVO[Frame].from_config(cfg)
     system.receive_frames(sequence, exp_space, on_frame_finished=onFrameFinished)
 
@@ -33,28 +56,28 @@ def execute_experiment(name, cfg, cfg_dict, root_box: Sandbox) -> str:
 
 
 if __name__ == "__main__":
-    args = argparse.ArgumentParser()
-    args.add_argument("--config", type=str, nargs='+', required=True)
-    args.add_argument(
-        "--resultRoot", type=str, default="Results"
-    )
-    args.add_argument("--n-runs", type=int, default=1)
-    args.add_argument("--useRR", action="store_true")
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="Run MACVO experiments with specified configs.")
+    parser.add_argument("--config", type=str, nargs='+', required=True, help="Path(s) to config file(s)")
+    parser.add_argument("--resultRoot", type=str, default="Results", help="Root directory for results")
+    parser.add_argument("--n-runs", type=int, default=1, help="Number of runs per config")
+    parser.add_argument("--useRR", action="store_true", help="Enable Rerun visualization")
 
-    args = args.parse_args()
-
+    args = parser.parse_args()
 
     config_list = args.config
+    spaces = []  # List to store result directories
 
-    spaces = []
-
+    # Iterate over each config file
     for config in config_list:
         Logger.write("info", f"Using configuration from: {config}")
 
+        # Load config and extract odometry/data settings
         cfg, cfg_dict = load_config(Path(config))
         odometry_cfg = cfg_dict["Odometry"]
         data_cfgs = cfg_dict["Datas"]
 
+        # Build run configs for each data sequence
         run_configs = [
             {
                 "Project": odometry_cfg["name"] + "@" + data_cfg["name"],
@@ -65,32 +88,36 @@ if __name__ == "__main__":
             for data_cfg in data_cfgs
         ]
 
+        # Create sandbox for experiment results
         root_box = Sandbox.create(
             Path(args.resultRoot), Path(config).name.split(".")[0]
         )
 
+        # Run experiments for each config and repetition
         for run_cfg_template in run_configs:
-            for run_idx in range(args.n_runs):
+            for run_idx in range(args.n_runs-1):
                 Logger.write(
                     "info",
                     f"Starting experiment: {run_cfg_template['Project']} (Run {run_idx + 1}/{args.n_runs})",
                 )
-                # Setup logging and visualization
+                # Setup visualization if requested
                 if args.useRR:
                     rr_plt.default_mode = "rerun"
                     rr_plt.init_connect(run_cfg_template["Project"])
+                # Build dynamic config for this run
                 cfg, cfg_dict = build_dynamic_config(run_cfg_template)
                 Logger.write("info", cfg_dict)
+                # Execute experiment and collect result folder
                 spaces.append(execute_experiment(cfg.Project, cfg, cfg_dict, root_box))
 
+    # Log summary and save run directories
     Logger.write(
         "info",
-        "Finished experiment group, the results are stored in"
-        + "\n"
-        + " ".join(spaces),
+        "Finished experiment group, the results are stored in\n" + " ".join(spaces),
     )
     with root_box.open("runs.txt", "w") as f:
         f.write("\n".join(spaces))
 
+    # Evaluate all experiment results and print summary table
     eval_header, eval_results = EvaluateSequences(spaces, correct_scale=False)
     print_as_table(eval_header, eval_results)
