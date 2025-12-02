@@ -2,10 +2,15 @@
 # This configuration is **not** used to report numbers in the paper.
 # To reproduce result in the paper, please use Paper_Reproduce.yaml
 #
-# MACVO-Performant generally performs better than Paper_Reproduce.yaml on outdoor scenes.
 #
-# MACVO-Performant can run at 6.5fps on RTX Ada 6000 GPU with image resolution of 480x640.
-# For 12.5fps speed with minute (~5%) increase in RTE & ROE, use MACVO_Fast.yaml
+# MAC-VO Fast Mode (Jun 2025 Update)
+#   Comparing to the Performant mode (MACVO_Performant), the Fast Mode uses
+#   mixed-precision inference of fp32, fp16 and bf16. The fast mode can run
+#   at 12.5fps on 480x640 images on RTX Ada 6000 GPU, almost twice the speed
+#   as Performant Mode.
+#
+#   If minor degrade in accuracy (~5% increase in RTE and ROE) is acceptable,
+#   then you should use Fast Mode for most of the time.
 #
 
 Common:
@@ -13,7 +18,7 @@ Common:
   device: &device cuda
 
 Odometry:
-  name: MACVO-Performant
+  name: MACVO-DAv2
   args:
     # Device directive to the VO system
     # NOTE: the system may not follow this device config strictly since some module
@@ -48,7 +53,9 @@ Odometry:
       device: *device
       kernel_size: 7
       mask_width: 32
-      max_match_cov: 100.0
+      max_match_cov: 1.
+      max_depth: 20.0
+      max_depth_cov: 1.
 
   mappoint:
     # Mapping feature can be conveniently turn off by using
@@ -56,19 +63,33 @@ Odometry:
     type: MappingPointSelector
     args:
       device: *device
-      max_depth: 5.0
-      max_depth_cov: 4
+      max_depth: 20.0
+      max_depth_cov: 1.1
       mask_width: 32
 
   frontend:
-    type: CUDAGraph_FlowFormerCovFrontend
+    type: MonocularFrontend
     args:
       device: *device
-      weight: ./Model/MACVO_FrontendCov.pth
-      enc_dtype: fp32
-      dec_dtype: fp32
+      enc_dtype: fp16
+      dec_dtype: bf16
       decoder_depth: 12
       enforce_positive_disparity: false
+      flow:
+        weight: ./Model/MACVO_FrontendCov.pth
+      monodepth:
+        type: DepthAnythingV2
+        args:
+          weight: C:/ai_checkpoints/monodepth/depth_anything_v2_vitl.pth
+          encoder: vitl
+          scale_factor: 1000.
+          device: *device
+        # type: MetricDepthAnythingV2
+        # args:
+        #   weight: ./Model/depth_anything_v2_metric_vkitti_vitl.pth
+        #   encoder: vitl
+        #   max_depth: 80.
+
 
   motion:
     type: StaticMotionModel
@@ -87,13 +108,13 @@ Odometry:
     args:
 
   optimizer:
-    type: TwoFrame_PGO
+    type: MonoTwoFrame_PGO
     args:
       device: cpu
       vectorize: true
       parallel: true
-      graph_type: icp
-      autodiff: true
+      graph_type: disp
+      autodiff: false
 
 Data: !include ../../Sequence/TartanAir_example.yaml
 Preprocess: !include ../Common/Preprocess.yaml

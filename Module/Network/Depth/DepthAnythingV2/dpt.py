@@ -8,6 +8,8 @@ from .dinov2 import DINOv2
 from .util.blocks import FeatureFusionBlock, _make_scratch
 from .util.transform import Resize, NormalizeImage, PrepareForNet
 
+from DataLoader import CameraData
+from Module.Frontend.StereoDepth import IDepth
 
 def _make_fusion_block(features, use_bn, size=None):
     return FeatureFusionBlock(
@@ -159,7 +161,8 @@ class DepthAnythingV2(nn.Module):
         use_bn=False,
         use_clstoken=False,
         weight=None,
-        scale_factor = 1.
+        scale_factor = 1.,
+        **kwargs
     ):
         super(DepthAnythingV2, self).__init__()
 
@@ -181,6 +184,12 @@ class DepthAnythingV2(nn.Module):
             ckpt = torch.load(weight, weights_only=True)
             self.load_state_dict(ckpt)
 
+    def deepodo_initialize(self, config):
+        self.device = config.device
+        self.to(self.device)
+        self.eval()
+        return
+
     def forward(self, x):
         patch_h, patch_w = x.shape[-2] // 14, x.shape[-1] // 14
 
@@ -193,6 +202,18 @@ class DepthAnythingV2(nn.Module):
         depth = self.scale_factor / idepth
 
         return depth
+
+    def deepodo_inference(self, input: CameraData) -> IDepth.Output:
+        image = input.imageL.to(self.device)
+        depth_map = self.forward(image)
+        depth_map = depth_map.unsqueeze(0) # Add batch dimension
+        covariance = torch.ones_like(depth_map)
+        return IDepth.Output(
+            depth=depth_map,
+            disparity=None,
+            cov=covariance,
+            disparity_uncertainty=None
+            )
 
     @torch.no_grad()
     def infer_image(self, raw_image, input_size=518):

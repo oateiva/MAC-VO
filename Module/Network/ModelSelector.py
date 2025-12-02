@@ -1,25 +1,23 @@
-from types import SimpleNamespace
+from collections.abc import Callable
+from Module.Network.Depth.base import DepthModelProtocol
 from typing import Type
 import torch.nn as nn
+from Module.Network.Depth.DepthAnythingV2.dpt import DepthAnythingV2
+from Module.Network.Depth.DepthAnythingV2.metric.dpt import DepthAnythingV2 as metric_DAV2
+from Module.Network.Depth.DepthAnythingV3.api import DepthAnything3
 
-class ModelSelector:
-    from Module.Network.DepthAnythingV2.dpt import DepthAnythingV2
-    from Module.Network.DepthAnythingV2.metric.dpt import DepthAnythingV2 as metric_DAV2
 
-    _model_registry: dict[str, Type[nn.Module]] = {
-        "DepthAnythingV2": DepthAnythingV2,
-        "MetricDepthAnythingV2": metric_DAV2
-    }
+DEPTH_MODELS: dict[str, Callable[..., DepthModelProtocol]] = {
+    "DepthAnythingV2": DepthAnythingV2,
+    "MetricDepthAnythingV2": metric_DAV2,
+    "DepthAnythingV3": DepthAnything3,
+}
 
-    @staticmethod
-    def get(config: SimpleNamespace) -> nn.Module:
-        model_name = config.type
-        model_cls = ModelSelector._model_registry.get(model_name)
 
-        if model_cls is None:
-            raise ValueError(f"Model '{model_name}' not found in registry")
+def build_depth_model(name: str, **kwargs) -> DepthModelProtocol:
+    model_cls = DEPTH_MODELS[name]
 
-        args = vars(config.args)
-        return model_cls(
-            **args
-        )
+    if model_cls is None:
+        raise ValueError(f"Model '{name}' not found in registry")
+
+    return model_cls(**kwargs)

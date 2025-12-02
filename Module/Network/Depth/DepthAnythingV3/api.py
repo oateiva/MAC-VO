@@ -37,9 +37,15 @@ from depth_anything_3.utils.io.input_processor import InputProcessor
 from depth_anything_3.utils.io.output_processor import OutputProcessor
 from depth_anything_3.utils.logger import logger
 from depth_anything_3.utils.pose_align import align_poses_umeyama
+from depth_anything_3.utils.alignment import apply_metric_scaling
+
+from DataLoader import CameraData
+from Module.Frontend.StereoDepth import IDepth
+from Module.Network.Depth.base import DepthModelProtocol
 
 torch.backends.cudnn.benchmark = False
 # logger.info("CUDNN Benchmark Disabled")
+import torchvision.transforms as T
 
 SAFETENSORS_NAME = "model.safetensors"
 CONFIG_NAME = "config.json"
@@ -95,6 +101,32 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
 
         # Device management (set by user)
         self.device = None
+
+    def deepodo_initialize(self, config) -> None:
+        """
+        Initialize the model for deepodo framework compatibility.
+
+        Args:
+            config: Optional configuration dictionary (currently unused).
+        """
+        self.device = config.device if hasattr(config, 'device') else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        weight_path = getattr(config, "weight", None)
+        if weight_path is None:
+            raise ValueError("`config.weight` must be set for DepthAnything3")
+        # Load a *temporary* pretrained instance
+        #    (this calls __init__ + loads weights)
+        pretrained = type(self).from_pretrained(weight_path)
+        # Copy weights into *this* instance
+        missing, unexpected = self.load_state_dict(
+            pretrained.state_dict(),
+            strict=False,
+        )
+        if missing or unexpected:
+            print(
+                f"While loading pretrained weights: missing={missing}, unexpected={unexpected}"
+            )
+        self.to(self.device)
+        return
 
     @torch.inference_mode()
     def forward(
@@ -256,6 +288,58 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
             self._export_results(prediction, export_format, export_dir, **export_kwargs)
 
         return prediction
+
+    def deepodo_inference(self, input: CameraData) -> IDepth.Output:
+        """
+        Depth inference method for deepodo framework compatibility.
+
+        Args:
+            input: CameraData object containing images and camera parameters.
+        Returns:
+            IDepth object containing depth maps and camera parameters.
+        """
+        image = input.imageL  # Add batch dimension
+        intrinsics = input.K  # Add batch dimension
+
+        image, extrinsics, intrinsics = self._prepare_model_inputs(
+            imgs_cpu=image,
+            extrinsics=None,
+            intrinsics=intrinsics,
+        )
+
+        image = T.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225]
+        )(image)
+
+        prediction = self.forward(
+            image=image,
+            extrinsics=None,
+            intrinsics=intrinsics,
+            export_feat_layers=[],
+            infer_gs=False, # No need for Gaussian branch in standard depth inference
+        )
+
+        torch.cuda.synchronize(self.device)
+
+        depth = prediction.depth
+        covariance = prediction.depth_conf
+        # print min and max for depth conf
+        # print("Depth covariance - min:", covariance.min().item(), "max:", covariance.max().item())
+
+        scaled_depth = apply_metric_scaling(
+            torch.as_tensor(depth).to(device=self.device),
+            intrinsics=torch.as_tensor(intrinsics).to(device=self.device),
+            scale_factor=300.,
+        )
+
+        return IDepth.Output(
+            depth=scaled_depth,
+            disparity=None,
+            cov=covariance,
+            disparity_uncertainty=None
+            )
+
 
     def _preprocess_inputs(
         self,

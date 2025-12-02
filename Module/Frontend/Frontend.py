@@ -34,7 +34,8 @@ from Utility.Utils import reflect_torch_dtype
 from .StereoDepth import IDepth, disparity_to_depth, disparity_to_depth_cov
 from .Matching    import IMatcher
 
-from Module.Network.ModelSelector import ModelSelector
+from Module.Network.ModelSelector import build_depth_model
+from Module.Network.Depth.base import DepthModelProtocol
 
 # Frontend interface ###
 class IFrontend(ABC, ConfigTestableSubclass):
@@ -368,13 +369,19 @@ class MonocularFrontend(IFrontend):
         ckpt  = torch.load(self.config.flow.weight, map_location=self.config.device, weights_only=True)
         flow_model.load_ddp_state_dict(ckpt)
 
-        monodepth_model = ModelSelector.get(self.config.monodepth)
+        # Monocular depth estimation models
+        monodepth_name = self.config.monodepth.type
+        monodepth_args = vars(self.config.monodepth.args)
+
+        monodepth_model = build_depth_model(monodepth_name, **monodepth_args)
         ## TODO: float16, 32 etc?
+        monodepth_model.deepodo_initialize(self.config.monodepth.args)
         monodepth_model.to(self.config.device)
-        monodepth_model.eval()
+        # monodepth_model.eval()
+
 
         # Dict of models: keys are strings, values are torch.nn.Module instances
-        self.model: Dict[str, torch.nn.Module] = {
+        self.model: Dict[str, torch.nn.Module|DepthModelProtocol] = {
             "flow_model": flow_model,
             "monodepth_model": monodepth_model,
         }
@@ -389,19 +396,10 @@ class MonocularFrontend(IFrontend):
         )
 
     def estimate_depth(self, frame: CameraData) -> IDepth.Output:
-        mono_frame = frame.imageL.to(self.config.device)
-        depth = self.model["monodepth_model"].forward(mono_frame)
-        depth = depth.unsqueeze(0)  # Add batch dimension
 
-        # TODO: estimate real depth uncertainty
-        covariance = torch.ones_like(depth)
+        depth_output = self.model["monodepth_model"].deepodo_inference(frame)
 
-        return IDepth.Output(
-            depth=depth,
-            disparity=None,
-            cov=covariance,
-            disparity_uncertainty=None
-            )
+        return depth_output
 
     def estimate_flowcov(self, frame_t1: CameraData, frame_t2: CameraData)-> IMatcher.Output:
         image_t1_left = frame_t1.imageL.to(self.config.device)

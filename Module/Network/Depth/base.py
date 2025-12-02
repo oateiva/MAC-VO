@@ -15,14 +15,13 @@ class DepthModelProtocol(Protocol):
     to be as untouched as possible.
     '''
 
-    def deepodo_inference(self, input: CameraData) -> IDepth:
+    def deepodo_initialize(self, config: Any) -> None:
+        ...
+
+    def deepodo_inference(self, input: CameraData) -> IDepth.Output:
         '''
         Custom depth inference method for deepodo models.
         This method serves as a bridge to maintain compatibility
         with the deepodo framework.
         '''
-        ...
-    def eval(self) -> None:
-        ...
-    def to(self, device: torch.device) -> None:
         ...
