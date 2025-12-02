@@ -28,23 +28,18 @@ import torch.nn as nn
 from huggingface_hub import PyTorchModelHubMixin
 from PIL import Image
 
-from Module.Network.Depth.DepthAnythingV3.src.depth_anything_3.cfg import create_object, load_config
-from Module.Network.Depth.DepthAnythingV3.src.depth_anything_3.registry import MODEL_REGISTRY
-from Module.Network.Depth.DepthAnythingV3.src.depth_anything_3.specs import Prediction
-from Module.Network.Depth.DepthAnythingV3.src.depth_anything_3.utils.export import export
-from Module.Network.Depth.DepthAnythingV3.src.depth_anything_3.utils.geometry import affine_inverse
-from Module.Network.Depth.DepthAnythingV3.src.depth_anything_3.utils.io.input_processor import InputProcessor
-from Module.Network.Depth.DepthAnythingV3.src.depth_anything_3.utils.io.output_processor import OutputProcessor
-from Module.Network.Depth.DepthAnythingV3.src.depth_anything_3.utils.logger import logger
-from Module.Network.Depth.DepthAnythingV3.src.depth_anything_3.utils.pose_align import align_poses_umeyama
-from Module.Network.Depth.DepthAnythingV3.src.depth_anything_3.utils.alignment import apply_metric_scaling
-
-from DataLoader import CameraData
-from Module.Frontend.StereoDepth import IDepth
+from depth_anything_3.cfg import create_object, load_config
+from depth_anything_3.registry import MODEL_REGISTRY
+from depth_anything_3.specs import Prediction
+from depth_anything_3.utils.export import export
+from depth_anything_3.utils.geometry import affine_inverse
+from depth_anything_3.utils.io.input_processor import InputProcessor
+from depth_anything_3.utils.io.output_processor import OutputProcessor
+from depth_anything_3.utils.logger import logger
+from depth_anything_3.utils.pose_align import align_poses_umeyama
 
 torch.backends.cudnn.benchmark = False
 # logger.info("CUDNN Benchmark Disabled")
-import torchvision.transforms as T
 
 SAFETENSORS_NAME = "model.safetensors"
 CONFIG_NAME = "config.json"
@@ -100,32 +95,6 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
 
         # Device management (set by user)
         self.device = None
-
-    def deepodo_initialize(self, config) -> None:
-        """
-        Initialize the model for deepodo framework compatibility.
-
-        Args:
-            config: Optional configuration dictionary (currently unused).
-        """
-        self.device = config.device if hasattr(config, 'device') else torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        weight_path = getattr(config, "weight", None)
-        if weight_path is None:
-            raise ValueError("`config.weight` must be set for DepthAnything3")
-        # Load a *temporary* pretrained instance
-        #    (this calls __init__ + loads weights)
-        pretrained = type(self).from_pretrained(weight_path)
-        # Copy weights into *this* instance
-        missing, unexpected = self.load_state_dict(
-            pretrained.state_dict(),
-            strict=False,
-        )
-        if missing or unexpected:
-            print(
-                f"While loading pretrained weights: missing={missing}, unexpected={unexpected}"
-            )
-        self.to(self.device)
-        return
 
     @torch.inference_mode()
     def forward(
@@ -288,58 +257,6 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
 
         return prediction
 
-    def deepodo_inference(self, input: CameraData) -> IDepth.Output:
-        """
-        Depth inference method for deepodo framework compatibility.
-
-        Args:
-            input: CameraData object containing images and camera parameters.
-        Returns:
-            IDepth object containing depth maps and camera parameters.
-        """
-        image = input.imageL  # Add batch dimension
-        intrinsics = input.K  # Add batch dimension
-
-        image, extrinsics, intrinsics = self._prepare_model_inputs(
-            imgs_cpu=image,
-            extrinsics=None,
-            intrinsics=intrinsics,
-        )
-
-        image = T.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225]
-        )(image)
-
-        prediction = self.forward(
-            image=image,
-            extrinsics=None,
-            intrinsics=intrinsics,
-            export_feat_layers=[],
-            infer_gs=False, # No need for Gaussian branch in standard depth inference
-        )
-
-        torch.cuda.synchronize(self.device)
-
-        depth = prediction.depth
-        covariance = prediction.depth_conf
-        # print min and max for depth conf
-        # print("Depth covariance - min:", covariance.min().item(), "max:", covariance.max().item())
-
-        scaled_depth = apply_metric_scaling(
-            torch.as_tensor(depth).to(device=self.device),
-            intrinsics=torch.as_tensor(intrinsics).to(device=self.device),
-            scale_factor=300.,
-        )
-
-        return IDepth.Output(
-            depth=scaled_depth,
-            disparity=None,
-            cov=covariance,
-            disparity_uncertainty=None
-            )
-
-
     def _preprocess_inputs(
         self,
         image: list[np.ndarray | Image.Image | str],
@@ -447,6 +364,7 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
             torch.cuda.synchronize(device)
         start_time = time.time()
         feat_layers = list(export_feat_layers) if export_feat_layers is not None else None
+        print("Image mean:", imgs.mean().item(), "Image std:", imgs.std().item())
         output = self.forward(imgs, ex_t, in_t, feat_layers, infer_gs)
         if need_sync:
             torch.cuda.synchronize(device)
