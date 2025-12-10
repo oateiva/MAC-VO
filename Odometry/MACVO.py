@@ -17,7 +17,6 @@ from Utility.PrettyPrint import Logger, GlobalConsole
 from Utility.Timer import Timer
 from Utility.Visualize import fig_plt
 from Utility.Extensions import ConfigTestable
-
 from .Interface import IOdometry
 
 T_SensorFrame = T.TypeVar("T_SensorFrame", bound=Frame)
@@ -299,7 +298,8 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
             "/world/macvo/cam_left/optical_flow",
             match01.flow[0].detach().permute(1, 2, 0))
         rr_plt.log_depth("/world/macvo/cam_left/depth", depth1.depth[0])
-        rr_plt.log_flow_covar("/world/macvo/cam_left/optical_flow_covar", match01.cov)
+        rr_plt.log_covariance("/world/macvo/cam_left/optical_flow_covar", match01.cov)
+        rr_plt.log_covariance("/world/macvo/cam_left/depth_covar", depth1.cov)
         fig_plt.plot_imatcher("matching", match01, frame0, frame1)
         fig_plt.plot_istereo ("stereo_d", depth1 , frame1)
         fig_plt.plot_macvo   ("macvo_kp", match_obs, depth1, match01, frame0, frame1)
