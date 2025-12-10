@@ -180,14 +180,18 @@ class Rerun_Visualizer:
 
     @register
     @staticmethod
-    def log_flow_covar(rerun_path: str, flow_cov: torch.Tensor):
+    def log_covariance(rerun_path: str, covariance: torch.Tensor):
         assert rr is not None
-        # To visualize the covariance of the optical flow, we compute the determinant of the covariance matrix
-        # and take the logarithm to enhance visibility. The determinant gives a measure of the uncertainty
-        # associated with the flow vectors.
-        # We then use a colormap to represent the uncertainty visually.
-        flow_cov_det = (flow_cov[:, 0] * flow_cov[:, 1] - flow_cov[:, 2].square())[0].log10()
-        rr.log(rerun_path, rr.DepthImage(flow_cov_det, colormap=4))
+        # If the flow covariance has two channels (e.g., shape [H, W, 2]), visualize each channel separately
+        if covariance.ndim == 4 and covariance.shape[1] > 1:
+            # To visualize the covariance of the optical flow, we compute the determinant of the covariance matrix
+            # and take the logarithm to enhance visibility. The determinant gives a measure of the uncertainty
+            # associated with the flow vectors.
+            # We then use a colormap to represent the uncertainty visually.
+            flow_cov_det = (covariance[:, 0] * covariance[:, 1] - covariance[:, 2].square())[0].log10()
+            rr.log(rerun_path, rr.DepthImage(flow_cov_det, colormap=4))
+        if covariance.ndim == 4 and covariance.shape[1] == 1:
+            rr.log(rerun_path, rr.DepthImage(covariance, colormap=4))
 
     @register
     @staticmethod
