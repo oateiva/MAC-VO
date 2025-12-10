@@ -6,6 +6,7 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
+        is_stereo: true
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -16,7 +17,7 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-
+        is_stereo: true
         compressed: false
 -   type: TartanAir_NoIMU
     name: amusement
@@ -26,7 +27,7 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-
+        is_stereo: true
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -37,7 +38,7 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-
+        is_stereo: true
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -48,7 +49,7 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-
+        is_stereo: true
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -59,7 +60,7 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-
+        is_stereo: true
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -70,7 +71,7 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-
+        is_stereo: true
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -81,7 +82,7 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-
+        is_stereo: true
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -92,7 +93,7 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-
+        is_stereo: true
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -103,7 +104,7 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-
+        is_stereo: true
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -114,7 +115,7 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-
+        is_stereo: true
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -125,7 +126,7 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-
+        is_stereo: true
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -136,7 +137,7 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-
+        is_stereo: true
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -147,7 +148,7 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-
+        is_stereo: true
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -158,5 +159,5 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-
+        is_stereo: true
         compressed: false

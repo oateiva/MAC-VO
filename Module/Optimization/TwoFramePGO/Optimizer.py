@@ -6,7 +6,7 @@ from pypose.optim import LM
 from pypose.optim.corrector import FastTriggs
 from pypose.optim.kernel import Huber
 from pypose.optim.scheduler import StopOnPlateau
-from pypose.optim.solver import PINV
+from pypose.optim.solver import PINV, Cholesky
 from pypose.optim.strategy import TrustRegion
 
 from Module.Map import VisualMap
@@ -90,10 +90,15 @@ class TwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
             else:
                 optimizer = LM(graph, min=1e-6, **context["optimizer_cfg"])
 
-            scheduler = StopOnPlateau(optimizer, steps=10, patience=2, decreasing=1e-5, verbose=False)
+            scheduler = StopOnPlateau(optimizer, steps=10, patience=2, decreasing=1e-5, verbose=True)
 
             while scheduler.continual():
                 # Compute weight matrix from graph covariance
+                covariance_array = graph.covariance_array().to(context["device"]).double()
+                #max and min values
+                print("Max depth covariance:", covariance_array.max().item())
+                print("Min depth covariance:", covariance_array.min().item())
+
                 weight = torch.block_diag(*(
                     torch.pinverse(graph.covariance_array().to(context["device"]).double())
                 ))
@@ -210,10 +215,10 @@ class MonoTwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
 
         return {
             "optimizer_cfg": {
-                "kernel"   : Huber(delta=0.1),
+                "kernel"   : None,
                 "solver"   : PINV(),
-                "strategy" : TrustRegion(radius=1e3),
-                "corrector": FastTriggs(Huber(delta=0.1)),
+                "strategy" : TrustRegion(radius=500),
+                "corrector": None,
                 "vectorize": config.vectorize,
             },
             "device": config.device,
@@ -233,11 +238,14 @@ class MonoTwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
             else:
                 optimizer = LM(graph, min=1e-6, **context["optimizer_cfg"])
 
-            scheduler = StopOnPlateau(optimizer, steps=10, patience=2, decreasing=1e-5, verbose=False)
+            scheduler = StopOnPlateau(optimizer, steps=30, patience=10, decreasing=1e-5, verbose=True)
 
             while scheduler.continual():
+                cov_array = graph.covariance_array().to(context["device"]).double()
+                covariance_array = torch.eye(3, device=cov_array.device)
+                covariance_array = covariance_array.unsqueeze(0).repeat(cov_array.size(0), 1, 1)
                 weight = torch.block_diag(*(
-                    torch.pinverse(graph.covariance_array().to(context["device"]).double())
+                    torch.pinverse(covariance_array.double())
                 ))
                 loss = optimizer.step(input=(), weight=weight)
                 scheduler.step(loss)

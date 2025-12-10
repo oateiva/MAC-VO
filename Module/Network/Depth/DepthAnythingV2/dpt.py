@@ -207,7 +207,9 @@ class DepthAnythingV2(nn.Module):
         image = input.imageL.to(self.device)
         depth_map = self.forward(image)
         depth_map = depth_map.unsqueeze(0) # Add batch dimension
-        covariance = torch.ones_like(depth_map)
+        # Higher depth means higher uncertainty
+        # TODO: better covariance estimation
+        covariance = depth_map * 0.1
         return IDepth.Output(
             depth=depth_map,
             disparity=None,

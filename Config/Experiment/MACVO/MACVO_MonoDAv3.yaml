@@ -25,7 +25,7 @@ Odometry:
     # e.g. those rely on PWC-Net, only support running on cuda device.
     device: *device
     edgewidth: 32
-    num_point: 200 # Upper bound of KPs in each frame
+    num_point: 1000 # Upper bound of KPs in each frame
 
     # Match covariance for keypoint on first observation (sub-pixel uncertainty
     # caused by the quantized pixel)
@@ -44,7 +44,7 @@ Odometry:
         device: *device
         kernel_size: 31
         match_cov_default: 0.25
-        min_depth_cov: 0.05
+        min_depth_cov: 0.01
         min_flow_cov: 0.25
 
   keypoint:
@@ -55,7 +55,7 @@ Odometry:
       mask_width: 32
       max_match_cov: 100.
       max_depth: 20.0
-      max_depth_cov: 3.
+      max_depth_cov: 1.
 
   mappoint:
     # Mapping feature can be conveniently turn off by using
@@ -64,7 +64,7 @@ Odometry:
     args:
       device: *device
       max_depth: 20.0
-      max_depth_cov: 3.0
+      max_depth_cov: 1.0
       mask_width: 32
 
   frontend:
@@ -107,7 +107,7 @@ Odometry:
       device: cpu
       vectorize: true
       parallel: true
-      graph_type: disp
+      graph_type: icp
       autodiff: false
 
 Datas: !include ../Common/DeepODO_experiments.yaml

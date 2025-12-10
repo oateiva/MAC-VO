@@ -6,16 +6,15 @@
     gtDepth: false
     gtFlow: false
     gtPose: true
-    is_stereo: false
+    is_stereo: true
     navigation_names: [plane_nose]
     sequence_camera_names: [left, right]
-
     compressed: true
 
 - type: EIVA_NoIMU
-  name: plane_mid2
+  name: plane_mid
   args:
-    root: D:\Datasets\EIVA\plane_mid2
+    root: D:\Datasets\EIVA\plane_mid
     # Controls optional data sources
     gtDepth: false
     gtFlow: false
@@ -23,7 +22,17 @@
     is_stereo: true
     navigation_names: [plane_mid]
     sequence_camera_names: [left, right]
+    compressed: true
 
+- type: EIVA_NoIMU
+  name: plane_tail1
+  args:
+    root: D:\Datasets\EIVA\Voyis\plane_tail1
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: true
+    is_stereo: true
     compressed: true
 
 - type: EIVA_NoIMU
@@ -35,42 +44,30 @@
     gtFlow: false
     gtPose: true
     is_stereo: true
-
     compressed: true
 
 
-- type: EIVA_NoIMU
-  name: Holtec
-  args:
-    root: D:\Datasets\mac-vio\Holtec\Holtec_20250314T135422
-    # Controls optional data sources
-    gtDepth: false
-    gtFlow: false
-    gtPose: true
+# - type: EIVA_NoIMU
+#   name: long_ladder
+#   args:
+#     root: D:\Datasets\EIVA\Voyis\long ladder scan
+#     # Controls optional data sources
+#     gtDepth: false
+#     gtFlow: false
+#     gtPose: true
+#     is_stereo: true
+#     compressed: true
 
-    compressed: true
-
-- type: EIVA_NoIMU
-  name: long_ladder
-  args:
-    root: D:\Datasets\EIVA\Voyis\long ladder scan
-    # Controls optional data sources
-    gtDepth: false
-    gtFlow: false
-    gtPose: true
-
-    compressed: true
-
-- type: EIVA_NoIMU
-  name: abf001
-  args:
-    root: D:\Datasets\mac-vio\OREC_CPS\OREC_CPS
-    # Controls optional data sources
-    gtDepth: false
-    gtFlow: false
-    gtPose: true
-
-    compressed: true
+# - type: EIVA_NoIMU
+#   name: abf001
+#   args:
+#     root: D:\Datasets\mac-vio\OREC_CPS\OREC_CPS
+#     # Controls optional data sources
+#     gtDepth: false
+#     gtFlow: false
+#     gtPose: true
+#     is_stereo: true
+#     compressed: true
 
 - type: EIVA_NoIMU
   name: Welland
@@ -80,5 +77,5 @@
     gtDepth: false
     gtFlow: false
     gtPose: true
-
+    is_stereo: true
     compressed: true
