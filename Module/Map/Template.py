@@ -4,11 +4,11 @@ from .Graph import TensorBundle, AutoScalingBundle
 # Define storage of interest
 FrameFeature = T.Literal[
     "K",            # Nx3x3 , dtype=float32
-    "baseline",     # Nx1   , dtype=float32
+    "baseline",     # N     , dtype=float32
     "pose",         # Nx7   , dtype=float32, pose of sensor under world frame.
     "T_BS",         # Nx7   , dtype=float32, body-to-sensor SE3 transformation.
-    "need_interp",  # Nx1   , dtype=bool
-    "time_ns"       # Nx1   , dtype=long
+    "need_interp",  # N     , dtype=bool
+    "time_ns"       # N     , dtype=long
 ]
 MatchingFeature = T.Literal[
     "pixel1_uv",    # Nx2   , dtype=float32
