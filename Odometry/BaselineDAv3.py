@@ -61,11 +61,9 @@ class DepthAnythingV3(IOdometry[Frame]):
 
         H = torch.eye(4, device=extrinsics_SE3.device)
         H = H.unsqueeze(0).repeat(extrinsics_SE3.size(1), 1, 1).unsqueeze(0)
-        H[:, :4, :3] = extrinsics_SE3
+        H[:, :, :3, :4] = extrinsics_SE3
 
         if frame.idx[0] == 0 :
-            print(frame.idx[0])
-            print(frame.idx[-1])
             r = range(frame.idx[0],frame.idx[-1])
             for i in range(frame.idx[0],frame.idx[-1]+1):
                 pp_from_matrix = pp.from_matrix(H[:, i, :, :], ltype=pp.SE3_type)
@@ -73,7 +71,7 @@ class DepthAnythingV3(IOdometry[Frame]):
                 pp_tensor = pp_from_matrix.tensor()
                 self.absolute_poses[i] = pp_tensor
         else:
-            prev_pose = self.absolute_poses[frame.idx[0]-1]
+            prev_pose = self.absolute_poses[frame.idx[0]]
             j=0
             for i in range(frame.idx[0],frame.idx[-1]+1):
                 prev_pose_matrix = pp.SE3(prev_pose).matrix()
@@ -84,17 +82,6 @@ class DepthAnythingV3(IOdometry[Frame]):
                 self.absolute_poses[i] = pp_tensor
                 j+=1
 
-        # quat = roma.rotmat_to_unitquat(H_sum[0, :3, :3])
-        # t = H_sum[0, :3, 3]
-        # pose = torch.cat([t, quat], dim=-1).unsqueeze(0)
-
-        # self.map.frames.push(FrameNode.init({
-        #     "pose": pose,
-        #     "T_BS": frame.camera.T_BS,
-        #     "K"   : frame.camera.K,
-        #     "need_interp": torch.tensor([False], dtype=torch.bool),
-        #     "time_ns"    : torch.tensor([frame.camera.frame_ns], dtype=torch.long),
-        # }))
 
         torch.cuda.empty_cache()
 
