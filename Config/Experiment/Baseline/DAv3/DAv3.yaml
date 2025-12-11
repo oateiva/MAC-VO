@@ -1,0 +1,7 @@
+Odometry:
+  name: DepthAnythingV3
+  args:
+    weight_file: depth-anything/DA3NESTED-GIANT-LARGE
+
+Datas: !include ../../Common/DeepODO_mono_experiments.yaml
+Preprocess: !include ../../Common/Preprocess.yaml

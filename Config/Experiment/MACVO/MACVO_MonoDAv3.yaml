@@ -110,5 +110,5 @@ Odometry:
       graph_type: icp
       autodiff: false
 
-Datas: !include ../Common/DeepODO_experiments.yaml
+Datas: !include ../Common/DeepODO_stereo_experiments.yaml
 Preprocess: !include ../Common/Preprocess.yaml
