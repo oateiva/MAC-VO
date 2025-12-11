@@ -157,13 +157,14 @@ class EIVASequence(SequenceBase[Frame]):
 
         self.is_stereo = cfg.is_stereo
         self.window_length = cfg.window_length if hasattr(cfg, "window_length") else 1
+        self.step_size = cfg.step_size if hasattr(cfg, "step_size") else 1
 
         # Loaders
-        self.lcam_loader = EIVAMonocularDataset(Path(cfg.root, "processed", "left"), window_length=self.window_length)
+        self.lcam_loader = EIVAMonocularDataset(Path(cfg.root, "processed", "left"), window_length=self.window_length, step_size=self.step_size)
 
         if self.is_stereo:
             self.baseline  = 0.17007674086397787
-            self.rcam_loader = EIVAMonocularDataset(Path(cfg.root, "processed", "right"), window_length=self.window_length)
+            self.rcam_loader = EIVAMonocularDataset(Path(cfg.root, "processed", "right"), window_length=self.window_length, step_size=self.step_size)
         else:
             self.rcam_loader = None
             self.baseline    = -1.
@@ -187,6 +188,7 @@ class EIVASequence(SequenceBase[Frame]):
 
     def __getitem__(self, local_index: int) -> Frame:
         index   = self.get_index(local_index)
+        index  = index + self.step_size if index is not 0 else index
         window_slice = slice(index, index + self.window_length)
         window_index_list = list(range(window_slice.start, window_slice.stop, window_slice.step or 1))
         # if self.gt_poses is not None:
@@ -256,9 +258,10 @@ class EIVAMonocularDataset(Dataset):
     Return the image in shape (1, 3, H, W) with dtype=float32
     and normalized (image in [0, 1])
     """
-    def __init__(self, directory: Path, window_length: int) -> None:
+    def __init__(self, directory: Path, window_length: int, step_size: int = 1) -> None:
         super().__init__()
         self.window_length = window_length
+        self.step_size = step_size
         self.directory = directory
         assert self.directory.exists(), f"Monocular image directory {self.directory} does not exist"
 
@@ -273,7 +276,7 @@ class EIVAMonocularDataset(Dataset):
         return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
     def __len__(self):
-        return self.length - self.window_length + 1
+        return int(self.length/self.step_size - self.window_length + 1)
 
     def __getitem__(self, index: int) -> torch.Tensor:
         # Output image tensor in shape of (N, C, H, W)
