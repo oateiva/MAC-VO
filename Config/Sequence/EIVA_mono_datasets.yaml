@@ -7,7 +7,8 @@
     gtFlow: false
     gtPose: true
     is_stereo: false
-    window_length: 3
+    window_length: 1
+    step_size: 1
     navigation_names: [plane_nose]
     sequence_camera_names: [left, right]
     compressed: true
@@ -21,7 +22,7 @@
     gtFlow: false
     gtPose: true
     is_stereo: false
-    window_length: 3
+    window_length: 1
     navigation_names: [plane_mid]
     sequence_camera_names: [left, right]
     compressed: true
@@ -34,7 +35,7 @@
     gtDepth: false
     gtFlow: false
     gtPose: true
-    window_length: 3
+    window_length: 1
     is_stereo: false
     compressed: true
 
@@ -46,34 +47,34 @@
     gtDepth: false
     gtFlow: false
     gtPose: true
-    window_length: 3
+    window_length: 1
     is_stereo: false
     compressed: true
 
 
-# - type: EIVA_NoIMU
-#   name: long_ladder
-#   args:
-#     root: D:\Datasets\EIVA\Voyis\long ladder scan
-#     # Controls optional data sources
-#     gtDepth: false
-#     gtFlow: false
-#     gtPose: true
-#     window_length: 3
-#     is_stereo: false
-#     compressed: true
+- type: EIVA_NoIMU
+  name: long_ladder
+  args:
+    root: D:\Datasets\EIVA\Voyis\long ladder scan
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: true
+    window_length: 1
+    is_stereo: false
+    compressed: true
 
-# - type: EIVA_NoIMU
-#   name: abf001
-#   args:
-#     root: D:\Datasets\mac-vio\OREC_CPS\OREC_CPS
-#     # Controls optional data sources
-#     gtDepth: false
-#     gtFlow: false
-#     gtPose: true
-#     window_length: 3
-#     is_stereo: false
-#     compressed: true
+- type: EIVA_NoIMU
+  name: abf001
+  args:
+    root: D:\Datasets\mac-vio\OREC_CPS\OREC_CPS
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: true
+    window_length: 1
+    is_stereo: false
+    compressed: true
 
 - type: EIVA_NoIMU
   name: Welland
@@ -83,6 +84,6 @@
     gtDepth: false
     gtFlow: false
     gtPose: true
-    window_length: 3
+    window_length: 1
     is_stereo: false
     compressed: true
