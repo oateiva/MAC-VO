@@ -322,7 +322,9 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         torch.cuda.synchronize(self.device)
 
         depth = prediction.depth
-        precision = prediction.depth_conf
+        # although we might use more than one frame to estimate depth, we only return the depth map for the first frame
+        depth = depth[:, 1:2, :, :]
+        precision = prediction.depth_conf[:, 1:2, :, :]
         variance = 1.0 / (precision + 1e-8)
         covariance = variance.sqrt()
         # covariance = prediction.depth_conf

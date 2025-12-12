@@ -402,8 +402,8 @@ class MonocularFrontend(IFrontend):
         return depth_output
 
     def estimate_flowcov(self, frame_t1: CameraData, frame_t2: CameraData)-> IMatcher.Output:
-        image_t1_left = frame_t1.imageL.to(self.config.device)
-        image_t2_left = frame_t2.imageL.to(self.config.device)
+        image_t1_left = frame_t1.imageL.to(self.config.device)[0:1,: , :, :]  # if window length >1, only use the first frame
+        image_t2_left = frame_t2.imageL.to(self.config.device)[0:1,: , :, :]  # if window length >1, only use the first frame
         est_flow, est_cov = self.model["flow_model"].inference(image_t1_left, image_t2_left)
 
         est_flow: torch.Tensor = est_flow.float()

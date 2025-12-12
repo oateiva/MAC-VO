@@ -234,7 +234,7 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
 
         # Record color of keypoints (for visualization) #################################
         kp0_uv_cpu = kp0_uv.cpu()
-        kp0_color  = frame0.camera.imageL[..., kp0_uv_cpu[..., 1], kp0_uv_cpu[..., 0]].squeeze(0).T
+        kp0_color  = frame0.camera.imageL[0:1, ..., kp0_uv_cpu[..., 1], kp0_uv_cpu[..., 0]].squeeze(0).T
         kp0_color  = (kp0_color * 255).to(torch.uint8)
 
         # Project from 2D -> 3D #########################################################
@@ -332,7 +332,7 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
             map0_Tc_cov = self.ObsCovModel.estimate(frame0.camera, map0_uv, depth0, map0_sigma_dd, map0_sigma_uv)
 
             map0_uv_cpu = map0_uv.cpu()
-            map0_color  = frame0.camera.imageL[..., map0_uv_cpu[..., 1], map0_uv_cpu[..., 0]].squeeze(0).T
+            map0_color  = frame0.camera.imageL[0:1,..., map0_uv_cpu[..., 1], map0_uv_cpu[..., 0]].squeeze(0).T
             map0_color  = (map0_color * 255).to(torch.uint8)
 
             num_map_orig  = len(self.graph.map_points)

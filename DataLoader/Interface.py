@@ -272,10 +272,15 @@ class DataFrame(Collatable):
     # Time in nanoseconds
     time_ns  : list[int]
 
+    camera: CameraData
+
     @property
     def frame_idx(self) -> int:
-        assert len(self.idx) == 1, "frame_idx property is only valid on unbatched data"
-        return self.idx[0]
+        if self.camera.is_stereo:
+            assert len(self.idx) == 1, "frame_idx property is only valid on unbatched data"
+            return self.idx[0]
+        else:
+            return self.idx[0]
 
     @property
     def frame_time_ns(self) -> int:
