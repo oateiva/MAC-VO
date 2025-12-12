@@ -155,7 +155,7 @@ class EIVASequence(SequenceBase[Frame]):
         self.height    = 2816
         # End
 
-        self.is_stereo = cfg.is_stereo
+        self.is_stereo = cfg.is_stereo if hasattr(cfg, "is_stereo") else True
         self.window_length = cfg.window_length if hasattr(cfg, "window_length") else 1
         self.step_size = cfg.step_size if hasattr(cfg, "step_size") else 1
 
@@ -188,7 +188,7 @@ class EIVASequence(SequenceBase[Frame]):
 
     def __getitem__(self, local_index: int) -> Frame:
         index   = self.get_index(local_index)
-        index  = index + self.step_size if index is not 0 else index
+        index  = index + self.step_size-1 if index != 0 else index
         window_slice = slice(index, index + self.window_length)
         window_index_list = list(range(window_slice.start, window_slice.stop, window_slice.step or 1))
         # if self.gt_poses is not None:
