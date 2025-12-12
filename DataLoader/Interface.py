@@ -66,7 +66,7 @@ class CameraData(Collatable):
     baseline: T.Optional[torch.Tensor] = None  # [B] or None
 
     # Sensor Data
-    images: T.List[torch.Tensor]     # mono: [L]; stereo: [L, R] of shape Bx3xHxW
+    images: T.List[torch.Tensor]     # mono: [L] BxNx3xHxW; stereo: [L, R] of shape Bx3xHxW
 
     # Label & Ground Truth
     gt_flow  : torch.Tensor | None = None    # torch.float32 of shape Bx2xHxW
@@ -148,9 +148,9 @@ class CameraData(Collatable):
                    images=[imageL, imageR], baseline=baseline, **kwargs)
 
     @classmethod
-    def from_mono(cls, *, T_BS, K, time_ns, height, width, image, **kwargs):
+    def from_mono(cls, *, T_BS, K, time_ns, height, width, images, **kwargs):
         return cls(T_BS=T_BS, K=K, time_ns=time_ns, height=height, width=width,
-                   images=[image], **kwargs)
+                   images=[images], **kwargs)
 
 # @dataclass(kw_only=True)
 # class StereoData(Collatable):

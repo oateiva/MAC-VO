@@ -1,3 +1,0 @@
-!flatten_seq
-- !include ../../Sequence/TartanAir_sample_dataset.yaml
-- !include ../../Sequence/EIVA_datasets.yaml

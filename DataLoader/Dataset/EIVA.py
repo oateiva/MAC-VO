@@ -155,14 +155,16 @@ class EIVASequence(SequenceBase[Frame]):
         self.height    = 2816
         # End
 
-        self.is_stereo = cfg.is_stereo
+        self.is_stereo = cfg.is_stereo if hasattr(cfg, "is_stereo") else True
+        self.window_length = cfg.window_length if hasattr(cfg, "window_length") else 1
+        self.step_size = cfg.step_size if hasattr(cfg, "step_size") else 1
 
         # Loaders
-        self.lcam_loader = EIVAMonocularDataset(Path(cfg.root, "processed", "left"))
+        self.lcam_loader = EIVAMonocularDataset(Path(cfg.root, "processed", "left"), window_length=self.window_length, step_size=self.step_size)
 
         if self.is_stereo:
             self.baseline  = 0.17007674086397787
-            self.rcam_loader = EIVAMonocularDataset(Path(cfg.root, "processed", "right"))
+            self.rcam_loader = EIVAMonocularDataset(Path(cfg.root, "processed", "right"), window_length=self.window_length, step_size=self.step_size)
         else:
             self.rcam_loader = None
             self.baseline    = -1.
@@ -186,10 +188,19 @@ class EIVASequence(SequenceBase[Frame]):
 
     def __getitem__(self, local_index: int) -> Frame:
         index   = self.get_index(local_index)
+        index  = index + self.step_size-1 if index != 0 else index
+        window_slice = slice(index, index + self.window_length)
+        window_index_list = list(range(window_slice.start, window_slice.stop, window_slice.step or 1))
+        # if self.gt_poses is not None:
+        #     gt_pose = self.gt_poses[window_slice]
+        #     if gt_pose.ndim == 1:
+        #         gt_pose = gt_pose.unsqueeze(0)
+        # else:
+        #     gt_pose = None
 
         if self.is_stereo is True:
             return Frame(
-                idx=[local_index],
+                idx=window_index_list,
                 camera=CameraData.from_stereo(
                     T_BS      = self.lcam_T_BS,
                     K         = self.lcam_K,
@@ -210,7 +221,7 @@ class EIVASequence(SequenceBase[Frame]):
             )
         else:
             return Frame(
-                idx=[local_index],
+                idx=window_index_list,
                 camera=CameraData.from_mono(
                     T_BS      = self.lcam_T_BS,
                     K         = self.lcam_K,
@@ -218,7 +229,7 @@ class EIVASequence(SequenceBase[Frame]):
                     time_ns   = [self.lcam_time[index]],
                     height    = 2816,
                     width     = 2816,
-                    image    = self.lcam_loader[index],
+                    images    = self.lcam_loader[index],
                     # Ground truth and labels
                     gt_depth  = None,
                     gt_flow   = None,
@@ -247,8 +258,10 @@ class EIVAMonocularDataset(Dataset):
     Return the image in shape (1, 3, H, W) with dtype=float32
     and normalized (image in [0, 1])
     """
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, window_length: int, step_size: int = 1) -> None:
         super().__init__()
+        self.window_length = window_length
+        self.step_size = step_size
         self.directory = directory
         assert self.directory.exists(), f"Monocular image directory {self.directory} does not exist"
 
@@ -263,13 +276,17 @@ class EIVAMonocularDataset(Dataset):
         return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
     def __len__(self):
-        return self.length
+        return int(self.length/self.step_size - self.window_length + 1)
 
     def __getitem__(self, index: int) -> torch.Tensor:
-        # Output image tensor in shape of (1, C, H, W)
-        result = self.load_png_format(self.file_names[index])
-        result = torch.tensor(result, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0)
-        result /= 255.
+        # Output image tensor in shape of (N, C, H, W)
+        result = []
+        for i in range(self.window_length):
+             img = self.load_png_format(self.file_names[index])
+             img_tensor = torch.tensor(img, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0)
+             img_tensor /= 255.
+             result.append(img_tensor)
+        result = torch.cat(result, dim=0)  # (N, C, H, W)
 
         return result
 

@@ -6,7 +6,9 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -17,7 +19,9 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
         compressed: false
 -   type: TartanAir_NoIMU
     name: amusement
@@ -27,7 +31,9 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -38,7 +44,9 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -49,7 +57,9 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -60,7 +70,9 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -71,7 +83,9 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -82,7 +96,9 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -93,7 +109,9 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -104,7 +122,9 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -115,7 +135,9 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -126,7 +148,9 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -137,7 +161,9 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -148,7 +174,9 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
         compressed: false
 
 -   type: TartanAir_NoIMU
@@ -159,5 +187,7 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
         compressed: false

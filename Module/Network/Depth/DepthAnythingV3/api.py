@@ -322,7 +322,10 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         torch.cuda.synchronize(self.device)
 
         depth = prediction.depth
-        covariance = prediction.depth_conf
+        precision = prediction.depth_conf
+        variance = 1.0 / (precision + 1e-8)
+        covariance = variance.sqrt()
+        # covariance = prediction.depth_conf
         # print min and max for depth conf
         # print("Depth covariance - min:", covariance.min().item(), "max:", covariance.max().item())
 

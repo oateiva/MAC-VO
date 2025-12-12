@@ -92,9 +92,16 @@ class TartanAir_StereoSequence(SequenceBase[Frame]):
         self.height    = 480
         # End
 
+        self.is_stereo = cfg.is_stereo if hasattr(cfg, "is_stereo") else True
+        self.window_length = cfg.window_length if hasattr(cfg, "window_length") else 1
+        self.step_size = cfg.step_size if hasattr(cfg, "step_size") else 1
+
         # Stereo Loader
-        self.lcam_loader = TartanAirMonocularDataset(Path(cfg.root, "image_left"))
-        self.rcam_loader = TartanAirMonocularDataset(Path(cfg.root, "image_right"))
+        self.lcam_loader = TartanAirMonocularDataset(Path(cfg.root, "image_left"), self.window_length, self.step_size)
+        if self.is_stereo:
+            self.rcam_loader = TartanAirMonocularDataset(Path(cfg.root, "image_right"), self.window_length, self.step_size)
+        else:
+            self.rcam_loader = None
 
         cam_time_file_path = Path(cfg.root, "imu", "cam_time.npy")
         if cam_time_file_path.exists():
@@ -128,27 +135,52 @@ class TartanAir_StereoSequence(SequenceBase[Frame]):
 
     def __getitem__(self, local_index: int) -> Frame:
         index   = self.get_index(local_index)
-        gt_flow = self.flow_loader[index] if self.flow_loader else None
-        return Frame(
-            idx=[local_index],
-            camera = CameraData.from_stereo(
-                T_BS      = self.lcam_T_BS,
-                K         = self.lcam_K,
-                baseline  = torch.tensor([self.baseline]),
-                time_ns   = [self.lcam_time[index].item()],  # Fake data, assume 10Hz image
-                height    = 480,
-                width     = 640,
-                imageL    = self.lcam_loader[index],
-                imageR    = self.rcam_loader[index],
+        index  = index + self.step_size-1 if index != 0 else index
+        window_slice = slice(index, index + self.window_length)
+        window_index_list = list(range(window_slice.start, window_slice.stop, window_slice.step or 1))
 
-                # Ground truth and labels
-                gt_depth  = self.depth_loader[index] if self.depth_loader else None,
-                gt_flow   = gt_flow[0] if gt_flow else None,
-                flow_mask = gt_flow[1] if gt_flow else None,
-            ),
-            time_ns   = [self.lcam_time[index].item()],  # Fake data, assume 10Hz image
-            gt_pose   = cast(pp.LieTensor, self.gt_poses[index].unsqueeze(0)) if (self.gt_poses is not None) else None,
-        )
+        gt_flow = self.flow_loader[index] if self.flow_loader else None
+
+        if self.is_stereo:
+            return Frame(
+                idx=window_index_list,
+                camera = CameraData.from_stereo(
+                    T_BS      = self.lcam_T_BS,
+                    K         = self.lcam_K,
+                    baseline  = torch.tensor([self.baseline]),
+                    time_ns   = [self.lcam_time[index].item()],  # Fake data, assume 10Hz image
+                    height    = 480,
+                    width     = 640,
+                    imageL    = self.lcam_loader[index],
+                    imageR    = self.rcam_loader[index],
+
+                    # Ground truth and labels
+                    gt_depth  = self.depth_loader[index] if self.depth_loader else None,
+                    gt_flow   = gt_flow[0] if gt_flow else None,
+                    flow_mask = gt_flow[1] if gt_flow else None,
+                ),
+                time_ns   = [self.lcam_time[index].item()],  # Fake data, assume 10Hz image
+                gt_pose   = cast(pp.LieTensor, self.gt_poses[index].unsqueeze(0)) if (self.gt_poses is not None) else None,
+            )
+        else:
+            return Frame(
+                idx=window_index_list,
+                camera = CameraData.from_mono(
+                    T_BS      = self.lcam_T_BS,
+                    K         = self.lcam_K,
+                    time_ns   = [self.lcam_time[index].item()],  # Fake data, assume 10Hz image
+                    height    = 480,
+                    width     = 640,
+                    images     = self.lcam_loader[index],
+                    baseline  = torch.tensor([self.baseline]),
+                    # Ground truth and labels
+                    gt_depth  = self.depth_loader[index] if self.depth_loader else None,
+                    gt_flow   = gt_flow[0] if gt_flow else None,
+                    flow_mask = gt_flow[1] if gt_flow else None,
+                ),
+                time_ns   = [self.lcam_time[index].item()],  # Fake data, assume 10Hz image
+                gt_pose   = cast(pp.LieTensor, self.gt_poses[index].unsqueeze(0)) if (self.gt_poses is not None) else None,
+            )
 
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
@@ -169,8 +201,10 @@ class TartanAirMonocularDataset(Dataset):
     Return the image in shape (1, 3, H, W) with dtype=float32
     and normalized (image in [0, 1])
     """
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, window_length: int, step_size: int = 1) -> None:
         super().__init__()
+        self.window_length = window_length
+        self.step_size = step_size
         self.directory = directory
         assert self.directory.exists(), f"Monocular image directory {self.directory} does not exist"
 
@@ -185,13 +219,17 @@ class TartanAirMonocularDataset(Dataset):
         return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
     def __len__(self):
-        return self.length
+        return int(self.length/self.step_size - self.window_length + 1)
 
     def __getitem__(self, index: int) -> torch.Tensor:
-        # Output image tensor in shape of (1, C, H, W)
-        result = self.load_png_format(self.file_names[index])
-        result = torch.tensor(result, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0)
-        result /= 255.
+        # Output image tensor in shape of (N, C, H, W)
+        result = []
+        for i in range(self.window_length):
+             img = self.load_png_format(self.file_names[index])
+             img_tensor = torch.tensor(img, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0)
+             img_tensor /= 255.
+             result.append(img_tensor)
+        result = torch.cat(result, dim=0)  # (N, C, H, W)
 
         return result
 

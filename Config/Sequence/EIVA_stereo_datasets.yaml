@@ -1,0 +1,81 @@
+- type: EIVA_NoIMU
+  name: plane_nose
+  args:
+    root: D:\Datasets\EIVA\plane_nose
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: true
+    is_stereo: true
+    navigation_names: [plane_nose]
+    sequence_camera_names: [left, right]
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: plane_mid
+  args:
+    root: D:\Datasets\EIVA\plane_mid
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: true
+    is_stereo: true
+    navigation_names: [plane_mid]
+    sequence_camera_names: [left, right]
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: plane_tail1
+  args:
+    root: D:\Datasets\EIVA\Voyis\plane_tail1
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: true
+    is_stereo: true
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: plane_tail2
+  args:
+    root: D:\Datasets\EIVA\Voyis\plane_tail2
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: true
+    is_stereo: true
+    compressed: true
+
+
+# - type: EIVA_NoIMU
+#   name: long_ladder
+#   args:
+#     root: D:\Datasets\EIVA\Voyis\long ladder scan
+#     # Controls optional data sources
+#     gtDepth: false
+#     gtFlow: false
+#     gtPose: true
+#     is_stereo: true
+#     compressed: true
+
+# - type: EIVA_NoIMU
+#   name: abf001
+#   args:
+#     root: D:\Datasets\mac-vio\OREC_CPS\OREC_CPS
+#     # Controls optional data sources
+#     gtDepth: false
+#     gtFlow: false
+#     gtPose: true
+#     is_stereo: true
+#     compressed: true
+
+- type: EIVA_NoIMU
+  name: Welland
+  args:
+    root: D:\Datasets\EIVA\Voyis\Welland_test_first_dive
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: true
+    is_stereo: true
+    compressed: true

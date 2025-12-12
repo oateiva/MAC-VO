@@ -25,7 +25,7 @@ Odometry:
     # e.g. those rely on PWC-Net, only support running on cuda device.
     device: *device
     edgewidth: 32
-    num_point: 200 # Upper bound of KPs in each frame
+    num_point: 1000 # Upper bound of KPs in each frame
 
     # Match covariance for keypoint on first observation (sub-pixel uncertainty
     # caused by the quantized pixel)
@@ -113,8 +113,8 @@ Odometry:
       device: cpu
       vectorize: true
       parallel: true
-      graph_type: disp
-      autodiff: false
+      graph_type: icp
+      autodiff: true
 
-Datas: !include ../Common/DeepODO_experiments.yaml
+Datas: !include ../Common/DeepODO_stereo_experiments.yaml
 Preprocess: !include ../Common/Preprocess.yaml

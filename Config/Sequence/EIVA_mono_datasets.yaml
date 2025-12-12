@@ -7,23 +7,36 @@
     gtFlow: false
     gtPose: true
     is_stereo: false
+    window_length: 1
+    step_size: 1
     navigation_names: [plane_nose]
     sequence_camera_names: [left, right]
-
     compressed: true
 
 - type: EIVA_NoIMU
-  name: plane_mid2
+  name: plane_mid
   args:
-    root: D:\Datasets\EIVA\plane_mid2
+    root: D:\Datasets\EIVA\plane_mid
     # Controls optional data sources
     gtDepth: false
     gtFlow: false
     gtPose: true
-    is_stereo: true
+    is_stereo: false
+    window_length: 1
     navigation_names: [plane_mid]
     sequence_camera_names: [left, right]
+    compressed: true
 
+- type: EIVA_NoIMU
+  name: plane_tail1
+  args:
+    root: D:\Datasets\EIVA\Voyis\plane_tail1
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: true
+    window_length: 1
+    is_stereo: false
     compressed: true
 
 - type: EIVA_NoIMU
@@ -34,21 +47,10 @@
     gtDepth: false
     gtFlow: false
     gtPose: true
-    is_stereo: true
-
+    window_length: 1
+    is_stereo: false
     compressed: true
 
-
-- type: EIVA_NoIMU
-  name: Holtec
-  args:
-    root: D:\Datasets\mac-vio\Holtec\Holtec_20250314T135422
-    # Controls optional data sources
-    gtDepth: false
-    gtFlow: false
-    gtPose: true
-
-    compressed: true
 
 - type: EIVA_NoIMU
   name: long_ladder
@@ -58,7 +60,8 @@
     gtDepth: false
     gtFlow: false
     gtPose: true
-
+    window_length: 1
+    is_stereo: false
     compressed: true
 
 - type: EIVA_NoIMU
@@ -69,7 +72,8 @@
     gtDepth: false
     gtFlow: false
     gtPose: true
-
+    window_length: 1
+    is_stereo: false
     compressed: true
 
 - type: EIVA_NoIMU
@@ -80,5 +84,6 @@
     gtDepth: false
     gtFlow: false
     gtPose: true
-
+    window_length: 1
+    is_stereo: false
     compressed: true
