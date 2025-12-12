@@ -36,6 +36,8 @@ class DepthAnythingV3(IOdometry[Frame]):
     @torch.no_grad()
     @torch.inference_mode()
     def run(self, frame: Frame) -> None:
+        if len(frame.idx) == 1:
+            raise AssertionError("window length must be greater than 1 for odometry estimation")
         self.Ks.append(frame.camera.K)
         self.T_BSs.append(frame.camera.T_BS)
         self.Ts.append(frame.camera.frame_ns)
@@ -64,7 +66,6 @@ class DepthAnythingV3(IOdometry[Frame]):
         H[:, :, :3, :4] = extrinsics_SE3
 
         if frame.idx[0] == 0 :
-            r = range(frame.idx[0],frame.idx[-1])
             for i in range(frame.idx[0],frame.idx[-1]+1):
                 pp_from_matrix = pp.from_matrix(H[:, i, :, :], ltype=pp.SE3_type)
                 # pp_SE3 = pp.SE3(pp_from_matrix)
@@ -74,12 +75,26 @@ class DepthAnythingV3(IOdometry[Frame]):
             prev_pose = self.absolute_poses[frame.idx[0]]
             j=0
             for i in range(frame.idx[0],frame.idx[-1]+1):
+                ##### OPTION 1
                 prev_pose_matrix = pp.SE3(prev_pose).matrix()
                 current_pose_matrix = H[:, j, :, :]
                 curr_pose = prev_pose_matrix @ current_pose_matrix
                 pp_from_matrix = pp.from_matrix(curr_pose, ltype=pp.SE3_type)
                 pp_tensor = pp_from_matrix.tensor()
                 self.absolute_poses[i] = pp_tensor
+                ##### OPTION 2
+                # if j==0:
+                #     prev_pose = prev_pose
+                # else:
+                #     prev_pose = pp.from_matrix(H[:, j-1, :, :], ltype=pp.SE3_type).tensor()
+
+                # prev_pose_matrix = pp.SE3(prev_pose).matrix()
+                # current_pose_matrix = H[:, j, :, :]
+                # curr_pose = prev_pose_matrix @ current_pose_matrix
+                # pp_from_matrix = pp.from_matrix(curr_pose, ltype=pp.SE3_type)
+                # pp_tensor = pp_from_matrix.tensor()
+                # self.absolute_poses[i] = pp_tensor
+
                 j+=1
 
 
