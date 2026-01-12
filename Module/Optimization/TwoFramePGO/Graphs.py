@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from Module.Map import MatchObs, PointNode
 from Utility.Point import pixel2point_NED, point2pixel_NED
 from ..PyposeOptimizers import AnalyticModule, FactorGraph
-
+from typing import List,Optional
 
 @dataclass
 class GraphInput:
@@ -45,11 +45,13 @@ class ICP_TwoframePGO(FactorGraph):
         self.pts = graph_data.points
         self.obs = graph_data.observations
 
+        self.points_Tc: torch.Tensor
+        self.points_Tw: torch.Tensor
+
         self.register_buffer("K", graph_data.images_intrinsic)
         self.register_buffer("points_Tc",
             pixel2point_NED(self.obs.data["pixel2_uv"], self.obs.data["pixel2_d"].squeeze(-1), graph_data.images_intrinsic)
         )
-        self.points_Tc: torch.Tensor
         self.register_buffer("points_Tw", self.pts.data["pos_Tw"])
         self.register_buffer("obs_covTc", self.obs.data["obs2_covTc"])
         self.register_buffer("pts_covTw", self.pts.data["cov_Tw"])
@@ -382,3 +384,154 @@ class Analytic_ReprojDepth_TwoFramePGO(ReprojDepth_TwoFramePGO, AnalyticModule):
         # Final cleanup (guards against any remaining nan/inf)
         J = torch.nan_to_num(J, nan=0.0, posinf=0.0, neginf=0.0)
         return J
+
+############### GTSAM ISAM2 Optimization Backend
+import numpy as np
+import gtsam
+import json
+import os
+# from gtsam_unstable import PoseToPointFactor
+
+def skew(p):
+    return np.array([
+        [0.0, -p[2],  p[1]],
+        [p[2],  0.0, -p[0]],
+        [-p[1], p[0], 0.0]
+    ], dtype=np.float64)
+
+def convert_macvo_to_gtsam_coords(points):
+    """Convert MACVO points to GTSAM coordinates"""
+    gtsam_points = []
+    for pt in points:
+        pt_gtsam = np.array([pt[1], pt[2], pt[0]], dtype=np.float64).reshape(3,)
+        gtsam_points.append(pt_gtsam)
+    return gtsam_points
+
+def make_pose_to_point_factor(pose_key, landmark_key, obs_Tc_k_i, noise_model):
+    obs_Tc_k_i = np.asarray(obs_Tc_k_i, dtype=np.float64).reshape(3,)
+
+    keys = [pose_key, landmark_key]
+
+    def error_func(this_factor, values,  H: Optional[List[np.ndarray]]):
+        H_c: gtsam.Pose3 = values.atPose3(this_factor.keys()[0])
+        Tw_k_i: gtsam.Point3 = values.atPoint3(this_factor.keys()[1])
+
+        if H is not None:
+            H[0] = np.zeros((3, 6), dtype=np.float64)
+            H[1] = np.zeros((3, 3), dtype=np.float64)
+
+            pred_Tc_k_i = H_c.transformTo(Tw_k_i, H[0], H[1])
+
+        else:
+            pred_Tc_k_i = H_c.transformTo(Tw_k_i)  # (3,)
+
+        r = pred_Tc_k_i - obs_Tc_k_i  # (3,)
+        return r
+
+    return gtsam.CustomFactor(noise_model, keys, error_func)
+
+def pypose_to_pose3(se3: pp.SE3) -> gtsam.Pose3:
+    T = se3.matrix().detach().cpu().double().numpy()
+    if T.ndim == 3: T = T[0]
+    R = gtsam.Rot3(T[:3, :3])
+    t = gtsam.Point3(float(T[0, 3]), float(T[1, 3]), float(T[2, 3]))
+    return gtsam.Pose3(R, t)
+
+def pose3_to_pypose(p: gtsam.Pose3) -> pp.SE3:
+    T = torch.eye(4, dtype=torch.float64)
+    T[:3, :3] = torch.from_numpy(p.rotation().matrix())
+    T[:3, 3] = torch.tensor([p.x(), p.y(), p.z()], dtype=torch.float64)
+    return pp.from_matrix(T.unsqueeze(0), pp.SE3_type)
+
+def optimize_gtsam_lm(context: dict, graph_data: GraphInput):
+
+
+    # Graph parsing
+    idx = graph_data.edges_index.detach().cpu().long().numpy()
+    print("Max value in edges_index:", idx.max())
+
+    obs_Tc_1 = pixel2point_NED( # in camera frame at t
+        graph_data.observations.data["pixel1_uv"],
+        graph_data.observations.data["pixel1_d"].squeeze(-1),
+        graph_data.images_intrinsic
+    ).detach().cpu().double().numpy()
+
+    obs_Tc_2 = pixel2point_NED( # in camera frame at t+1
+        graph_data.observations.data["pixel2_uv"],
+        graph_data.observations.data["pixel2_d"].squeeze(-1),
+        graph_data.images_intrinsic
+    ).detach().cpu().double().numpy()
+
+    pts_Tw = graph_data.points.data["pos_Tw"].detach().cpu().double().numpy()  # (N,3) # in world frame?
+
+    obs1_covTc = graph_data.observations.data["obs1_covTc"].detach().cpu().double().numpy()  # (N,3,3)
+    obs2_covTc = graph_data.observations.data["obs2_covTc"].detach().cpu().double().numpy()  # (N,3,3)
+    pts_covTw = graph_data.points.data["cov_Tw"].detach().cpu().double().numpy() # (N,3,3)
+
+    # convert values to gtsam coords
+    obs_Tc1_gtsam = convert_macvo_to_gtsam_coords(obs_Tc_1)
+    obs_Tc2_gtsam = convert_macvo_to_gtsam_coords(obs_Tc_2)
+
+    # Build factor graph
+    # Prior: pose 1 at identity
+    graph = gtsam.NonlinearFactorGraph()
+    pose_1_key = gtsam.symbol('p', 1)
+    ini_estimate_noise = gtsam.noiseModel.Constrained.All(6)
+    graph.add(
+        gtsam.PriorFactorPose3(
+            pose_1_key,
+            gtsam.Pose3(),   # fixed at identity
+            ini_estimate_noise
+        ))
+    pose_2_key = gtsam.symbol('p', 2)
+    # Initial estimate: pose 1 at identity, pose 2 at init_motion
+    # Pose 1
+    initial_estimate = gtsam.Values()
+    P1 = gtsam.Pose3.Identity()
+    P2 = gtsam.Pose3.Identity()
+    initial_estimate.insert(pose_1_key, P1)
+    # Pose 2
+    initial_estimate.insert(pose_2_key, P2)
+
+    for i in range(len(obs_Tc1_gtsam)):
+        # Read observation and covariance
+        obs_Tc_1_i = obs_Tc1_gtsam[i]
+        obs_Tc_2_i = obs_Tc2_gtsam[i]
+        # cov_Tc_1_i = obs1_covTc_gtsam[i]
+        # cov_Tc_2_i = obs2_covTc_gtsam[i]
+
+        # Create noise model
+        # noise_model_1 = gtsam.noiseModel.Gaussian.Covariance(cov_Tc_1_i)
+        # noise_model_2 = gtsam.noiseModel.Gaussian.Covariance(cov_Tc_2_i)
+        noise_model_1 = gtsam.noiseModel.Isotropic.Sigma(3, 0.1)
+        noise_model_2 = gtsam.noiseModel.Isotropic.Sigma(3, 0.1)
+        hubert_noise_1 = gtsam.noiseModel.mEstimator.Huber.Create(0.1)
+        noise_model_1 = gtsam.noiseModel.Robust.Create(hubert_noise_1, noise_model_1)
+        noise_model_2 = gtsam.noiseModel.Robust.Create(hubert_noise_1, noise_model_2)
+        # Create landmark key
+        landmark_key = gtsam.symbol('l', i)
+        # Create factors
+        factor1 = make_pose_to_point_factor(pose_1_key, landmark_key, obs_Tc_1_i, noise_model_1)
+        factor2 = make_pose_to_point_factor(pose_2_key, landmark_key, obs_Tc_2_i, noise_model_2)
+        # factor1 = gtsam_unstable.PoseToPointFactor(pose_1_key, landmark_key, obs_Tc_1_i, noise_model_1)
+        # factor2 = gtsam_unstable.PoseToPointFactor(pose_2_key, landmark_key, obs_Tc_2_i, noise_model_2)
+        # Add factors to graph
+        graph.add(factor1)
+        graph.add(factor2)
+        # Add initial estimate for landmark
+        Pt_landmark = P1.transformFrom(obs_Tc_1_i)
+        initial_estimate.insert(landmark_key, Pt_landmark)
+
+    # Optimize the graph
+    params = gtsam.LevenbergMarquardtParams()
+    params.setVerbosityLM("SUMMARY")
+    # graph.print("Factor Graph:\n")
+    # initial_estimate.print("Initial Estimate:\n")
+    optimizer = gtsam.LevenbergMarquardtOptimizer(graph, initial_estimate, params)
+    result = optimizer.optimize()
+    # print("GTSAM optimization complete. Final Result:\n{}".format(estimate))
+
+    pose_2_opt = result.atPose3(pose_2_key)
+
+    motion_param = pp.Parameter(pose3_to_pypose(pose_2_opt))
+    return context, GraphOutput(motion=motion_param, frame_idx=graph_data.frame_idx, from_idx=graph_data.from_idx)

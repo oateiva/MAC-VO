@@ -18,6 +18,7 @@ from ..PyposeOptimizers import LM_analytic, AnalyticModule, FactorGraph
 from .Graphs import Analytic_ReprojDepth_TwoFramePGO, GraphInput, GraphOutput, ReprojDepth_TwoFramePGO
 from .Graphs import ICP_TwoframePGO, Reproj_TwoFramePGO, ReprojDisp_TwoFramePGO
 from .Graphs import Analytic_ICP_TwoframePGO, Analytic_Reproj_TwoFramePGO, Analytic_ReprojDisp_TwoFramePGO
+from .Graphs import optimize_gtsam_lm
 
 
 class TwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
@@ -188,6 +189,7 @@ class MonoTwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
         cls._enforce_config_spec(config, {
+            "solver_backend": lambda s: s in {"custom", "gtsam"},
             "graph_type": lambda s: s in {"icp", "reproj", "disp"},
             "device": lambda v: isinstance(v, str) and (v == "cpu" or "cuda" in v),
             "vectorize": lambda b: isinstance(b, bool),
@@ -222,12 +224,14 @@ class MonoTwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
                 "vectorize": config.vectorize,
             },
             "device": config.device,
-
-            "pose_graph_class": PoseGraphClass
+            "pose_graph_class": PoseGraphClass,
+            "solver_backend": config.solver_backend,
         }
 
     @staticmethod
     def _optimize(context: dict, graph_data: GraphInput) -> tuple[dict, GraphOutput]:
+        if context["solver_backend"] == "gtsam":
+            return optimize_gtsam_lm(context, graph_data)
         with Timer.CPUTimingContext("TwoframePGO"), Timer.GPUTimingContext("TwoframePGO", torch.cuda.current_stream()):
             graph: FactorGraph = context["pose_graph_class"](graph_data)\
                 .to(device=torch.device(context["device"]), dtype=torch.double)
