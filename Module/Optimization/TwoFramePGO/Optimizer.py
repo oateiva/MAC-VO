@@ -230,29 +230,31 @@ class MonoTwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
 
     @staticmethod
     def _optimize(context: dict, graph_data: GraphInput) -> tuple[dict, GraphOutput]:
-        if context["solver_backend"] == "gtsam":
-            return optimize_gtsam_lm(context, graph_data)
         with Timer.CPUTimingContext("TwoframePGO"), Timer.GPUTimingContext("TwoframePGO", torch.cuda.current_stream()):
             graph: FactorGraph = context["pose_graph_class"](graph_data)\
                 .to(device=torch.device(context["device"]), dtype=torch.double)
             assert isinstance(graph, FactorGraph)
 
-            if isinstance(graph, AnalyticModule):
-                optimizer = LM_analytic(graph, min=1e-6, **context["optimizer_cfg"])
+            if context["solver_backend"] == "gtsam":
+                context, graph_output = optimize_gtsam_lm(context, graph_data)
+                return context, graph_output
             else:
-                optimizer = LM(graph, min=1e-6, **context["optimizer_cfg"])
+                if isinstance(graph, AnalyticModule):
+                    optimizer = LM_analytic(graph, min=1e-6, **context["optimizer_cfg"])
+                else:
+                    optimizer = LM(graph, min=1e-6, **context["optimizer_cfg"])
 
-            scheduler = StopOnPlateau(optimizer, steps=30, patience=10, decreasing=1e-5, verbose=True)
+                scheduler = StopOnPlateau(optimizer, steps=30, patience=10, decreasing=1e-5, verbose=True)
 
-            while scheduler.continual():
-                cov_array = graph.covariance_array().to(context["device"]).double()
-                covariance_array = torch.eye(3, device=cov_array.device)
-                covariance_array = covariance_array.unsqueeze(0).repeat(cov_array.size(0), 1, 1)
-                weight = torch.block_diag(*(
-                    torch.pinverse(covariance_array.double())
-                ))
-                loss = optimizer.step(input=(), weight=weight)
-                scheduler.step(loss)
+                while scheduler.continual():
+                    cov_array = graph.covariance_array().to(context["device"]).double()
+                    covariance_array = torch.eye(3, device=cov_array.device)
+                    covariance_array = covariance_array.unsqueeze(0).repeat(cov_array.size(0), 1, 1)
+                    weight = torch.block_diag(*(
+                        torch.pinverse(covariance_array.double())
+                    ))
+                    loss = optimizer.step(input=(), weight=weight)
+                    scheduler.step(loss)
 
         return context, graph.write_back()
 

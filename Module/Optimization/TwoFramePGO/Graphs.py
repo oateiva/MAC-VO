@@ -7,7 +7,7 @@ from Module.Map import MatchObs, PointNode
 from Utility.Point import pixel2point_NED, point2pixel_NED
 from ..PyposeOptimizers import AnalyticModule, FactorGraph
 from typing import List,Optional
-
+import rerun as rr
 @dataclass
 class GraphInput:
     frame_idx         : torch.Tensor
@@ -440,11 +440,19 @@ def pypose_to_pose3(se3: pp.SE3) -> gtsam.Pose3:
 def pose3_to_pypose(p: gtsam.Pose3) -> pp.SE3:
     T = torch.eye(4, dtype=torch.float64)
     T[:3, :3] = torch.from_numpy(p.rotation().matrix())
-    T[:3, 3] = torch.tensor([p.x(), p.y(), p.z()], dtype=torch.float64)
-    return pp.from_matrix(T.unsqueeze(0), pp.SE3_type)
+    T[:3, 3] = torch.tensor([p.x(), p.y(), p.z()], dtype=torch.float)
+    T = T.to(dtype=torch.float)
+    T_SE3 = pp.from_matrix(T.unsqueeze(0), pp.SE3_type)
+    # # Permutation matrix to convert from GTSAM (X-forward, Y-left, Z-up) to MACVO NED (Z-down, X-forward, Y-right)
+    # P = torch.tensor([[0, 1, 0, 0],
+    #                   [0, 0, 1, 0],
+    #                   [1, 0, 0, 0],
+    #                   [0, 0, 0, 1]], dtype=torch.float)
+    # T_permuted = P @ T @ P.T
+    # T_SE3 = pp.from_matrix(T_permuted.unsqueeze(0), pp.SE3_type)
+    return T_SE3
 
 def optimize_gtsam_lm(context: dict, graph_data: GraphInput):
-
 
     # Graph parsing
     idx = graph_data.edges_index.detach().cpu().long().numpy()
@@ -469,30 +477,36 @@ def optimize_gtsam_lm(context: dict, graph_data: GraphInput):
     pts_covTw = graph_data.points.data["cov_Tw"].detach().cpu().double().numpy() # (N,3,3)
 
     # convert values to gtsam coords
-    obs_Tc1_gtsam = convert_macvo_to_gtsam_coords(obs_Tc_1)
-    obs_Tc2_gtsam = convert_macvo_to_gtsam_coords(obs_Tc_2)
+    obs_Tc1_gtsam = obs_Tc_1
+    obs_Tc2_gtsam = obs_Tc_2
+    # obs_Tc1_gtsam = convert_macvo_to_gtsam_coords(obs_Tc_1)
+    # obs_Tc2_gtsam = convert_macvo_to_gtsam_coords(obs_Tc_2)
 
     # Build factor graph
     # Prior: pose 1 at identity
     graph = gtsam.NonlinearFactorGraph()
     pose_1_key = gtsam.symbol('p', 1)
-    ini_estimate_noise = gtsam.noiseModel.Constrained.All(6)
-    graph.add(
-        gtsam.PriorFactorPose3(
-            pose_1_key,
-            gtsam.Pose3(),   # fixed at identity
-            ini_estimate_noise
-        ))
     pose_2_key = gtsam.symbol('p', 2)
     # Initial estimate: pose 1 at identity, pose 2 at init_motion
     # Pose 1
     initial_estimate = gtsam.Values()
     P1 = gtsam.Pose3.Identity()
     P2 = gtsam.Pose3.Identity()
+    init_pose = pypose_to_pose3(graph_data.init_motion)
+    P1 = init_pose
+    P2 = init_pose
     initial_estimate.insert(pose_1_key, P1)
+    ini_estimate_noise = gtsam.noiseModel.Constrained.All(6)
+    graph.add(
+        gtsam.PriorFactorPose3(
+            pose_1_key,
+            P1,   # fixed at identity
+            ini_estimate_noise
+        ))
     # Pose 2
     initial_estimate.insert(pose_2_key, P2)
 
+    landmark_keys = []
     for i in range(len(obs_Tc1_gtsam)):
         # Read observation and covariance
         obs_Tc_1_i = obs_Tc1_gtsam[i]
@@ -510,6 +524,7 @@ def optimize_gtsam_lm(context: dict, graph_data: GraphInput):
         noise_model_2 = gtsam.noiseModel.Robust.Create(hubert_noise_1, noise_model_2)
         # Create landmark key
         landmark_key = gtsam.symbol('l', i)
+        landmark_keys.append(landmark_key)
         # Create factors
         factor1 = make_pose_to_point_factor(pose_1_key, landmark_key, obs_Tc_1_i, noise_model_1)
         factor2 = make_pose_to_point_factor(pose_2_key, landmark_key, obs_Tc_2_i, noise_model_2)
@@ -531,7 +546,55 @@ def optimize_gtsam_lm(context: dict, graph_data: GraphInput):
     result = optimizer.optimize()
     # print("GTSAM optimization complete. Final Result:\n{}".format(estimate))
 
-    pose_2_opt = result.atPose3(pose_2_key)
+    pose_2 = result.atPose3(pose_2_key)
+    pose_2_q = pose_2.rotation().toQuaternion()
+    pose_2_t = pose_2.translation()
+    pose_2 = pose3_to_pypose(pose_2)
 
-    motion_param = pp.Parameter(pose3_to_pypose(pose_2_opt))
-    return context, GraphOutput(motion=motion_param, frame_idx=graph_data.frame_idx, from_idx=graph_data.from_idx)
+    # pose_0_to_1 = graph_data.init_motion
+    # pose_0_to_2 = pose_0_to_1 @ pose_1_to_2
+    pose_1 = result.atPose3(pose_1_key)
+    pose_1_q = pose_1.rotation().toQuaternion()
+    pose_1_t = pose_1.translation()
+    landmark_positions = [result.atPoint3(landmark_keys[i]) for i in range(len(landmark_keys))]
+
+
+    # rr.init("debug")
+    # rr.set_time_sequence("step", graph_data.from_idx)
+    from Utility.Visualize import rr_plt
+    rr.init("caca", spawn=True)
+    i = int(graph_data.from_idx.cpu().item())
+    rr.set_time("frame_idx", sequence=i)
+    # rr.log("world", rr.ViewCoordinates.RIGHT_HAND_Y_DOWN, static=True)
+    rr.log("/world/cam/{}".format(graph_data.from_idx.cpu().item()),
+            rr.Transform3D(
+                translation=pose_1_t,
+                quaternion=[pose_1_q.x(), pose_1_q.y(), pose_1_q.z(), pose_1_q.w()],
+                axis_length=1.0,
+            ))
+    K = np.array([[459.2732,   0.0000, 345.8487],
+                    [  0.0000, 459.2732, 349.7954],
+                    [  0.0000,   0.0000,   1.0000]])
+    rr.log(
+        "/world/cam/{}/points_i1".format(graph_data.from_idx.cpu().item()),
+        rr.Points3D(obs_Tc1_gtsam, colors=[255, 165, 0])
+        )
+    rr.log(
+        "/world/cam/{}/points_i2".format(graph_data.frame_idx.cpu().item()),
+        rr.Points3D(obs_Tc2_gtsam, colors=[255, 0, 0])
+        )
+
+    # rr.set_time_sequence("step", graph_data.frame_idx)
+    rr.log("/world/cam/{}".format(graph_data.frame_idx.cpu().item()),
+            rr.Transform3D(
+                translation=pose_2_t,
+                quaternion=[pose_2_q.x(), pose_2_q.y(), pose_2_q.z(), pose_2_q.w()],
+                axis_length=1.0
+            ))
+
+    rr.log(
+        "/world/optimized/{}/points".format(graph_data.frame_idx.cpu().item()),
+        rr.Points3D(landmark_positions, colors=[0, 255, 0])
+        )
+
+    return context, GraphOutput(motion=pose_2, frame_idx=graph_data.frame_idx, from_idx=graph_data.from_idx)
