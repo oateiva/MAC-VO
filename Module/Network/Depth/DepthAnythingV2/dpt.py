@@ -205,6 +205,8 @@ class DepthAnythingV2(nn.Module):
 
     def deepodo_inference(self, input: CameraData) -> IDepth.Output:
         image = input.imageL.to(self.device)
+        if image.shape[0] > 1:
+            image = image[:1]
         depth_map = self.forward(image)
         depth_map = depth_map.unsqueeze(0) # Add batch dimension
         # Higher depth means higher uncertainty
