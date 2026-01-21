@@ -2,15 +2,10 @@
 # This configuration is **not** used to report numbers in the paper.
 # To reproduce result in the paper, please use Paper_Reproduce.yaml
 #
+# MACVO-Performant generally performs better than Paper_Reproduce.yaml on outdoor scenes.
 #
-# MAC-VO Fast Mode (Jun 2025 Update)
-#   Comparing to the Performant mode (MACVO_Performant), the Fast Mode uses
-#   mixed-precision inference of fp32, fp16 and bf16. The fast mode can run
-#   at 12.5fps on 480x640 images on RTX Ada 6000 GPU, almost twice the speed
-#   as Performant Mode.
-#
-#   If minor degrade in accuracy (~5% increase in RTE and ROE) is acceptable,
-#   then you should use Fast Mode for most of the time.
+# MACVO-Performant can run at 6.5fps on RTX Ada 6000 GPU with image resolution of 480x640.
+# For 12.5fps speed with minute (~5%) increase in RTE & ROE, use MACVO_Fast.yaml
 #
 
 Common:
@@ -18,14 +13,14 @@ Common:
   device: &device cuda
 
 Odometry:
-  name: MACVO-DAv3
+  name: MACVO-gtsam-uncertainty
   args:
     # Device directive to the VO system
     # NOTE: the system may not follow this device config strictly since some module
     # e.g. those rely on PWC-Net, only support running on cuda device.
     device: *device
     edgewidth: 32
-    num_point: 1000 # Upper bound of KPs in each frame
+    num_point: 200 # Upper bound of KPs in each frame
 
     # Match covariance for keypoint on first observation (sub-pixel uncertainty
     # caused by the quantized pixel)
@@ -44,7 +39,7 @@ Odometry:
         device: *device
         kernel_size: 31
         match_cov_default: 0.25
-        min_depth_cov: 0.01
+        min_depth_cov: 0.05
         min_flow_cov: 0.25
 
   keypoint:
@@ -53,9 +48,9 @@ Odometry:
       device: *device
       kernel_size: 7
       mask_width: 32
-      max_match_cov: 100.
-      max_depth: 20.0
-      max_depth_cov: 1.
+      max_match_cov: 100.0
+      max_depth: 5.0
+      max_depth_cov: 0.005
 
   mappoint:
     # Mapping feature can be conveniently turn off by using
@@ -63,27 +58,19 @@ Odometry:
     type: MappingPointSelector
     args:
       device: *device
-      max_depth: 20.0
-      max_depth_cov: 1.0
+      max_depth: 5.0
+      max_depth_cov: 0.005
       mask_width: 32
 
   frontend:
-    type: MonocularFrontend
+    type: CUDAGraph_FlowFormerCovFrontend
     args:
       device: *device
+      weight: ./Model/MACVO_FrontendCov.pth
       enc_dtype: fp32
       dec_dtype: fp32
       decoder_depth: 12
       enforce_positive_disparity: false
-      flow:
-        weight: ./Model/MACVO_FrontendCov.pth
-      monodepth:
-        type: DepthAnythingV3
-        args:
-          model_name: da3nested-giant-large
-          weight: depth-anything/DA3NESTED-GIANT-LARGE
-          device: *device
-
 
   motion:
     type: StaticMotionModel
@@ -102,15 +89,14 @@ Odometry:
     args:
 
   optimizer:
-    type: MonoTwoFrame_PGO
+    type: TwoFrame_PGO
     args:
       device: cpu
       vectorize: true
       parallel: true
       graph_type: icp
-      autodiff: false
+      autodiff: true
       solver_backend: gtsam # Options: "custom", "gtsam"
 
-
-Datas: !include ../Common/DeepODO_mono_experiments.yaml
+Datas: !include ../Common/DeepODO_stereo_experiments.yaml
 Preprocess: !include ../Common/Preprocess.yaml

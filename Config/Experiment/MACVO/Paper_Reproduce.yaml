@@ -107,6 +107,7 @@ Odometry:
       parallel: true
       graph_type: icp
       autodiff: true
+      solver_backend: custom # Options: "custom", "gtsam"
 
 Data: !include ../Common/EvaluationDataset.yaml
 Preprocess: !include ../Common/Preprocess.yaml
