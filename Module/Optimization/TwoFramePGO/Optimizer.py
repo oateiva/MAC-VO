@@ -75,8 +75,8 @@ class TwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
                 "vectorize": config.vectorize,
             },
             "device": config.device,
-
-            "pose_graph_class": PoseGraphClass
+            "pose_graph_class": PoseGraphClass,
+            "solver_backend": config.solver_backend,
         }
 
     @staticmethod
@@ -85,26 +85,29 @@ class TwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
             graph: FactorGraph = context["pose_graph_class"](graph_data)\
                 .to(device=torch.device(context["device"]), dtype=torch.double)
             assert isinstance(graph, FactorGraph)
-
-            if isinstance(graph, AnalyticModule):
-                optimizer = LM_analytic(graph, min=1e-6, **context["optimizer_cfg"])
+            if context["solver_backend"] == "gtsam":
+                context, graph_output = optimize_gtsam_lm(context, graph_data)
+                return context, graph_output
             else:
-                optimizer = LM(graph, min=1e-6, **context["optimizer_cfg"])
+                if isinstance(graph, AnalyticModule):
+                    optimizer = LM_analytic(graph, min=1e-6, **context["optimizer_cfg"])
+                else:
+                    optimizer = LM(graph, min=1e-6, **context["optimizer_cfg"])
 
-            scheduler = StopOnPlateau(optimizer, steps=10, patience=2, decreasing=1e-5, verbose=True)
+                scheduler = StopOnPlateau(optimizer, steps=10, patience=2, decreasing=1e-5, verbose=True)
 
-            while scheduler.continual():
-                # Compute weight matrix from graph covariance
-                covariance_array = graph.covariance_array().to(context["device"]).double()
-                #max and min values
-                print("Max depth covariance:", covariance_array.max().item())
-                print("Min depth covariance:", covariance_array.min().item())
+                while scheduler.continual():
+                    # Compute weight matrix from graph covariance
+                    covariance_array = graph.covariance_array().to(context["device"]).double()
+                    #max and min values
+                    print("Max depth covariance:", covariance_array.max().item())
+                    print("Min depth covariance:", covariance_array.min().item())
 
-                weight = torch.block_diag(*(
-                    torch.pinverse(graph.covariance_array().to(context["device"]).double())
-                ))
-                loss = optimizer.step(input=(), weight=weight)
-                scheduler.step(loss)
+                    weight = torch.block_diag(*(
+                        torch.pinverse(graph.covariance_array().to(context["device"]).double())
+                    ))
+                    loss = optimizer.step(input=(), weight=weight)
+                    scheduler.step(loss)
 
         return context, graph.write_back()
 

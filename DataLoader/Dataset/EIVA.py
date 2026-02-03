@@ -171,7 +171,7 @@ class EIVASequence(SequenceBase[Frame]):
 
         cam_time_file_path = Path(cfg.root, "processed", "left")
         # list all files in dir
-        cam_files = list(cam_time_file_path.glob("*.jpg"))
+        cam_files = list(cam_time_file_path.glob("*.jpg")) + list(cam_time_file_path.glob("*.png"))
         cam_files.sort()
         self.lcam_time = [zephyr_filename_to_ns(f.name) for f in cam_files]
 

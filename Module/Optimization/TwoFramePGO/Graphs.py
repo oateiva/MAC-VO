@@ -482,6 +482,28 @@ def optimize_gtsam_lm(context: dict, graph_data: GraphInput):
     # obs_Tc1_gtsam = convert_macvo_to_gtsam_coords(obs_Tc_1)
     # obs_Tc2_gtsam = convert_macvo_to_gtsam_coords(obs_Tc_2)
 
+    graph_data_dict = {
+        "frame_idx": graph_data.frame_idx.cpu().item(),
+        "from_idx": graph_data.from_idx.cpu().item(),
+        "init_motion": graph_data.init_motion.cpu().tolist(),
+        "pixel1_uv": graph_data.observations.data["pixel1_uv"].cpu().tolist(),
+        "pixel2_uv": graph_data.observations.data["pixel2_uv"].cpu().tolist(),
+        "pixel1_uv_cov": graph_data.observations.data["pixel1_uv_cov"].cpu().tolist(),
+        "pixel2_uv_cov": graph_data.observations.data["pixel2_uv_cov"].cpu().tolist(),
+        "obs_Tc_1": obs_Tc_1.tolist(),
+        "obs_Tc_2": obs_Tc_2.tolist(),
+        "pts_Tw": pts_Tw.tolist(),
+        "obs1_covTc": obs1_covTc.tolist(),
+        "obs2_covTc": obs2_covTc.tolist(),
+        "pts_covTw": pts_covTw.tolist(),
+        "images_intrinsic": graph_data.images_intrinsic.cpu().tolist(),
+    }
+
+    json_path = os.path.join(os.getcwd(), "graph_data_dump.json")
+    with open(json_path, "w") as f:
+        json.dump(graph_data_dict, f, indent=2)
+    print(f"graph_data saved to {json_path}")
+
     # Build factor graph
     # Prior: pose 1 at identity
     graph = gtsam.NonlinearFactorGraph()
@@ -511,12 +533,21 @@ def optimize_gtsam_lm(context: dict, graph_data: GraphInput):
         # Read observation and covariance
         obs_Tc_1_i = obs_Tc1_gtsam[i]
         obs_Tc_2_i = obs_Tc2_gtsam[i]
-        # cov_Tc_1_i = obs1_covTc_gtsam[i]
-        # cov_Tc_2_i = obs2_covTc_gtsam[i]
+        cov_Tc_1_i = obs1_covTc[i]
+        cov_Tc_2_i = obs2_covTc[i]
 
         # Create noise model
-        # noise_model_1 = gtsam.noiseModel.Gaussian.Covariance(cov_Tc_1_i)
-        # noise_model_2 = gtsam.noiseModel.Gaussian.Covariance(cov_Tc_2_i)
+        noise_model_1 = gtsam.noiseModel.Gaussian.Covariance(cov_Tc_1_i)
+        noise_model_2 = gtsam.noiseModel.Gaussian.Covariance(cov_Tc_2_i)
+        m_huber = gtsam.noiseModel.mEstimator.Huber.Create(0.1)
+        noise_model_1 = gtsam.noiseModel.Robust.Create(
+            m_huber,
+            noise_model_1
+        )
+        noise_model_2 = gtsam.noiseModel.Robust.Create(
+            m_huber,
+            noise_model_2
+        )
         noise_model_1 = gtsam.noiseModel.Isotropic.Sigma(3, 0.1)
         noise_model_2 = gtsam.noiseModel.Isotropic.Sigma(3, 0.1)
         hubert_noise_1 = gtsam.noiseModel.mEstimator.Huber.Create(0.1)
@@ -559,42 +590,40 @@ def optimize_gtsam_lm(context: dict, graph_data: GraphInput):
     landmark_positions = [result.atPoint3(landmark_keys[i]) for i in range(len(landmark_keys))]
 
 
-    # rr.init("debug")
-    # rr.set_time_sequence("step", graph_data.from_idx)
-    from Utility.Visualize import rr_plt
-    rr.init("caca", spawn=True)
-    i = int(graph_data.from_idx.cpu().item())
-    rr.set_time("frame_idx", sequence=i)
-    # rr.log("world", rr.ViewCoordinates.RIGHT_HAND_Y_DOWN, static=True)
-    rr.log("/world/cam/{}".format(graph_data.from_idx.cpu().item()),
-            rr.Transform3D(
-                translation=pose_1_t,
-                quaternion=[pose_1_q.x(), pose_1_q.y(), pose_1_q.z(), pose_1_q.w()],
-                axis_length=1.0,
-            ))
-    K = np.array([[459.2732,   0.0000, 345.8487],
-                    [  0.0000, 459.2732, 349.7954],
-                    [  0.0000,   0.0000,   1.0000]])
-    rr.log(
-        "/world/cam/{}/points_i1".format(graph_data.from_idx.cpu().item()),
-        rr.Points3D(obs_Tc1_gtsam, colors=[255, 165, 0])
-        )
-    rr.log(
-        "/world/cam/{}/points_i2".format(graph_data.frame_idx.cpu().item()),
-        rr.Points3D(obs_Tc2_gtsam, colors=[255, 0, 0])
-        )
 
-    # rr.set_time_sequence("step", graph_data.frame_idx)
-    rr.log("/world/cam/{}".format(graph_data.frame_idx.cpu().item()),
-            rr.Transform3D(
-                translation=pose_2_t,
-                quaternion=[pose_2_q.x(), pose_2_q.y(), pose_2_q.z(), pose_2_q.w()],
-                axis_length=1.0
-            ))
+    # from Utility.Visualize import rr_plt
+    # rr.init("caca", spawn=True)
+    # i = int(graph_data.from_idx.cpu().item())
+    # rr.set_time("frame_idx", sequence=i)
+    # rr.log("/world/cam/{}".format(graph_data.from_idx.cpu().item()),
+    #         rr.Transform3D(
+    #             translation=pose_1_t,
+    #             quaternion=[pose_1_q.x(), pose_1_q.y(), pose_1_q.z(), pose_1_q.w()],
+    #             axis_length=1.0,
+    #         ))
+    # K = np.array([[459.2732,   0.0000, 345.8487],
+    #                 [  0.0000, 459.2732, 349.7954],
+    #                 [  0.0000,   0.0000,   1.0000]])
+    # rr.log(
+    #     "/world/cam/{}/points_i1".format(graph_data.from_idx.cpu().item()),
+    #     rr.Points3D(obs_Tc1_gtsam, colors=[255, 165, 0])
+    #     )
+    # rr.log(
+    #     "/world/cam/{}/points_i2".format(graph_data.frame_idx.cpu().item()),
+    #     rr.Points3D(obs_Tc2_gtsam, colors=[255, 0, 0])
+    #     )
 
-    rr.log(
-        "/world/optimized/{}/points".format(graph_data.frame_idx.cpu().item()),
-        rr.Points3D(landmark_positions, colors=[0, 255, 0])
-        )
+    # # rr.set_time_sequence("step", graph_data.frame_idx)
+    # rr.log("/world/cam/{}".format(graph_data.frame_idx.cpu().item()),
+    #         rr.Transform3D(
+    #             translation=pose_2_t,
+    #             quaternion=[pose_2_q.x(), pose_2_q.y(), pose_2_q.z(), pose_2_q.w()],
+    #             axis_length=1.0
+    #         ))
+
+    # rr.log(
+    #     "/world/optimized/{}/points".format(graph_data.frame_idx.cpu().item()),
+    #     rr.Points3D(landmark_positions, colors=[0, 255, 0])
+    #     )
 
     return context, GraphOutput(motion=pose_2, frame_idx=graph_data.frame_idx, from_idx=graph_data.from_idx)
