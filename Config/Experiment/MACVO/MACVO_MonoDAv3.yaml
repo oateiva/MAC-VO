@@ -102,14 +102,12 @@ Odometry:
     args:
 
   optimizer:
-    type: MonoTwoFrame_PGO
+    type: GTSAM_Graph
     args:
       device: cpu
       vectorize: true
-      parallel: true
-      graph_type: icp
-      autodiff: false
-      solver_backend: gtsam # Options: "custom", "gtsam"
+      parallel: false
+      graph_type: pose2point
 
 
 Datas: !include ../Common/DeepODO_mono_experiments.yaml

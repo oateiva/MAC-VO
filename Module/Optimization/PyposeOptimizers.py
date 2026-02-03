@@ -192,3 +192,12 @@ class LM_analytic(_Optimizer):
                 else:
                     break
         return self.loss
+
+class GTSAM_Optimizer():
+    def __init__(self, model: FactorGraph):
+        self.model = model
+
+    @torch.no_grad()
+    def step(self, input=None, target=None):
+        # Run GTSAM optimization
+        return self.model.run_gtsam_optimization()

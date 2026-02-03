@@ -96,7 +96,6 @@ Odometry:
       parallel: true
       graph_type: icp
       autodiff: true
-      solver_backend: custom # Options: "custom", "gtsam"
 
 Datas: !include ../Common/DeepODO_stereo_experiments.yaml
 Preprocess: !include ../Common/Preprocess.yaml

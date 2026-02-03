@@ -14,11 +14,11 @@ from Utility.Timer import Timer
 from Utility.Math  import NormalizeQuat
 
 from ..Interface import IOptimizer
-from ..PyposeOptimizers import LM_analytic, AnalyticModule, FactorGraph
+from ..PyposeOptimizers import LM_analytic, AnalyticModule, FactorGraph, GTSAM_Optimizer
 from .Graphs import Analytic_ReprojDepth_TwoFramePGO, GraphInput, GraphOutput, ReprojDepth_TwoFramePGO
 from .Graphs import ICP_TwoframePGO, Reproj_TwoFramePGO, ReprojDisp_TwoFramePGO
 from .Graphs import Analytic_ICP_TwoframePGO, Analytic_Reproj_TwoFramePGO, Analytic_ReprojDisp_TwoFramePGO
-from .Graphs import optimize_gtsam_lm
+from .Graphs import GTSAM_Pose2Point
 
 
 class TwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
@@ -76,7 +76,6 @@ class TwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
             },
             "device": config.device,
             "pose_graph_class": PoseGraphClass,
-            "solver_backend": config.solver_backend,
         }
 
     @staticmethod
@@ -85,29 +84,26 @@ class TwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
             graph: FactorGraph = context["pose_graph_class"](graph_data)\
                 .to(device=torch.device(context["device"]), dtype=torch.double)
             assert isinstance(graph, FactorGraph)
-            if context["solver_backend"] == "gtsam":
-                context, graph_output = optimize_gtsam_lm(context, graph_data)
-                return context, graph_output
+
+            if isinstance(graph, AnalyticModule):
+                optimizer = LM_analytic(graph, min=1e-6, **context["optimizer_cfg"])
             else:
-                if isinstance(graph, AnalyticModule):
-                    optimizer = LM_analytic(graph, min=1e-6, **context["optimizer_cfg"])
-                else:
-                    optimizer = LM(graph, min=1e-6, **context["optimizer_cfg"])
+                optimizer = LM(graph, min=1e-6, **context["optimizer_cfg"])
 
-                scheduler = StopOnPlateau(optimizer, steps=10, patience=2, decreasing=1e-5, verbose=True)
+            scheduler = StopOnPlateau(optimizer, steps=10, patience=2, decreasing=1e-5, verbose=True)
 
-                while scheduler.continual():
-                    # Compute weight matrix from graph covariance
-                    covariance_array = graph.covariance_array().to(context["device"]).double()
-                    #max and min values
-                    print("Max depth covariance:", covariance_array.max().item())
-                    print("Min depth covariance:", covariance_array.min().item())
+            while scheduler.continual():
+                # Compute weight matrix from graph covariance
+                covariance_array = graph.covariance_array().to(context["device"]).double()
+                #max and min values
+                print("Max depth covariance:", covariance_array.max().item())
+                print("Min depth covariance:", covariance_array.min().item())
 
-                    weight = torch.block_diag(*(
-                        torch.pinverse(graph.covariance_array().to(context["device"]).double())
-                    ))
-                    loss = optimizer.step(input=(), weight=weight)
-                    scheduler.step(loss)
+                weight = torch.block_diag(*(
+                    torch.pinverse(graph.covariance_array().to(context["device"]).double())
+                ))
+                loss = optimizer.step(input=(), weight=weight)
+                scheduler.step(loss)
 
         return context, graph.write_back()
 
@@ -171,9 +167,7 @@ class Empty_TwoFrame_PGO(TwoFrame_PGO):
                                     from_idx=graph_data.from_idx)
 
 
-# ------- Monocular variant ------- #
-
-class MonoTwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
+class GTSAM_Graph(IOptimizer[GraphInput, dict, GraphOutput]):
     @torch.no_grad()
     def get_graph_data(self, global_map: VisualMap, frame_idx: torch.Tensor,
                        observations: torch.Tensor | None = None, edges: torch.Tensor | None = None) -> GraphInput:
@@ -187,13 +181,13 @@ class MonoTwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
         lengths = lengths[lengths >= 0]
         edges_idx = torch.repeat_interleave(torch.arange(lengths.size(0)), lengths.long())
         init_motion = pp.SE3(frame2opt.data["pose"])
-        return GraphInput(frame_idx, frame_idx - 1, init_motion, None, obs, pts, im_intrinsics, edges_idx, "cpu")
+        baseline = frame2opt.data["baseline"]
+        return GraphInput(frame_idx, frame_idx - 1, init_motion, baseline, obs, pts, im_intrinsics, edges_idx, "cpu")
 
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
         cls._enforce_config_spec(config, {
-            "solver_backend": lambda s: s in {"custom", "gtsam"},
-            "graph_type": lambda s: s in {"icp", "reproj", "disp"},
+            "graph_type": lambda s: s in {"pose2point"},
             "device": lambda v: isinstance(v, str) and (v == "cpu" or "cuda" in v),
             "vectorize": lambda b: isinstance(b, bool),
             "parallel": lambda b: isinstance(b, bool),
@@ -202,62 +196,35 @@ class MonoTwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
 
     @staticmethod
     def init_context(config) -> dict:
-        match (config.autodiff, config.graph_type):
-            case (True, "icp"): # e
-                PoseGraphClass = ICP_TwoframePGO
-            case (True, "reproj"): # e
-                PoseGraphClass = Reproj_TwoFramePGO
-            case (True, "disp"): # e
-                PoseGraphClass = ReprojDepth_TwoFramePGO
-            case (False, "icp"): # e
-                PoseGraphClass = Analytic_ICP_TwoframePGO
-            case (False, "reproj"): # e
-                PoseGraphClass = Analytic_Reproj_TwoFramePGO
-            case (False, "disp"): # e
-                PoseGraphClass = Analytic_ReprojDepth_TwoFramePGO
+        match (config.graph_type):
+            case ("pose2point"):
+                PoseGraphClass = GTSAM_Pose2Point
             case _:
                 raise ValueError(f"Graph type of {config.graph_type} is not supported")
 
         return {
             "optimizer_cfg": {
-                "kernel"   : None,
+                "kernel"   : Huber(delta=0.1),
                 "solver"   : PINV(),
-                "strategy" : TrustRegion(radius=500),
-                "corrector": None,
+                "strategy" : TrustRegion(radius=1e3),
+                "corrector": FastTriggs(Huber(delta=0.1)),
                 "vectorize": config.vectorize,
             },
             "device": config.device,
             "pose_graph_class": PoseGraphClass,
-            "solver_backend": config.solver_backend,
         }
 
     @staticmethod
     def _optimize(context: dict, graph_data: GraphInput) -> tuple[dict, GraphOutput]:
-        with Timer.CPUTimingContext("TwoframePGO"), Timer.GPUTimingContext("TwoframePGO", torch.cuda.current_stream()):
+        with Timer.CPUTimingContext("GTSAM_Graph"), Timer.GPUTimingContext("GTSAM_Graph", torch.cuda.current_stream()):
+            # initialize the graph instance
             graph: FactorGraph = context["pose_graph_class"](graph_data)\
                 .to(device=torch.device(context["device"]), dtype=torch.double)
             assert isinstance(graph, FactorGraph)
 
-            if context["solver_backend"] == "gtsam":
-                context, graph_output = optimize_gtsam_lm(context, graph_data)
-                return context, graph_output
-            else:
-                if isinstance(graph, AnalyticModule):
-                    optimizer = LM_analytic(graph, min=1e-6, **context["optimizer_cfg"])
-                else:
-                    optimizer = LM(graph, min=1e-6, **context["optimizer_cfg"])
-
-                scheduler = StopOnPlateau(optimizer, steps=30, patience=10, decreasing=1e-5, verbose=True)
-
-                while scheduler.continual():
-                    cov_array = graph.covariance_array().to(context["device"]).double()
-                    covariance_array = torch.eye(3, device=cov_array.device)
-                    covariance_array = covariance_array.unsqueeze(0).repeat(cov_array.size(0), 1, 1)
-                    weight = torch.block_diag(*(
-                        torch.pinverse(covariance_array.double())
-                    ))
-                    loss = optimizer.step(input=(), weight=weight)
-                    scheduler.step(loss)
+            # optimize using gtsam backend
+            optimizer = GTSAM_Optimizer(graph)
+            optimizer.step()
 
         return context, graph.write_back()
 
