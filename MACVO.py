@@ -151,7 +151,7 @@ if __name__ == "__main__":
                                 system.get_map().map_points.data["cov_Tw"].tensor,
                                 "color")
     except RuntimeError:
-        Logger.write("warn", "Unable to log full pointcloud - is mapping mode on?")
+        Logger.write("warn", "Unable to log full point cloud - is mapping mode on?")
 
     Timer.report()
     Timer.save_elapsed(exp_space.path("elapsed_time.json"))
