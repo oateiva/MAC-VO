@@ -210,9 +210,12 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GraphOutput]):
         init_motion_last = pp.SE3(frame2opt_last.data["pose"])
         baseline = frame2opt_last.data["baseline"]
 
+        P1_last = global_map.frames.data["pose"][frame_idx - 1]
+
         GI_last = GraphInput(
             frame_idx,
             frame_idx - 1,
+            P1_last,
             init_motion_last,
             baseline,
             obs_last,
@@ -231,9 +234,12 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GraphOutput]):
         edges_idx_prev = torch.repeat_interleave(torch.arange(lengths_prev.size(0)), lengths_prev.long())
         init_motion_prev = pp.SE3(frame2opt_prev.data["pose"])
 
+        P1_prev = global_map.frames.data["pose"][frame_idx - 2]
+
         GI_prev = GraphInput(
             frame_idx - 1,
             frame_idx - 2,
+            P1_prev,
             init_motion_prev,
             baseline,
             obs_prev,

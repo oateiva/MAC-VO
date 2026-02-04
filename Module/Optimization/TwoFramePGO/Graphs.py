@@ -14,6 +14,7 @@ import rerun as rr
 class GraphInput:
     frame_idx         : torch.Tensor
     from_idx          : torch.Tensor
+    from_pose         : pp.LieTensor
     init_motion       : pp.LieTensor
     baseline          : torch.Tensor
     observations      : MatchObs
@@ -410,6 +411,8 @@ class GTSAM_Pose2Point(FactorGraph):
 
         self.init_pose = pypose_to_pose3(graph_data.current_graph_data.init_motion)
 
+        self.P0 = pypose_to_pose3(pp.SE3(graph_data.previous_graph_data.from_pose))
+
         self.obs_Tc_0 = pixel2point_NED( # in camera frame at t
             graph_data.previous_graph_data.observations.data["pixel1_uv"],
             graph_data.previous_graph_data.observations.data["pixel1_d"].squeeze(-1),
@@ -473,12 +476,12 @@ class GTSAM_Pose2Point(FactorGraph):
             landmark_keys.append(landmark_key)
 
             if any(i == idx_pair[1] for idx_pair in self.indexes_prev_curr):
-                pi = int(self.previous_graph_data.from_idx.cpu().item())
+                pi = [index_prev_curr[0] for index_prev_curr in self.indexes_prev_curr if index_prev_curr[1] == i][0]
                 if pi >= 0:
                     pose_0_key = gtsam.symbol('p', pi)
                     if not initial_estimate.exists(pose_0_key):
-                        prev_init_pose = self.previous_graph_data.init_motion # This is P1 of prev frame you idiot
-                        P0 = pypose_to_pose3(prev_init_pose)
+                        # prev_init_pose = self.previous_graph_data.init_motion # This is P1 of prev frame you idiot
+                        P0 = self.P0
                         initial_estimate.insert(pose_0_key, P0)
                         graph.add(
                             gtsam.PriorFactorPose3(
@@ -487,17 +490,17 @@ class GTSAM_Pose2Point(FactorGraph):
                                 ini_estimate_noise
                             ))
                         # Add BetweenFactor between pose_0_key and pose_2_key
-                        between_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([0.5]*6))
-                        graph.add(
-                            gtsam.BetweenFactorPose3(
-                                pose_0_key,
-                                pose_2_key,
-                                gtsam.Pose3.Identity(),
-                                between_noise
-                            )
-                        )
-                    obs_Tc_0_i = self.obs_Tc_0[i]
-                    cov_Tc_0_i = self.previous_graph_data.observations.data["obs1_covTc"][i].detach().cpu().numpy()
+                        # between_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([0.5]*6))
+                        # graph.add(
+                        #     gtsam.BetweenFactorPose3(
+                        #         pose_0_key,
+                        #         pose_2_key,
+                        #         gtsam.Pose3.Identity(),
+                        #         between_noise
+                        #     )
+                        # )
+                    obs_Tc_0_i = self.obs_Tc_0[pi]
+                    cov_Tc_0_i = self.previous_graph_data.observations.data["obs1_covTc"][pi].detach().cpu().numpy()
                     noise_model_0 = gtsam.noiseModel.Gaussian.Covariance(cov_Tc_0_i)
                     m_huber_0 = gtsam.noiseModel.mEstimator.Huber.Create(0.1)
                     noise_model_0 = gtsam.noiseModel.Robust.Create(m_huber_0, noise_model_0)
@@ -570,9 +573,13 @@ class GTSAM_Pose2Point(FactorGraph):
     def log_save_data(self, graph_data: GTSAM_GraphInput):
         import os
         import json
-        graph_data_dict = {
-            "frame_idx": graph_data.current_graph_data.frame_idx.cpu().item(),
+        import tempfile
+
+        frame_idx = graph_data.current_graph_data.frame_idx.cpu().item()
+
+        frame_data = {
             "from_idx": graph_data.current_graph_data.from_idx.cpu().item(),
+            "from_pose": graph_data.current_graph_data.from_pose.cpu().tolist(),
             "init_motion": graph_data.current_graph_data.init_motion.cpu().tolist(),
             "pixel1_uv": graph_data.current_graph_data.observations.data["pixel1_uv"].cpu().tolist(),
             "pixel2_uv": graph_data.current_graph_data.observations.data["pixel2_uv"].cpu().tolist(),
@@ -588,9 +595,29 @@ class GTSAM_Pose2Point(FactorGraph):
         }
 
         json_path = os.path.join(os.getcwd(), "graph_data_dump.json")
-        with open(json_path, "w") as f:
-            json.dump(graph_data_dict, f, indent=2)
-        print(f"graph_data saved to {json_path}")
+        tmp_path = json_path + ".tmp"
+
+        # Load existing data if file exists
+        if os.path.exists(json_path):
+            with open(json_path, "r") as f:
+                try:
+                    all_data = json.load(f)
+                except json.JSONDecodeError:
+                    all_data = {}
+        else:
+            all_data = {}
+
+        # Use frame_idx as key (string for JSON safety)
+        all_data[str(frame_idx)] = frame_data
+
+        # Write back to file
+        with open(tmp_path, "w") as f:
+            json.dump(all_data, f, indent=2)
+
+        os.replace(tmp_path, json_path)
+
+        print(f"graph_data for frame {frame_idx} saved to {json_path}")
+
 
     def log_plot_data(self, pose_1, pose_2, landmark_positions):
         from Utility.Visualize import rr_plt
