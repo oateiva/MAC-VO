@@ -15,7 +15,7 @@ from Utility.Math  import NormalizeQuat
 
 from ..Interface import IOptimizer
 from ..PyposeOptimizers import LM_analytic, AnalyticModule, FactorGraph, GTSAM_Optimizer
-from .Graphs import Analytic_ReprojDepth_TwoFramePGO, GraphInput, GraphOutput, ReprojDepth_TwoFramePGO
+from .Graphs import Analytic_ReprojDepth_TwoFramePGO, GraphInput, GraphOutput, ReprojDepth_TwoFramePGO, GTSAM_GraphInput
 from .Graphs import ICP_TwoframePGO, Reproj_TwoFramePGO, ReprojDisp_TwoFramePGO
 from .Graphs import Analytic_ICP_TwoframePGO, Analytic_Reproj_TwoFramePGO, Analytic_ReprojDisp_TwoFramePGO
 from .Graphs import GTSAM_Pose2Point
@@ -167,22 +167,84 @@ class Empty_TwoFrame_PGO(TwoFrame_PGO):
                                     from_idx=graph_data.from_idx)
 
 
-class GTSAM_Graph(IOptimizer[GraphInput, dict, GraphOutput]):
+class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GraphOutput]):
+    def __init__(self, config):
+        super().__init__(config)
+        self.window_size = 2
+        self.super_duper_gtsam_map = {}
+    def connect_graphs(self, previous_graph_data: GraphInput, current_graph_data: GraphInput) -> GTSAM_GraphInput:
+        matches_prev = previous_graph_data.observations
+        matches_curr = current_graph_data.observations
+
+        matches_prev_persistent = []
+        matches_curr_persistent = []
+        indexes_prev_curr = []
+        for i in range(matches_curr.data["pixel1_uv"].shape[0]):
+            matches_curr_i = matches_curr.data["pixel1_uv"][i]
+            # Find indices in matches_prev where pixel2_uv matches matches_curr_i
+            mask = torch.isclose(matches_prev.data["pixel2_uv"], matches_curr_i, atol=1.).all(dim=-1)
+            if mask.any():
+                # Append corresponding values to persistent lists
+                matches_prev_persistent.append(matches_prev.data["pixel2_uv"][mask])
+                matches_curr_persistent.append(matches_curr.data["pixel1_uv"][i].unsqueeze(0))
+                indexes_prev_curr.append((torch.where(mask)[0][0].item(), i))
+
+        return GTSAM_GraphInput(previous_graph_data,
+            current_graph_data,
+            indexes_prev_curr,
+        )
+
     @torch.no_grad()
     def get_graph_data(self, global_map: VisualMap, frame_idx: torch.Tensor,
-                       observations: torch.Tensor | None = None, edges: torch.Tensor | None = None) -> GraphInput:
-        frame2opt = global_map.frames[frame_idx]
+                       observations: torch.Tensor | None = None, edges: torch.Tensor | None = None) -> GTSAM_GraphInput:
+        frame2opt_last = global_map.frames[frame_idx]
 
-        obs = global_map.get_frame2match(frame2opt)
-        pts = global_map.get_match2point(obs)
-        im_intrinsics = frame2opt.data["K"][0]
+        # Last frame
+        obs_last = global_map.get_frame2match(frame2opt_last)
+        pts_last = global_map.get_match2point(obs_last)
+        im_intrinsics = frame2opt_last.data["K"][0]
 
-        lengths = global_map.frame2match.ranges[frame2opt.index, :, 1].flatten()
-        lengths = lengths[lengths >= 0]
-        edges_idx = torch.repeat_interleave(torch.arange(lengths.size(0)), lengths.long())
-        init_motion = pp.SE3(frame2opt.data["pose"])
-        baseline = frame2opt.data["baseline"]
-        return GraphInput(frame_idx, frame_idx - 1, init_motion, baseline, obs, pts, im_intrinsics, edges_idx, "cpu")
+        lengths_last = global_map.frame2match.ranges[frame2opt_last.index, :, 1].flatten()
+        lengths_last = lengths_last[lengths_last >= 0]
+        edges_idx_last = torch.repeat_interleave(torch.arange(lengths_last.size(0)), lengths_last.long())
+        init_motion_last = pp.SE3(frame2opt_last.data["pose"])
+        baseline = frame2opt_last.data["baseline"]
+
+        GI_last = GraphInput(
+            frame_idx,
+            frame_idx - 1,
+            init_motion_last,
+            baseline,
+            obs_last,
+            pts_last,
+            im_intrinsics,
+            edges_idx_last,
+            "cpu"
+            )
+
+        # Previous frame
+        frame2opt_prev = global_map.frames[frame_idx - 1]
+        obs_prev = global_map.get_frame2match(frame2opt_prev)
+        pts_prev = global_map.get_match2point(obs_prev)
+        lengths_prev = global_map.frame2match.ranges[frame2opt_prev.index, :, 1].flatten()
+        lengths_prev = lengths_prev[lengths_prev >= 0]
+        edges_idx_prev = torch.repeat_interleave(torch.arange(lengths_prev.size(0)), lengths_prev.long())
+        init_motion_prev = pp.SE3(frame2opt_prev.data["pose"])
+
+        GI_prev = GraphInput(
+            frame_idx - 1,
+            frame_idx - 2,
+            init_motion_prev,
+            baseline,
+            obs_prev,
+            pts_prev,
+            im_intrinsics,
+            edges_idx_prev,
+            "cpu"
+            )
+
+        return self.connect_graphs(GI_prev, GI_last)
+
 
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
@@ -215,7 +277,7 @@ class GTSAM_Graph(IOptimizer[GraphInput, dict, GraphOutput]):
         }
 
     @staticmethod
-    def _optimize(context: dict, graph_data: GraphInput) -> tuple[dict, GraphOutput]:
+    def _optimize(context: dict, graph_data: GTSAM_GraphInput) -> tuple[dict, GraphOutput]:
         with Timer.CPUTimingContext("GTSAM_Graph"), Timer.GPUTimingContext("GTSAM_Graph", torch.cuda.current_stream()):
             # initialize the graph instance
             graph: FactorGraph = context["pose_graph_class"](graph_data)\

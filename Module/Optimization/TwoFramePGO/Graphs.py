@@ -24,6 +24,13 @@ class GraphInput:
 
 
 @dataclass
+class GTSAM_GraphInput:
+    previous_graph_data: GraphInput
+    current_graph_data : GraphInput
+    indexes_prev_curr : typ.List[typ.Tuple[int, int]]
+
+
+@dataclass
 class GraphOutput:
     motion   : torch.Tensor
     from_idx : torch.Tensor
@@ -388,49 +395,61 @@ class Analytic_ReprojDepth_TwoFramePGO(ReprojDepth_TwoFramePGO, AnalyticModule):
         return J
 
 class GTSAM_Pose2Point(FactorGraph):
-    def __init__(self, graph_data: GraphInput):
+    def __init__(self, graph_data: GTSAM_GraphInput):
         super().__init__()
         self.parse_graph_data(graph_data)
         # self.log_save_data(graph_data)
 
 
-    def parse_graph_data(self, graph_data: GraphInput):
+    def parse_graph_data(self, graph_data: GTSAM_GraphInput):
 
         # Graph parsing
-        idx = graph_data.edges_index.detach().cpu().long().numpy()
-        self.from_idx   = graph_data.from_idx
-        self.frame_idx  = graph_data.frame_idx
+        idx = graph_data.current_graph_data.edges_index.detach().cpu().long().numpy()
+        self.from_idx   = graph_data.current_graph_data.from_idx
+        self.frame_idx  = graph_data.current_graph_data.frame_idx
 
-        self.init_pose = pypose_to_pose3(graph_data.init_motion)
+        self.init_pose = pypose_to_pose3(graph_data.current_graph_data.init_motion)
+
+        self.obs_Tc_0 = pixel2point_NED( # in camera frame at t
+            graph_data.previous_graph_data.observations.data["pixel1_uv"],
+            graph_data.previous_graph_data.observations.data["pixel1_d"].squeeze(-1),
+            graph_data.previous_graph_data.images_intrinsic
+        ).detach().cpu().double().numpy()
 
         self.obs_Tc_1 = pixel2point_NED( # in camera frame at t
-            graph_data.observations.data["pixel1_uv"],
-            graph_data.observations.data["pixel1_d"].squeeze(-1),
-            graph_data.images_intrinsic
+            graph_data.current_graph_data.observations.data["pixel1_uv"],
+            graph_data.current_graph_data.observations.data["pixel1_d"].squeeze(-1),
+            graph_data.current_graph_data.images_intrinsic
         ).detach().cpu().double().numpy()
 
         self.obs_Tc_2 = pixel2point_NED( # in camera frame at t+1
-            graph_data.observations.data["pixel2_uv"],
-            graph_data.observations.data["pixel2_d"].squeeze(-1),
-            graph_data.images_intrinsic
+            graph_data.current_graph_data.observations.data["pixel2_uv"],
+            graph_data.current_graph_data.observations.data["pixel2_d"].squeeze(-1),
+            graph_data.current_graph_data.images_intrinsic
         ).detach().cpu().double().numpy()
 
-        pts_Tw = graph_data.points.data["pos_Tw"].detach().cpu().double().numpy()  # (N,3) # in world frame?
+        pts_Tw = graph_data.current_graph_data.points.data["pos_Tw"].detach().cpu().double().numpy()  # (N,3) # in world frame?
 
-        self.obs1_covTc = graph_data.observations.data["obs1_covTc"].detach().cpu().double().numpy()  # (N,3,3)
-        self.obs2_covTc = graph_data.observations.data["obs2_covTc"].detach().cpu().double().numpy()  # (N,3,3)
-        self.pts_covTw = graph_data.points.data["cov_Tw"].detach().cpu().double().numpy() # (N,3,3)
+        self.obs1_covTc = graph_data.current_graph_data.observations.data["obs1_covTc"].detach().cpu().double().numpy()  # (N,3,3)
+        self.obs2_covTc = graph_data.current_graph_data.observations.data["obs2_covTc"].detach().cpu().double().numpy()  # (N,3,3)
+        self.pts_covTw = graph_data.current_graph_data.points.data["cov_Tw"].detach().cpu().double().numpy() # (N,3,3)
+
+        self.previous_graph_data = graph_data.previous_graph_data
+        self.indexes_prev_curr = graph_data.indexes_prev_curr
 
     def run_gtsam_optimization(self):
 
         # Build factor graph
         # Prior: pose 1 at identity
+
         graph = gtsam.NonlinearFactorGraph()
-        pose_1_key = gtsam.symbol('p', 1)
-        pose_2_key = gtsam.symbol('p', 2)
+
+        pose_1_key = gtsam.symbol('p', int(self.from_idx.cpu().item()))
+        pose_2_key = gtsam.symbol('p', int(self.frame_idx.cpu().item()))
         # Initial estimate: pose 1 at identity, pose 2 at init_motion
         # Pose 1
         initial_estimate = gtsam.Values()
+
         P1 = gtsam.Pose3.Identity()
         P2 = gtsam.Pose3.Identity()
         P1 = self.init_pose
@@ -448,6 +467,44 @@ class GTSAM_Pose2Point(FactorGraph):
 
         landmark_keys = []
         for i in range(len(self.obs_Tc_1)):
+
+            # Create landmark key
+            landmark_key = gtsam.symbol('l', i)
+            landmark_keys.append(landmark_key)
+
+            if any(i == idx_pair[1] for idx_pair in self.indexes_prev_curr):
+                pi = int(self.previous_graph_data.from_idx.cpu().item())
+                if pi >= 0:
+                    pose_0_key = gtsam.symbol('p', pi)
+                    if not initial_estimate.exists(pose_0_key):
+                        prev_init_pose = self.previous_graph_data.init_motion # This is P1 of prev frame you idiot
+                        P0 = pypose_to_pose3(prev_init_pose)
+                        initial_estimate.insert(pose_0_key, P0)
+                        graph.add(
+                            gtsam.PriorFactorPose3(
+                                pose_0_key,
+                                P0,
+                                ini_estimate_noise
+                            ))
+                        # Add BetweenFactor between pose_0_key and pose_2_key
+                        between_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([0.5]*6))
+                        graph.add(
+                            gtsam.BetweenFactorPose3(
+                                pose_0_key,
+                                pose_2_key,
+                                gtsam.Pose3.Identity(),
+                                between_noise
+                            )
+                        )
+                    obs_Tc_0_i = self.obs_Tc_0[i]
+                    cov_Tc_0_i = self.previous_graph_data.observations.data["obs1_covTc"][i].detach().cpu().numpy()
+                    noise_model_0 = gtsam.noiseModel.Gaussian.Covariance(cov_Tc_0_i)
+                    m_huber_0 = gtsam.noiseModel.mEstimator.Huber.Create(0.1)
+                    noise_model_0 = gtsam.noiseModel.Robust.Create(m_huber_0, noise_model_0)
+                    factor0 = make_pose_to_point_factor(pose_0_key, landmark_key, obs_Tc_0_i, noise_model_0)
+                    graph.add(factor0)
+
+
             # Read observation and covariance
             obs_Tc_1_i = self.obs_Tc_1[i]
             obs_Tc_2_i = self.obs_Tc_2[i]
@@ -471,9 +528,6 @@ class GTSAM_Pose2Point(FactorGraph):
             hubert_noise_1 = gtsam.noiseModel.mEstimator.Huber.Create(0.1)
             noise_model_1 = gtsam.noiseModel.Robust.Create(hubert_noise_1, noise_model_1)
             noise_model_2 = gtsam.noiseModel.Robust.Create(hubert_noise_1, noise_model_2)
-            # Create landmark key
-            landmark_key = gtsam.symbol('l', i)
-            landmark_keys.append(landmark_key)
             # Create factors
             factor1 = make_pose_to_point_factor(pose_1_key, landmark_key, obs_Tc_1_i, noise_model_1)
             factor2 = make_pose_to_point_factor(pose_2_key, landmark_key, obs_Tc_2_i, noise_model_2)
@@ -513,22 +567,24 @@ class GTSAM_Pose2Point(FactorGraph):
     def covariance_array(self) -> torch.Tensor:
         return torch.from_numpy(self.obs2_covTc)
 
-    def log_save_data(self, graph_data: GraphInput):
+    def log_save_data(self, graph_data: GTSAM_GraphInput):
+        import os
+        import json
         graph_data_dict = {
-            "frame_idx": graph_data.frame_idx.cpu().item(),
-            "from_idx": graph_data.from_idx.cpu().item(),
-            "init_motion": graph_data.init_motion.cpu().tolist(),
-            "pixel1_uv": graph_data.observations.data["pixel1_uv"].cpu().tolist(),
-            "pixel2_uv": graph_data.observations.data["pixel2_uv"].cpu().tolist(),
-            "pixel1_uv_cov": graph_data.observations.data["pixel1_uv_cov"].cpu().tolist(),
-            "pixel2_uv_cov": graph_data.observations.data["pixel2_uv_cov"].cpu().tolist(),
+            "frame_idx": graph_data.current_graph_data.frame_idx.cpu().item(),
+            "from_idx": graph_data.current_graph_data.from_idx.cpu().item(),
+            "init_motion": graph_data.current_graph_data.init_motion.cpu().tolist(),
+            "pixel1_uv": graph_data.current_graph_data.observations.data["pixel1_uv"].cpu().tolist(),
+            "pixel2_uv": graph_data.current_graph_data.observations.data["pixel2_uv"].cpu().tolist(),
+            "pixel1_uv_cov": graph_data.current_graph_data.observations.data["pixel1_uv_cov"].cpu().tolist(),
+            "pixel2_uv_cov": graph_data.current_graph_data.observations.data["pixel2_uv_cov"].cpu().tolist(),
             "obs_Tc_1": self.obs_Tc_1.tolist(),
             "obs_Tc_2": self.obs_Tc_2.tolist(),
-            "pts_Tw": graph_data.points.data["pos_Tw"].cpu().tolist(),
+            "pts_Tw": graph_data.current_graph_data.points.data["pos_Tw"].cpu().tolist(),
             "obs1_covTc": self.obs1_covTc.tolist(),
             "obs2_covTc": self.obs2_covTc.tolist(),
             "pts_covTw": self.pts_covTw.tolist(),
-            "images_intrinsic": graph_data.images_intrinsic.cpu().tolist(),
+            "images_intrinsic": graph_data.current_graph_data.images_intrinsic.cpu().tolist(),
         }
 
         json_path = os.path.join(os.getcwd(), "graph_data_dump.json")
