@@ -449,16 +449,16 @@ class GTSAM_Pose2Point(FactorGraph):
 
         pose_1_key = gtsam.symbol('p', int(self.from_idx.cpu().item()))
         pose_2_key = gtsam.symbol('p', int(self.frame_idx.cpu().item()))
-        # Initial estimate: pose 1 at identity, pose 2 at init_motion
-        # Pose 1
-        initial_estimate = gtsam.Values()
 
-        P1 = gtsam.Pose3.Identity()
-        P2 = gtsam.Pose3.Identity()
+        # Initial estimate: pose 1 at identity, pose 2 at init_motion
+        initial_estimate = gtsam.Values()
+        ini_estimate_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([1e-4]*6, dtype=np.float64))
+        # Pose 1
         P1 = self.init_pose
         P2 = self.init_pose
+
+        # Pose 1
         initial_estimate.insert(pose_1_key, P1)
-        ini_estimate_noise = gtsam.noiseModel.Constrained.All(6)
         graph.add(
             gtsam.PriorFactorPose3(
                 pose_1_key,
@@ -468,6 +468,19 @@ class GTSAM_Pose2Point(FactorGraph):
         # Pose 2
         initial_estimate.insert(pose_2_key, P2)
 
+        p0_index = self.previous_graph_data.from_idx.cpu().item()
+        if p0_index >= 0:
+            pose_0_key = gtsam.symbol('p', int(p0_index))
+            P0 = self.P0
+                    # Pose 0
+            initial_estimate.insert(pose_0_key, P0)
+            graph.add(
+                gtsam.PriorFactorPose3(
+                    pose_0_key,
+                    P0,
+                    ini_estimate_noise
+                ))
+
         landmark_keys = []
         for i in range(len(self.obs_Tc_1)):
 
@@ -475,37 +488,26 @@ class GTSAM_Pose2Point(FactorGraph):
             landmark_key = gtsam.symbol('l', i)
             landmark_keys.append(landmark_key)
 
-            if any(i == idx_pair[1] for idx_pair in self.indexes_prev_curr):
+            if any(i == idx_pair[1] for idx_pair in self.indexes_prev_curr) and p0_index >= 0:
                 pi = [index_prev_curr[0] for index_prev_curr in self.indexes_prev_curr if index_prev_curr[1] == i][0]
-                if pi >= 0:
-                    pose_0_key = gtsam.symbol('p', pi)
-                    if not initial_estimate.exists(pose_0_key):
-                        # prev_init_pose = self.previous_graph_data.init_motion # This is P1 of prev frame you idiot
-                        P0 = self.P0
-                        initial_estimate.insert(pose_0_key, P0)
-                        graph.add(
-                            gtsam.PriorFactorPose3(
-                                pose_0_key,
-                                P0,
-                                ini_estimate_noise
-                            ))
-                        # Add BetweenFactor between pose_0_key and pose_2_key
-                        # between_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([0.5]*6))
-                        # graph.add(
-                        #     gtsam.BetweenFactorPose3(
-                        #         pose_0_key,
-                        #         pose_2_key,
-                        #         gtsam.Pose3.Identity(),
-                        #         between_noise
-                        #     )
-                        # )
-                    obs_Tc_0_i = self.obs_Tc_0[pi]
-                    cov_Tc_0_i = self.previous_graph_data.observations.data["obs1_covTc"][pi].detach().cpu().numpy()
-                    noise_model_0 = gtsam.noiseModel.Gaussian.Covariance(cov_Tc_0_i)
-                    m_huber_0 = gtsam.noiseModel.mEstimator.Huber.Create(0.1)
-                    noise_model_0 = gtsam.noiseModel.Robust.Create(m_huber_0, noise_model_0)
-                    factor0 = make_pose_to_point_factor(pose_0_key, landmark_key, obs_Tc_0_i, noise_model_0)
-                    graph.add(factor0)
+
+                # Add BetweenFactor between pose_0_key and pose_2_key
+                # between_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([0.5]*6))
+                # graph.add(
+                #     gtsam.BetweenFactorPose3(
+                #         pose_0_key,
+                #         pose_2_key,
+                #         gtsam.Pose3.Identity(),
+                #         between_noise
+                #     )
+                # )
+                obs_Tc_0_i = self.obs_Tc_0[pi]
+                cov_Tc_0_i = self.previous_graph_data.observations.data["obs1_covTc"][pi].detach().cpu().numpy()
+                noise_model_0 = gtsam.noiseModel.Gaussian.Covariance(cov_Tc_0_i)
+                m_huber_0 = gtsam.noiseModel.mEstimator.Huber.Create(0.1)
+                noise_model_0 = gtsam.noiseModel.Robust.Create(m_huber_0, noise_model_0)
+                factor0 = make_pose_to_point_factor(pose_0_key, landmark_key, obs_Tc_0_i, noise_model_0)
+                graph.add(factor0)
 
 
             # Read observation and covariance
@@ -526,19 +528,14 @@ class GTSAM_Pose2Point(FactorGraph):
                 m_huber,
                 noise_model_2
             )
-            noise_model_1 = gtsam.noiseModel.Isotropic.Sigma(3, 0.1)
-            noise_model_2 = gtsam.noiseModel.Isotropic.Sigma(3, 0.1)
-            hubert_noise_1 = gtsam.noiseModel.mEstimator.Huber.Create(0.1)
-            noise_model_1 = gtsam.noiseModel.Robust.Create(hubert_noise_1, noise_model_1)
-            noise_model_2 = gtsam.noiseModel.Robust.Create(hubert_noise_1, noise_model_2)
             # Create factors
             factor1 = make_pose_to_point_factor(pose_1_key, landmark_key, obs_Tc_1_i, noise_model_1)
             factor2 = make_pose_to_point_factor(pose_2_key, landmark_key, obs_Tc_2_i, noise_model_2)
-            # factor1 = gtsam_unstable.PoseToPointFactor(pose_1_key, landmark_key, obs_Tc_1_i, noise_model_1)
-            # factor2 = gtsam_unstable.PoseToPointFactor(pose_2_key, landmark_key, obs_Tc_2_i, noise_model_2)
+
             # Add factors to graph
             graph.add(factor1)
             graph.add(factor2)
+
             # Add initial estimate for landmark
             Pt_landmark = P1.transformFrom(obs_Tc_1_i)
             initial_estimate.insert(landmark_key, Pt_landmark)
