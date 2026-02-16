@@ -18,7 +18,7 @@ class StereoVONet(nn.Module):
 
         self.flowNet = FlowNet()
         self.stereoNet = StereoNet()
-        self.flowPoseNet = FlowPoseNet(config=1, stereo=True, autoDistTarget=0., down_scale=True, out_feature=False, intrinsic=True)
+        self.flowPoseNet = FlowPoseNet(config=1, stereo=False, autoDistTarget=0., down_scale=True, out_feature=False, intrinsic=True)
         self.flowNormFactor = flowNormFactor
         self.stereoNormFactor = stereoNormFactor
         self.poseDepthNormFactor = poseDepthNormFactor

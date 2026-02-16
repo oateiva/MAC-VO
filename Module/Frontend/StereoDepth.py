@@ -84,8 +84,9 @@ class MonoDepth(IDepth):
         from ..Network.DepthAnythingV2 import build_depth_anything_v2
         model = build_depth_anything_v2(config)
         ## TODO: float16, 32 etc?
-        ckpt  = torch.load(self.config.weight, weights_only=True)
-        model.load_state_dict(ckpt)
+        if getattr(self.config, 'weight', None):
+            ckpt  = torch.load(self.config.weight, weights_only=True)
+            model.load_state_dict(ckpt)
         model.to(self.config.device)
         model.eval()
 
@@ -133,8 +134,9 @@ class FlowFormerDepth(IDepth):
         from ..Network.FlowFormer.configs.submission import get_cfg
         from ..Network.FlowFormer.core import build_flowformer
         model = build_flowformer(get_cfg())
-        ckpt  = torch.load(self.config.weight, weights_only=True)
-        model.load_ddp_state_dict(ckpt)
+        if getattr(self.config, 'weight', None):
+            ckpt  = torch.load(self.config.weight, weights_only=True)
+            model.load_ddp_state_dict(ckpt)
         model.to(self.config.device)
 
         model.eval()
@@ -176,8 +178,9 @@ class FlowFormerCovDepth(IDepth):
             reflect_torch_dtype(config.enc_dtype),
             reflect_torch_dtype(config.dec_dtype)
         )
-        ckpt  = torch.load(self.config.weight, weights_only=True)
-        model.load_ddp_state_dict(ckpt)
+        if getattr(self.config, 'weight', None):
+            ckpt  = torch.load(self.config.weight, weights_only=True)
+            model.load_ddp_state_dict(ckpt)
         model.to(self.config.device)
         model.eval()
 
@@ -226,8 +229,9 @@ class TartanVODepth(IDepth):
 
         cfg, _ = build_dynamic_config({"exp": False, "decoder": "hourglass"})
         model = StereoCovNet(cfg)
-        ckpt = torch.load(self.config.weight, weights_only=True)
-        model.load_ddp_state_dict(ckpt)
+        if getattr(self.config, 'weight', None):
+            ckpt = torch.load(self.config.weight, weights_only=True)
+            model.load_ddp_state_dict(ckpt)
         model.to(self.config.device)
         model.eval()
 

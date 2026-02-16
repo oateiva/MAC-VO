@@ -7,7 +7,7 @@ from collections import OrderedDict
 from .decoder import HourglassDecoder
 from .StereoNet import StereoNet7
 
-from DataLoader import StereoData
+from DataLoader import CameraData
 
 torchvision.disable_beta_transforms_warning()
 
@@ -62,7 +62,7 @@ class StereoCovNet(nn.Module):
 
     @torch.no_grad()
     @torch.inference_mode()
-    def inference(self, stereo: StereoData):
+    def inference(self, stereo: CameraData):
         disparity, disparity_cov = self(stereo.imageL, stereo.imageR)
         depth = ((stereo.frame_baseline * stereo.fx) / disparity)
 

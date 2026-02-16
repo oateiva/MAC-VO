@@ -13,7 +13,7 @@ from Utility.PrettyPrint import Logger
 from Utility.Config import load_config
 from Utility.Math import qinterp, interpolate_pose
 
-from ..Interface import IMUData, Frame, StereoInertialFrame, AttitudeData
+from ..Interface import IMUData, Frame, StereoInertialFrame, AttitudeData, CameraData
 from ..SequenceBase import SequenceBase
 
 
@@ -71,6 +71,8 @@ class EuRoC_StereoSequence(SequenceBase[Frame]):
         cfg = self.config_dict2ns(config)
         self.seqRoot  = Path(cfg.root)
 
+        self.is_stereo = cfg.is_stereo if hasattr(cfg, "is_stereo") else True
+
         # ref: https://github.com/raulmur/ORB_SLAM2/blob/master/Examples/Stereo/EuRoC.yaml
         # in this file only bl * fx is provided , the baseline here is derived by bf/fx
         self.baseline = 0.1100778422
@@ -88,20 +90,23 @@ class EuRoC_StereoSequence(SequenceBase[Frame]):
         )
 
         # Right Camera
-        r_sensor_config, _ = load_config(Path(self.seqRoot, "cam1", "sensor.yaml"))
-        T_BS_rcam = np.array(r_sensor_config.T_BS.data).reshape(4, 4)
-        self.ImageR = EurocMonocularDataset(
-            Path(self.seqRoot, "cam1", "data"),
-            K=self.build_intrinsic(r_sensor_config.intrinsics),
-            T_BS=T_BS_rcam,
-            undistort=np.array([-0.28368365, 0.07451284, -0.00010473, -3.555907e-05, 0.0])
-        )
+        if self.is_stereo:
+            r_sensor_config, _ = load_config(Path(self.seqRoot, "cam1", "sensor.yaml"))
+            T_BS_rcam = np.array(r_sensor_config.T_BS.data).reshape(4, 4)
+            self.ImageR = EurocMonocularDataset(
+                Path(self.seqRoot, "cam1", "data"),
+                K=self.build_intrinsic(r_sensor_config.intrinsics),
+                T_BS=T_BS_rcam,
+                undistort=np.array([-0.28368365, 0.07451284, -0.00010473, -3.555907e-05, 0.0])
+            )
 
-        # Sync left-right camera
-        rectified_K = self.sync_LR(self.ImageL, self.ImageR)
-        self.K = torch.tensor(rectified_K[:3, :3], dtype=torch.float).unsqueeze(0)
-        self.cam_timestamps = self.ImageL.cam_timestamps
-        assert len(self.ImageL) == len(self.ImageR), f"ImageL={len(self.ImageL)} and ImageR={len(self.ImageR)} is not sync'd as expected."
+            # Sync left-right camera
+            rectified_K = self.sync_LR(self.ImageL, self.ImageR)
+            self.K = torch.tensor(rectified_K[:3, :3], dtype=torch.float).unsqueeze(0)
+            self.cam_timestamps = self.ImageL.cam_timestamps
+            assert len(self.ImageL) == len(self.ImageR), f"ImageL={len(self.ImageL)} and ImageR={len(self.ImageR)} is not sync'd as expected."
+        else:
+            self.ImageR = None
 
         # Setup metadata
         self.T_BS_lcam = pp.from_matrix(
@@ -124,21 +129,40 @@ class EuRoC_StereoSequence(SequenceBase[Frame]):
     def __getitem__(self, local_index: int) -> Frame:
         index = self.get_index(local_index)
 
-        return Frame(
-            idx=[local_index],
-            time_ns=[int(self.cam_timestamps[index].item())],
-            camera=StereoData(
-                T_BS=self.T_BS_lcam,
-                K   =self.K,
-                baseline=torch.tensor([self.baseline]),
-                width=self.width,
-                height=self.height,
+        if self.is_stereo is True:
+            return Frame(
+                idx=[local_index],
                 time_ns=[int(self.cam_timestamps[index].item())],
-                imageL=self.ImageL[index],
-                imageR=self.ImageR[index],
-            ),
-            gt_pose= None if self.gt_pose_data is None else cast(pp.LieTensor, self.gt_pose_data[index].unsqueeze(0))
-        )
+                camera=CameraData.from_stereo(
+                    T_BS=self.T_BS_lcam,
+                    K   =self.K,
+                    baseline=torch.tensor([self.baseline]),
+                    width=self.width,
+                    height=self.height,
+                    time_ns=[int(self.cam_timestamps[index].item())],
+                    imageL=self.ImageL[index],
+                    imageR=self.ImageR[index],
+                ),
+                gt_pose= None if self.gt_pose_data is None else cast(pp.LieTensor, self.gt_pose_data[index].unsqueeze(0))
+            )
+        else:
+            return Frame(
+                idx=[local_index],
+                time_ns=[int(self.cam_timestamps[index].item())],
+                camera = CameraData.from_mono(
+                    T_BS=self.T_BS_lcam,
+                    K=self.K,
+                    baseline=torch.tensor(self.baseline),
+                    time_ns=[int(self.cam_timestamps[index].item())],
+                    height=self.height,
+                    width=self.width,
+                    images=self.ImageL[index],
+                    gt_depth = None,
+                    gt_flow=None,
+                    flow_mask=None,
+                ),
+                gt_pose= None if self.gt_pose_data is None else cast(pp.LieTensor, self.gt_pose_data[index].unsqueeze(0))
+            )
 
     @staticmethod
     def sync_LR(left: EurocMonocularDataset, right: EurocMonocularDataset) -> np.ndarray:

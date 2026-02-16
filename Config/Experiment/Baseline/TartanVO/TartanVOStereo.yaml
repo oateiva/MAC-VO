@@ -4,9 +4,9 @@ Odometry:
   depth:
     type: TartanVODepth
     args:
-      weight: ./Model/TartanVO_depth_cov.pth
+      # weight: #./Model/TartanVO_depth_cov.pth
       device: cuda
-      cov_mode: Est
+      cov_mode: None #Est
 
   match:
     type: TartanVOMatcher
@@ -23,5 +23,5 @@ Odometry:
     args:
       keyframe_freq: 1
 
-Data: !include ../../Common/EvaluationDataset.yaml
+Datas: !include ../../Common/DeepODO_stereo_experiments.yaml
 Preprocess: !include ../../Common/Preprocess.yaml
