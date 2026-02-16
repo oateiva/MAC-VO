@@ -81,7 +81,7 @@ class PreloadedSequence(SequenceBase[T_Data]):
 
         Logger.write("info", f"Preloading {self.sequence}")
         with ThreadPoolExecutor(max_workers=2 * mp.cpu_count()) as exc:
-            frames = list(exc.map(self.sequence.__getitem__, [_ for _ in range(len(self.sequence))]))
+            frames = list(exc.map(self.sequence.__getitem__, [_ for _ in range(len(self.sequence)-1)]))
         self._framebuffer = frames
         super().__init__(len(self._framebuffer))
 
