@@ -89,16 +89,17 @@ class TartanStereoVONetInterface:
                 "blxfx": np.array([meta.K[:,0,0] * meta.baseline], dtype=np.float32),
             }
         else:
+            K = meta.K.cpu().numpy()
             return {
                 "img0": [imageL.squeeze().permute(1, 2, 0).numpy()],
                 "intrinsic": [
                     make_intrinsics_layer(
-                        int(meta.K[:,0,2] * 2),
-                        int(meta.K[:,1,2] * 2),
-                        meta.K[0,0],
-                        meta.K[0,1],
-                        meta.K[0,2],
-                        meta.K[1,2],
+                        int(K[:,0,2] * 2),
+                        int(K[:,1,2] * 2),
+                        K[0][0,0],
+                        K[0][0,1],
+                        K[0][0,2],
+                        K[0][1,2],
                     )
                 ],
                 "blxfx": np.array([meta.K[:,0,0] * meta.frame_baseline], dtype=np.float32),
@@ -173,6 +174,10 @@ class TartanStereoVOMotion(TartanStereoVONetInterface):
     @torch.inference_mode()
     def inference(self, frame0: Frame, flow: torch.Tensor, depth: torch.Tensor) -> torch.Tensor:
         meta = frame0.camera
+
+        baseline = torch.as_tensor(meta.baseline, device=depth.device, dtype=depth.dtype)
+        K = meta.K.to(depth.device)
+
         tensor_intrinsic = make_device_intrinsic_layer(
             meta.height, meta.width, meta.fx, meta.fy, meta.cx, meta.cy, torch.device(self.device)
         ).unsqueeze(0).permute(0, 3, 1, 2)
@@ -183,10 +188,10 @@ class TartanStereoVOMotion(TartanStereoVONetInterface):
         depth_resize = self.cropAndResize(depth, (112, 160))
         flow_resize  = self.cropAndResize(flow, (112, 160)) * self.flow_norm
 
-        stereo = (meta.baseline * meta.K[:,0,0]) / depth_resize
+        stereo = (baseline * K[:,0,0]) / depth_resize
         stereo = torch.nan_to_num(stereo * self.model.stereoNormFactor, nan=0.0).clamp(min=0.0)
 
-        depth_resize = stereo / (meta.baseline * meta.K[:,0,0]) / float(self.model.stereoNormFactor * self.model.poseDepthNormFactor)
+        depth_resize = stereo / (baseline * K[:,0,0]) / float(self.model.stereoNormFactor * self.model.poseDepthNormFactor)
 
         inputTensor = torch.cat((flow_resize, depth_resize, tensor_intrinsic_resize), dim=1).to(self.device)
         pose = self.model.flowPoseNet(inputTensor, scale_disp=1.0)
