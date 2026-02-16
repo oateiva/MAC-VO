@@ -22,6 +22,12 @@ TartanAir_NoIMU:
       height: 476
       width : 630
       interp: nearest
+EuRoC:
+  - type: SmartResizeFrame
+    args:
+      height: 476
+      width: 742
+      interp: nearest
 EIVA_NoIMU:
   - type: SmartResizeFrame
     args:
@@ -37,3 +43,9 @@ EIVA_StereoSequenceORM:
   # - type: AddImageNoise
   #   args:
   #     stdv: 150
+SubPipe:
+  - type: SmartResizeFrame
+    args:
+      height: 378
+      width : 672
+      interp: nearest
