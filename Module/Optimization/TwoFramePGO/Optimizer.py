@@ -15,10 +15,11 @@ from Utility.Math  import NormalizeQuat
 
 from ..Interface import IOptimizer
 from ..PyposeOptimizers import LM_analytic, AnalyticModule, FactorGraph, GTSAM_Optimizer
-from .Graphs import Analytic_ReprojDepth_TwoFramePGO, GraphInput, GraphOutput, ReprojDepth_TwoFramePGO, GTSAM_GraphInput
+from .Graphs import Analytic_ReprojDepth_TwoFramePGO, GraphInput, GraphOutput, ReprojDepth_TwoFramePGO, GTSAM_GraphInput, GTSAM_GraphOutput
 from .Graphs import ICP_TwoframePGO, Reproj_TwoFramePGO, ReprojDisp_TwoFramePGO
 from .Graphs import Analytic_ICP_TwoframePGO, Analytic_Reproj_TwoFramePGO, Analytic_ReprojDisp_TwoFramePGO
-from .Graphs import GTSAM_Pose2Point
+from .Graphs import GTSAM_Pose2Point, ISAM
+from typing import Dict, Tuple, List
 
 
 class TwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
@@ -255,7 +256,7 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GraphOutput]):
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
         cls._enforce_config_spec(config, {
-            "graph_type": lambda s: s in {"pose2point"},
+            "graph_type": lambda s: s in {"pose2point", "isam"},
             "device": lambda v: isinstance(v, str) and (v == "cpu" or "cuda" in v),
             "vectorize": lambda b: isinstance(b, bool),
             "parallel": lambda b: isinstance(b, bool),
@@ -267,37 +268,48 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GraphOutput]):
         match (config.graph_type):
             case ("pose2point"):
                 PoseGraphClass = GTSAM_Pose2Point
+            case ("isam"):
+                PoseGraphClass = ISAM
             case _:
                 raise ValueError(f"Graph type of {config.graph_type} is not supported")
 
-        return {
-            "optimizer_cfg": {
-                "kernel"   : Huber(delta=0.1),
-                "solver"   : PINV(),
-                "strategy" : TrustRegion(radius=1e3),
-                "corrector": FastTriggs(Huber(delta=0.1)),
-                "vectorize": config.vectorize,
-            },
+        with Timer.CPUTimingContext("GTSAM_Graph"), Timer.GPUTimingContext("GTSAM_Graph", torch.cuda.current_stream()):
+            # initialize the graph instance
+            graph: FactorGraph = PoseGraphClass().to(device=torch.device(config.device), dtype=torch.double)
+            assert isinstance(graph, FactorGraph)
+
+                # optimize using gtsam backend
+            optimizer = GTSAM_Optimizer(graph)
+
+            context = {
             "device": config.device,
-            "pose_graph_class": PoseGraphClass,
+            "graph": graph,
         }
+
+        return context
 
     @staticmethod
     def _optimize(context: dict, graph_data: GTSAM_GraphInput) -> tuple[dict, GraphOutput]:
-        with Timer.CPUTimingContext("GTSAM_Graph"), Timer.GPUTimingContext("GTSAM_Graph", torch.cuda.current_stream()):
-            # initialize the graph instance
-            graph: FactorGraph = context["pose_graph_class"](graph_data)\
-                .to(device=torch.device(context["device"]), dtype=torch.double)
-            assert isinstance(graph, FactorGraph)
 
-            # optimize using gtsam backend
-            optimizer = GTSAM_Optimizer(graph)
-            optimizer.step()
+        graph = context["graph"]
 
+        # Incorporate new measurements
+        graph.parse_graph_data(graph_data)
+
+        # Step optimizer
+        graph.run_gtsam_optimization()
+
+        # Export result
         return context, graph.write_back()
 
-    def write_graph_data(self, result: GraphOutput | None, global_map: VisualMap) -> None:
+    def write_graph_data(self, result: GTSAM_GraphOutput | None, global_map: VisualMap) -> None:
         if result is None: return
 
-        to_pose     = pp.SE3(result.motion[0].data.double().cpu())
-        global_map.frames.data["pose"][result.frame_idx] = to_pose.float()
+        # to_pose     = pp.SE3(result.pose_estimate[0].data.double().cpu())
+        # global_map.frames.data["pose"][result.frame_idx] = to_pose.float()
+        for frame_idx, pose_estimate in zip(result.frame_idexes, result.pose_estimates):
+            global_map.frames.data["pose"][frame_idx] = pose_estimate.float()
+
+        if result.map_points is not None and result.landmark_indexes is not None:
+            idx = torch.tensor(result.landmark_indexes, dtype=torch.long, device=result.map_points.device)
+            global_map.map_points.data["pos_Tw"][idx] = result.map_points.to(dtype=torch.float32, device=global_map.map_points.data["pos_Tw"].device)
