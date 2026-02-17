@@ -14,6 +14,8 @@ class TartanVO(IOdometry[Frame], ConfigTestableSubclass):
         super().__init__()
         self.gmap = VisualMap()
 
+        self.stereo = tvo_cfg.stereo if hasattr(tvo_cfg, "stereo") else False
+
         self.tartanvo = TartanMotionNet(tvo_cfg)
 
         self.match_estimator = match_estimator
@@ -51,8 +53,9 @@ class TartanVO(IOdometry[Frame], ConfigTestableSubclass):
         else:
             flow_map = None
 
-        est_depth = self.depth_estimator.estimate(frame.camera)
-        est_pose = self.tartanvo.predict(frame, flow_map, est_depth.depth)
+        if self.stereo:
+            est_depth = self.depth_estimator.estimate(frame.camera)
+        est_pose = self.tartanvo.predict(frame, flow_map, est_depth.depth if self.stereo else None)
         self.gmap.frames.push(FrameNode.init({
             "K"          : frame.camera.K,
             "baseline"   : frame.camera.baseline,

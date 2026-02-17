@@ -407,9 +407,9 @@ class Analytic_ReprojDepth_TwoFramePGO(ReprojDepth_TwoFramePGO, AnalyticModule):
         return J
 
 class GTSAM_Pose2Point(FactorGraph):
-    def __init__(self, graph_data: GTSAM_GraphInput):
+    def __init__(self):
         super().__init__()
-        self.parse_graph_data(graph_data)
+        # self.parse_graph_data(graph_data)
         # self.log_save_data(graph_data)
 
 
@@ -493,11 +493,13 @@ class GTSAM_Pose2Point(FactorGraph):
                 ))
 
         landmark_keys = []
+        landmark_idx = []
         for i in range(len(self.obs_Tc_1)):
 
             # Create landmark key
             landmark_key = gtsam.symbol('l', i)
             landmark_keys.append(landmark_key)
+            landmark_idx.append(i)
 
             if any(i == idx_pair[1] for idx_pair in self.indexes_prev_curr) and p0_index >= 0:
                 pi = [index_prev_curr[0] for index_prev_curr in self.indexes_prev_curr if index_prev_curr[1] == i][0]
@@ -554,23 +556,25 @@ class GTSAM_Pose2Point(FactorGraph):
         # Optimize the graph
         params = gtsam.LevenbergMarquardtParams()
         params.setVerbosityLM("SUMMARY")
-        # graph.print("Factor Graph:\n")
-        # initial_estimate.print("Initial Estimate:\n")
+
         optimizer = gtsam.LevenbergMarquardtOptimizer(graph, initial_estimate, params)
         result = optimizer.optimize()
-        # print("GTSAM optimization complete. Final Result:\n{}".format(estimate))
 
-        # pose_0_to_1 = graph_data.init_motion
-        # pose_0_to_2 = pose_0_to_1 @ pose_1_to_2
         pose_1 = result.atPose3(pose_1_key)
         pose_2 = result.atPose3(pose_2_key)
         landmark_positions = [result.atPoint3(landmark_keys[i]) for i in range(len(landmark_keys))]
+        landmark_positions = torch.stack([torch.from_numpy(pos).double() for pos in landmark_positions], dim=0)  # (N,3)
 
         # self.log_plot_data(pose_1=pose_1, pose_2=pose_2, landmark_positions=landmark_positions)
-
+        pose_1 = pose3_to_pypose(pose_1)
         pose_2 = pose3_to_pypose(pose_2)
 
-        self.graph_output = GraphOutput(motion=pose_2, frame_idx=self.frame_idx, from_idx=self.from_idx)
+        self.graph_output = GTSAM_GraphOutput(
+            frame_idexes=[int(self.from_idx.cpu().item()), int(self.frame_idx.cpu().item())],
+            pose_estimates=[pose_1, pose_2],
+            landmark_indexes=landmark_idx,
+            map_points=landmark_positions
+            )
 
     def write_back(self):
         return self.graph_output
