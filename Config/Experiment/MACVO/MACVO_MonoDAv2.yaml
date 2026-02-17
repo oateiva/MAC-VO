@@ -113,7 +113,7 @@ Odometry:
       device: cpu
       vectorize: true
       parallel: false
-      graph_type: isam
+      graph_type: pose2point
 
 Datas: !include ../Common/DeepODO_mono_experiments.yaml
 Preprocess: !include ../Common/Preprocess.yaml

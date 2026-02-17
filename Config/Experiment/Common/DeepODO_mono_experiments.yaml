@@ -1,4 +1,5 @@
 !flatten_seq
-- !include ../../Sequence/TartanAir_dataset_mono.yaml
+# - !include ../../Sequence/TartanAir_dataset_mono.yaml
+- !include ../../Sequence/Aqualoc.yaml
 - !include ../../Sequence/EIVA_mono_datasets.yaml
 - !include ../../Sequence/SubPipe_Dataset/SubPipe_chunk3.yaml
