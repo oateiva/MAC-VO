@@ -223,8 +223,8 @@ class TartanStereoVOMotion(TartanStereoVONetInterface):
     def inference(self, frame0: Frame, flow: torch.Tensor, depth: torch.Tensor) -> torch.Tensor:
         meta = frame0.camera
 
-        baseline = torch.as_tensor(meta.baseline, device=depth.device, dtype=depth.dtype)
-        K = meta.K.to(depth.device)
+        baseline = torch.as_tensor(meta.baseline, device=flow.device, dtype=flow.dtype)
+        K = meta.K.to(flow.device)
 
         tensor_intrinsic = make_device_intrinsic_layer(
             meta.height, meta.width, meta.fx, meta.fy, meta.cx, meta.cy, torch.device(self.device)

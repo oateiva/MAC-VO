@@ -106,7 +106,7 @@ class TartanMotionNet(IMotionModel[Frame]):
             self.prev_pose = pp.identity_SE3(device=self.config.device)
             return pp.identity_SE3(device=self.config.device)
 
-        assert flow is not None and depth is not None, "Motion model requires flow and depth to predict motion"
+        assert flow is not None # and depth is not None, "Motion model requires flow and depth to predict motion"
         motion_se3: torch.Tensor = self.model.inference(frame, flow, depth)
         new_pose = self.prev_pose @ pp.se3(motion_se3).Exp()
         self.prev_pose = new_pose

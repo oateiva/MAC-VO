@@ -1,5 +1,5 @@
 - type: EIVA_NoIMU
-  name: plane_nose
+  name: EIVA_plane_nose
   args:
     root: D:\Datasets\EIVA\plane_nose
     # Controls optional data sources
@@ -14,7 +14,7 @@
     compressed: true
 
 - type: EIVA_NoIMU
-  name: plane_mid
+  name: EIVA_plane_mid
   args:
     root: D:\Datasets\EIVA\plane_mid
     # Controls optional data sources
@@ -28,7 +28,7 @@
     compressed: true
 
 - type: EIVA_NoIMU
-  name: plane_tail1
+  name: EIVA_plane_tail1
   args:
     root: D:\Datasets\EIVA\Voyis\plane_tail1
     # Controls optional data sources
@@ -40,7 +40,7 @@
     compressed: true
 
 - type: EIVA_NoIMU
-  name: plane_tail2
+  name: EIVA_plane_tail2
   args:
     root: D:\Datasets\EIVA\Voyis\plane_tail2
     # Controls optional data sources
@@ -53,9 +53,9 @@
 
 
 - type: EIVA_NoIMU
-  name: long_ladder
+  name: EIVA_long_ladder
   args:
-    root: D:\Datasets\EIVA\Voyis\long ladder scan
+    root: D:\Datasets\EIVA\Voyis\long_ladder_scan
     # Controls optional data sources
     gtDepth: false
     gtFlow: false
@@ -65,9 +65,9 @@
     compressed: true
 
 - type: EIVA_NoIMU
-  name: abf001
+  name: EIVA_OREC_CPS
   args:
-    root: D:\Datasets\mac-vio\OREC_CPS\OREC_CPS
+    root: D:\Datasets\EIVA\OREC_CPS
     # Controls optional data sources
     gtDepth: false
     gtFlow: false
@@ -77,7 +77,7 @@
     compressed: true
 
 - type: EIVA_NoIMU
-  name: Welland
+  name: EIVA_Welland_test_first_dive
   args:
     root: D:\Datasets\EIVA\Voyis\Welland_test_first_dive
     # Controls optional data sources
