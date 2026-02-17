@@ -18,7 +18,7 @@ Common:
   device: &device cuda
 
 Odometry:
-  name: MACVO-DAv2-isam
+  name: MACVO-DAv2-pose2point
   args:
     # Device directive to the VO system
     # NOTE: the system may not follow this device config strictly since some module

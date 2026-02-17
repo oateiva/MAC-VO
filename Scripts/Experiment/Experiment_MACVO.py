@@ -5,6 +5,8 @@
 import argparse
 from pathlib import Path
 
+import torch
+
 # Import custom modules for data loading, evaluation, odometry, config, logging, and visualization
 from DataLoader import SequenceBase, Frame, smart_transform
 from Evaluation.EvalSeq import EvaluateSequences
@@ -15,15 +17,16 @@ from Utility.Sandbox import Sandbox
 
 # Visualization tools
 import rerun as rr
+from typing import List
 from Utility.Visualize import fig_plt, rr_plt
 from MACVO import VisualizeRerunCallback, VisualizeVRAMUsage
 
-def onFrameFinished(frame: Frame, system: MACVO, pb: ColoredTqdm):
+def onFrameFinished(frame: Frame, system: MACVO, pb: ColoredTqdm, gt: List[torch.Tensor] | None = None):
     """
     Callback executed after each frame is processed.
     Handles visualization and VRAM usage logging.
     """
-    VisualizeRerunCallback(frame, system, pb)
+    VisualizeRerunCallback(frame, system, pb, gt)
     VisualizeVRAMUsage(frame, system, pb)
 
 

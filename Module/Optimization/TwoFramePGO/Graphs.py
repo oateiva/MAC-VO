@@ -842,7 +842,10 @@ class ISAM(FactorGraph):
                 pw_init = P1.transformFrom(np.asarray(obs_c1, dtype=np.float64).reshape(3,))
                 new_values.insert(landmark_key, pw_init)
 
-        update = self.isam.update(new_factors, new_values)
+        try:
+            update = self.isam.update(new_factors, new_values)
+        except Exception as e:
+            print(f"Error during iSAM update: {e}")
         # update = self.isam.update()
 
         pose_window = self.get_pose_window(self.isam, self.frame_idx, K=50)
