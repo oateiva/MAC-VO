@@ -95,7 +95,7 @@ class TartanMotionNet(IMotionModel[Frame]):
         from .Network.TartanVOStereo import TartanStereoVOMotion
 
         super().__init__(config)
-        self.model = TartanStereoVOMotion(self.config.weight, True, self.config.device)
+        self.model = TartanStereoVOMotion(self.config.weight, True, self.config.device, self.config.stereo)
         self.prev_pose = None
 
     @Timer.cpu_timeit("MotionModel")
