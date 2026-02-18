@@ -1,0 +1,286 @@
+- type: EIVA_NoIMU
+  name: day2_outsideJM_track1_run1
+  args:
+    root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T060319\180199A003output
+    vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 1 - Run 1.etr
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: false
+    is_stereo: true
+    window_length: 1
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: day2_outsideJM_track2_run2
+  args:
+    root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T060904\180199A003output
+    vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 2 - Run 2.etr
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: false
+    is_stereo: true
+    window_length: 1
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: day2_outsideJM_track3_run3
+  args:
+    root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T061829\180199A003output
+    vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 3 - Run 3.etr
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: false
+    is_stereo: true
+    window_length: 1
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: day2_outsideJM_track4_run4
+  args:
+    root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T062745\180199A003output
+    vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 4 - Run 4.etr
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: false
+    is_stereo: true
+    window_length: 1
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: day2_outsideJM_track5_run5
+  args:
+    root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T064840\180199A003output
+    vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 5 - Run 5.etr
+    vslampc: C:\Users\oat\Downloads\PointCloud - Run 5.csv
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: false
+    is_stereo: true
+    window_length: 1
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: day2_outsideJM_track6_run6
+  args:
+    root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T070043\180199A003output
+    vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 6 - Run 6.etr
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: false
+    is_stereo: true
+    window_length: 1
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: day2_outsideJM_track7_run7
+  args:
+    root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T070238\180199A003output
+    vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 7 - Run 7.etr
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: false
+    is_stereo: true
+    window_length: 1
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: day2_outsideJM_track8_run8
+  args:
+    root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T070352\180199A003output
+    vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 8 - Run 8.etr
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: false
+    is_stereo: true
+    window_length: 1
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: day2_outsideJM_track9_run9
+  args:
+    root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T070522\180199A003output
+    vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 9 - Run 9.etr
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: false
+    is_stereo: true
+    window_length: 1
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: day2_outsideJM_track10_run10
+  args:
+    root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T072444\180199A003output
+    vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 10 - Run 10.etr
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: false
+    is_stereo: true
+    window_length: 1
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: day2_outsideJM_track11_run11
+  args:
+    root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T082357\180199A003output
+    vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 11 - Run 11.etr
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: false
+    is_stereo: true
+    window_length: 1
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: day2_outsideJM_track12_run12
+  args:
+    root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T082514\180199A003output
+    vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 13 - Run 12.etr
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: false
+    is_stereo: true
+    window_length: 1
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: day2_outsideJM_track13_run13
+  args:
+    root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T084520\180199A003output
+    vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 15 - Run 13.etr
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: false
+    is_stereo: true
+    window_length: 1
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: day2_outsideJM_track14_run14
+  args:
+    root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T084555\180199A003output
+    vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 16 - Run 14.etr
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: false
+    is_stereo: true
+    window_length: 1
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: day2_outsideJM_track15_run15
+  args:
+    root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T084809\180199A003output
+    vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 18 - Run 15.etr
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: false
+    is_stereo: true
+    window_length: 1
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: day2_outsideJM_track16_run16
+  args:
+    root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T085159\180199A003output
+    vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 19 - Run 16.etr
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: false
+    is_stereo: true
+    window_length: 1
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: day2_outsideJM_track17_run17
+  args:
+    root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T085829\180199A003output
+    vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 20 - Run 17.etr
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: false
+    is_stereo: true
+    window_length: 1
+    compressed: true
+
+# - type: EIVA_NoIMU
+#   name: day2_outsideJM_track18_run18 Does not have sensor.yaml
+#   args:
+#     root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T090713\180199A003output
+#     vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 21 - Run 18.etr
+#     # Controls optional data sources
+#     gtDepth: false
+#     gtFlow: false
+#     gtPose: false
+#     is_stereo: true
+#     window_length: 1
+#     compressed: true
+
+- type: EIVA_NoIMU
+  name: day2_outsideJM_track19_run19
+  args:
+    root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T090903\180199A003output
+    vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 22 - Run 19.etr
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: false
+    is_stereo: true
+    window_length: 1
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: day2_outsideJM_track20_run20
+  args:
+    root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T093039\180199A003output
+    vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 23 - Run 20.etr
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: false
+    is_stereo: true
+    window_length: 1
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: day2_outsideJM_track21_run21
+  args:
+    root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T093106\180199A003output
+    vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 24 - Run 21.etr
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: false
+    is_stereo: true
+    window_length: 1
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: day2_outsideJM_track22_run22
+  args:
+    root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T093610\180199A003output
+    vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 25 - Run 22.etr
+    # Controls optional data sources
+    gtDepth: false
+    gtFlow: false
+    gtPose: false
+    is_stereo: true
+    window_length: 1
+    compressed: true

@@ -1,0 +1,12 @@
+type: EIVA_NoIMU
+name: day2_outsideJM_track1_run1
+args:
+  root: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\vSLAMCache\Run_20260130T060319\180199A003output
+  vslam: X:\DataSets\EIVACollectedData\SLAM\260129 JM x Voyis\Day 2 - Outside JM\Discovery Perception 3000 - JM Launch\Data\Tracks\VSLAM track 1 - Run 1.etr
+  # Controls optional data sources
+  gtDepth: false
+  gtFlow: false
+  gtPose: false
+  is_stereo: true
+  window_length: 1 # 1 with dav2, N with dav3
+  compressed: true

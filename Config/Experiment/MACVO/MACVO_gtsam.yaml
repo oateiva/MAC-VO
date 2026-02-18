@@ -13,7 +13,7 @@ Common:
   device: &device cuda
 
 Odometry:
-  name: MACVO-gtsam-uncertainty
+  name: MACVO-gtsam
   args:
     # Device directive to the VO system
     # NOTE: the system may not follow this device config strictly since some module
@@ -96,5 +96,5 @@ Odometry:
       parallel: false
       graph_type: pose2point
 
-Datas: !include ../Common/DeepODO_stereo_experiments.yaml
+Datas: !include ../Common/DeepODO_stereo_norway.yaml
 Preprocess: !include ../Common/Preprocess.yaml
