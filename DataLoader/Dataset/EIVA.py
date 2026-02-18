@@ -147,12 +147,11 @@ class EIVASequence(SequenceBase[Frame]):
 
         # Metadata (common)
         self.lcam_T_BS = pp.identity_SE3(1)
-        self.lcam_K    = torch.tensor([
-            [1847.5905420747683, 0.0, 1391.3],
-            [0.0, 1847.5905420747683, 1407.177],
-            [0.0, 0.0, 1.0]]).unsqueeze(0)
-        self.width     = 2816
-        self.height    = 2816
+        K, height, width, baseline = self.parse_intrinsics(Path(cfg.root, "processed"))
+        self.lcam_K    = K
+        self.width     = width
+        self.height    = height
+        self.baseline  = baseline
         # End
 
         self.is_stereo = cfg.is_stereo if hasattr(cfg, "is_stereo") else True
@@ -186,6 +185,20 @@ class EIVASequence(SequenceBase[Frame]):
 
         super().__init__(self.length)
 
+    def parse_intrinsics(self, sensor_path: Path):
+        """
+        Parse camera intrinsics from a YAML file (resized_sensor.yaml).
+        """
+        import yaml
+        yaml_path = sensor_path / "resized_sensor.yaml"
+        with open(yaml_path, 'r') as f:
+            data = yaml.safe_load(f)
+        intrinsics = data["intrinsics"]
+        K = torch.tensor(intrinsics, dtype=torch.float32).unsqueeze(0)
+        height, width = data["resolution"]
+        baseline = data.get("baseline", 0.0)
+        return K, height, width, baseline
+
     def __getitem__(self, local_index: int) -> Frame:
         index   = self.get_index(local_index)
         index  = index + self.step_size-1 if index != 0 else index
@@ -206,8 +219,8 @@ class EIVASequence(SequenceBase[Frame]):
                     K         = self.lcam_K,
                     baseline  = torch.tensor([self.baseline]),
                     time_ns   = [self.lcam_time[index]],
-                    height    = 2816,
-                    width     = 2816,
+                    height    = self.height,
+                    width     = self.width,
                     imageL    = self.lcam_loader[index],
                     imageR    = self.rcam_loader[index],
 
@@ -227,8 +240,8 @@ class EIVASequence(SequenceBase[Frame]):
                     K         = self.lcam_K,
                     baseline  = torch.tensor([self.baseline]),
                     time_ns   = [self.lcam_time[index]],
-                    height    = 2816,
-                    width     = 2816,
+                    height    = self.height,
+                    width     = self.width,
                     images    = self.lcam_loader[index],
                     # Ground truth and labels
                     gt_depth  = None,
