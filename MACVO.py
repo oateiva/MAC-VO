@@ -14,7 +14,7 @@ from Utility.PrettyPrint import print_as_table, ColoredTqdm, Logger
 from Utility.Sandbox import Sandbox
 from Utility.Visualize import fig_plt, rr_plt
 from Utility.Timer import Timer
-
+from Utility.read_eiva_vslam_outputs import load_vslam_track
 
 def VisualizeRerunCallback(frame: Frame, system: MACVO, pb: ColoredTqdm):
     rr.set_time("frame_idx", sequence=frame.frame_idx)
@@ -99,6 +99,12 @@ def get_args():
         action="store_true",
         help="Record timing for system (active Utility.Timer for global time recording)"
     )
+    parser.add_argument(
+        "--vlsam",
+        type=str,
+        default=None,
+        help="Path to VSLAM track txt file for visualization in Rerun."
+    )
     return parser.parse_args()
 
 
@@ -123,6 +129,9 @@ if __name__ == "__main__":
     if args.useRR:
         rr_plt.default_mode = "rerun"
         rr_plt.init_connect(project_name)
+
+    if datacfg.args.vslam:
+        vslam_track = load_vslam_track(datacfg.args.vslam, entity_name=project_name)
 
     Timer.setup(active=args.timing)
     fig_plt.default_mode = "image" if args.saveplt else "none"
@@ -155,6 +164,9 @@ if __name__ == "__main__":
 
     Timer.report()
     Timer.save_elapsed(exp_space.path("elapsed_time.json"))
+
+    if args.useRR:
+        rr.save(exp_space.path(f"{project_name}.rrd"))
 
     if not args.noeval:
         header, result = EvaluateSequences([str(exp_space.folder)], align=True, align_origin=False)
