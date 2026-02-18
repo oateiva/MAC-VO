@@ -1,0 +1,232 @@
+-   type: TartanAir_NoIMU
+    name: abandonedfactory_Easy_P000
+    args:
+        root: D:\Datasets\TartanAir\abandonedfactory\Easy\P000
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: abandonedfactory_night_Easy_P001
+    args:
+        root: D:\Datasets\TartanAir\abandonedfactory_night\Easy\P001
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: amusement_Easy_P001
+    args:
+        root: D:\Datasets\TartanAir\amusement\Easy\P001
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
+        compressed: false
+-   type: TartanAir_NoIMU
+    name: carwelding_Easy_P001
+    args:
+        root: D:\Datasets\TartanAir\carwelding\Easy\P001
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: endofworld_Easy_P000
+    args:
+        root: D:\Datasets\TartanAir\endofworld\Easy\P000
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: gascola_Easy_P001
+    args:
+        root: D:\Datasets\TartanAir\gascola\Easy\P001
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: hospital_Easy_P000
+    args:
+        root: D:\Datasets\TartanAir\hospital\Easy\P000
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: japanesealley_Easy_P007
+    args:
+        root: D:\Datasets\TartanAir\japanesealley\Easy\P001
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: neighborhood_Easy_P000
+    args:
+        root: D:\Datasets\TartanAir\neighborhood\Easy\P000
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: ocean_Easy_P000
+    args:
+        root: D:\Datasets\TartanAir\ocean\Easy\P000
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: office_Easy_P000
+    args:
+        root: D:\Datasets\TartanAir\office\Easy\P000
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: office2_Easy_P000
+    args:
+        root: D:\Datasets\TartanAir\office2\Easy\P000
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: oldtown_Easy_P000
+    args:
+        root: D:\Datasets\TartanAir\oldtown\Easy\P000
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: seasidetown_Easy_P000
+    args:
+        root: D:\Datasets\TartanAir\seasidetown\Easy\P000
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: seasonsforest_Easy_P001
+    args:
+        root: D:\Datasets\TartanAir\seasonsforest\Easy\P001
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: seasonsforest_winter_Easy_P000
+    args:
+        root: D:\Datasets\TartanAir\seasonsforest_winter\Easy\P000
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: soulcity_Easy_P000
+    args:
+        root: D:\Datasets\TartanAir\soulcity\Easy\P000
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
+        compressed: false
+
+-   type: TartanAir_NoIMU
+    name: westerndesert_Easy_P001
+    args:
+        root: D:\Datasets\TartanAir\westerndesert\Easy\P001
+        # Controls optional data sources
+        gtDepth: false
+        gtFlow: true
+        gtPose: true
+        is_stereo: false
+        window_length: 1
+        step_size: 1
+        compressed: false

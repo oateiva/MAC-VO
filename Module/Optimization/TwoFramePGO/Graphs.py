@@ -9,7 +9,10 @@ from Module.Map import MatchObs, PointNode
 from Utility.Point import pixel2point_NED, point2pixel_NED
 from Utility.GTSAM_Utils import pypose_to_pose3, pose3_to_pypose, make_pose_to_point_factor
 from ..PyposeOptimizers import AnalyticModule, FactorGraph
+from collections import defaultdict
+from typing import Dict, Tuple, Optional, List
 import rerun as rr
+
 @dataclass
 class GraphInput:
     frame_idx         : torch.Tensor
@@ -37,6 +40,14 @@ class GraphOutput:
     from_idx : torch.Tensor
     frame_idx: torch.Tensor
 
+@dataclass
+class GTSAM_GraphOutput:
+    frame_idexes: List[int]
+    pose_estimates: List[torch.Tensor]
+    landmark_indexes: Optional[list[int] | None] = None
+    map_points: Optional[torch.Tensor] = None
+
+PosePixelMap = Dict[int, Dict[Tuple[float, float], int]]
 
 ############## Optimization Graphs
 
@@ -396,9 +407,9 @@ class Analytic_ReprojDepth_TwoFramePGO(ReprojDepth_TwoFramePGO, AnalyticModule):
         return J
 
 class GTSAM_Pose2Point(FactorGraph):
-    def __init__(self, graph_data: GTSAM_GraphInput):
+    def __init__(self):
         super().__init__()
-        self.parse_graph_data(graph_data)
+        # self.parse_graph_data(graph_data)
         # self.log_save_data(graph_data)
 
 
@@ -482,11 +493,13 @@ class GTSAM_Pose2Point(FactorGraph):
                 ))
 
         landmark_keys = []
+        landmark_idx = []
         for i in range(len(self.obs_Tc_1)):
 
             # Create landmark key
             landmark_key = gtsam.symbol('l', i)
             landmark_keys.append(landmark_key)
+            landmark_idx.append(i)
 
             if any(i == idx_pair[1] for idx_pair in self.indexes_prev_curr) and p0_index >= 0:
                 pi = [index_prev_curr[0] for index_prev_curr in self.indexes_prev_curr if index_prev_curr[1] == i][0]
@@ -543,23 +556,25 @@ class GTSAM_Pose2Point(FactorGraph):
         # Optimize the graph
         params = gtsam.LevenbergMarquardtParams()
         params.setVerbosityLM("SUMMARY")
-        # graph.print("Factor Graph:\n")
-        # initial_estimate.print("Initial Estimate:\n")
+
         optimizer = gtsam.LevenbergMarquardtOptimizer(graph, initial_estimate, params)
         result = optimizer.optimize()
-        # print("GTSAM optimization complete. Final Result:\n{}".format(estimate))
 
-        # pose_0_to_1 = graph_data.init_motion
-        # pose_0_to_2 = pose_0_to_1 @ pose_1_to_2
         pose_1 = result.atPose3(pose_1_key)
         pose_2 = result.atPose3(pose_2_key)
         landmark_positions = [result.atPoint3(landmark_keys[i]) for i in range(len(landmark_keys))]
+        landmark_positions = torch.stack([torch.from_numpy(pos).double() for pos in landmark_positions], dim=0)  # (N,3)
 
         # self.log_plot_data(pose_1=pose_1, pose_2=pose_2, landmark_positions=landmark_positions)
-
+        pose_1 = pose3_to_pypose(pose_1)
         pose_2 = pose3_to_pypose(pose_2)
 
-        self.graph_output = GraphOutput(motion=pose_2, frame_idx=self.frame_idx, from_idx=self.from_idx)
+        self.graph_output = GTSAM_GraphOutput(
+            frame_idexes=[int(self.from_idx.cpu().item()), int(self.frame_idx.cpu().item())],
+            pose_estimates=[pose_1, pose_2],
+            landmark_indexes=landmark_idx,
+            map_points=landmark_positions
+            )
 
     def write_back(self):
         return self.graph_output
@@ -656,3 +671,382 @@ class GTSAM_Pose2Point(FactorGraph):
             "/world/optimized/{}/points".format(self.frame_idx.cpu().item()),
             rr.Points3D(landmark_positions, colors=[0, 255, 0])
             )
+
+
+class ISAM(FactorGraph):
+    def __init__(self):
+        super().__init__()
+        # self.parse_graph_data(graph_data)
+        # self.log_save_data(graph_data)
+        self.pose_pixel_landmarks = {}
+
+        # ---- iSAM2 setup ----
+        self.isam_params = gtsam.ISAM2Params()
+        self.isam_params.setRelinearizeThreshold(0.1)
+        self.isam_params.relinearizeSkip = 5
+        self.isam_params.enablePartialRelinearizationCheck = True
+        self.isam = gtsam.ISAM2(self.isam_params)
+
+        self.gauge_prior_added = False
+        self.next_landmark_id = 0
+
+
+    def parse_graph_data(self, graph_data: GTSAM_GraphInput):
+
+        # Graph parsing
+        idx = graph_data.current_graph_data.edges_index.detach().cpu().long().numpy()
+        self.from_idx   = graph_data.current_graph_data.from_idx.cpu().item()
+        self.frame_idx  = graph_data.current_graph_data.frame_idx.cpu().item()
+        self.prev_from_idx = graph_data.previous_graph_data.from_idx.cpu().item()
+
+        self.init_pose = pypose_to_pose3(graph_data.current_graph_data.init_motion)
+
+        self.P0 = pypose_to_pose3(pp.SE3(graph_data.previous_graph_data.from_pose))
+
+        self.pixel0_uv = graph_data.previous_graph_data.observations.data["pixel1_uv"].detach().cpu().double().numpy()
+        self.pixel1_uv = graph_data.current_graph_data.observations.data["pixel1_uv"].detach().cpu().double().numpy()
+        self.pixel2_uv = graph_data.current_graph_data.observations.data["pixel2_uv"].detach().cpu().double().numpy()
+
+        self.obs_Tc_0 = pixel2point_NED( # in camera frame at t
+            graph_data.previous_graph_data.observations.data["pixel1_uv"],
+            graph_data.previous_graph_data.observations.data["pixel1_d"].squeeze(-1),
+            graph_data.previous_graph_data.images_intrinsic
+        ).detach().cpu().double().numpy()
+
+        self.obs_Tc_1 = pixel2point_NED( # in camera frame at t
+            graph_data.current_graph_data.observations.data["pixel1_uv"],
+            graph_data.current_graph_data.observations.data["pixel1_d"].squeeze(-1),
+            graph_data.current_graph_data.images_intrinsic
+        ).detach().cpu().double().numpy()
+
+        self.obs_Tc_2 = pixel2point_NED( # in camera frame at t+1
+            graph_data.current_graph_data.observations.data["pixel2_uv"],
+            graph_data.current_graph_data.observations.data["pixel2_d"].squeeze(-1),
+            graph_data.current_graph_data.images_intrinsic
+        ).detach().cpu().double().numpy()
+
+        pts_Tw = graph_data.current_graph_data.points.data["pos_Tw"].detach().cpu().double().numpy()  # (N,3) # in world frame?
+
+        self.obs1_covTc = graph_data.current_graph_data.observations.data["obs1_covTc"].detach().cpu().double().numpy()  # (N,3,3)
+        self.obs2_covTc = graph_data.current_graph_data.observations.data["obs2_covTc"].detach().cpu().double().numpy()  # (N,3,3)
+        self.pts_covTw = graph_data.current_graph_data.points.data["cov_Tw"].detach().cpu().double().numpy() # (N,3,3)
+
+        self.previous_graph_data = graph_data.previous_graph_data
+
+    def run_gtsam_optimization(self):
+
+        # Only add *new* factors and *new* initial guesses each step
+        new_factors = gtsam.NonlinearFactorGraph()
+        new_values = gtsam.Values()
+
+        # Current estimate (for "exists" checks)
+        est = self.isam.calculateEstimate() #if isam.size() > 0 else gtsam.Values()
+
+        # Robust kernel
+        m_huber = gtsam.noiseModel.mEstimator.Huber.Create(0.1)
+
+        # Keys
+        if self.prev_from_idx>=0:
+            pose_0_key = gtsam.symbol('p', self.prev_from_idx)
+            P0 = self.P0
+            if not est.exists(pose_0_key):
+                new_values.insert(pose_0_key, P0)
+
+        pose_1_key = gtsam.symbol('p', self.from_idx)
+        pose_2_key = gtsam.symbol('p', self.frame_idx)
+
+
+        if est.exists(pose_1_key):
+            P1 = est.atPose3(pose_1_key)
+        else:
+            P1 = self.init_pose
+        P2 = self.init_pose
+
+        # Insert pose initials if missing
+
+        if not est.exists(pose_1_key):
+            new_values.insert(pose_1_key, P1)
+        if not est.exists(pose_2_key):
+            new_values.insert(pose_2_key, P2)
+
+        sigmas = np.array([1e-4] * 6, dtype=np.float64)
+        prior_noise = gtsam.noiseModel.Diagonal.Sigmas(sigmas)
+
+        if not self.gauge_prior_added:
+            # Add a prior on the first pose to fix gauge freedom
+            new_factors.add(
+                gtsam.PriorFactorPose3(
+                    pose_1_key,
+                    P1,
+                    prior_noise
+                )
+            )
+            self.gauge_prior_added = True
+
+        # Add weak factor to regularize the relative pose between pose_1 and pose_2 (encourages small motion, helps convergence)
+        # it prevents the new pose from being completely unconstrained when landmarks are messy, and it helps stability.
+        between_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([0.5,0.5,0.5, 0.5,0.5,0.5]))
+        new_factors.add(gtsam.BetweenFactorPose3(pose_1_key, pose_2_key, gtsam.Pose3(), between_noise))
+
+
+        # Landmarks
+        landmark_keys = []
+        cov_landmark_1 = []
+        cov_landmark_2 = []
+
+        eps = 1e-6
+
+        for i in range(len(self.obs_Tc_1)):
+            uv1 = (int(self.pixel1_uv[i][0]), int(self.pixel1_uv[i][1]))
+            uv2 = (int(self.pixel2_uv[i][0]), int(self.pixel2_uv[i][1]))
+
+            obs_c1 = self.obs_Tc_1[i]
+            obs_c2 = self.obs_Tc_2[i]
+
+            cov_c1 = np.array(self.obs1_covTc[i], dtype=np.float64) + eps * np.eye(3)
+            cov_c2 = np.array(self.obs2_covTc[i], dtype=np.float64) + eps * np.eye(3)
+
+            cov_landmark_1.append(cov_c1)
+            cov_landmark_2.append(cov_c2)
+
+            nm1 = gtsam.noiseModel.Robust.Create(m_huber, gtsam.noiseModel.Gaussian.Covariance(cov_c1))
+            nm2 = gtsam.noiseModel.Robust.Create(m_huber, gtsam.noiseModel.Gaussian.Covariance(cov_c2))
+
+            # Check if landmark already exists in dictionary (and thus, in graph)
+            landmark_key = find_nearest_landmark(
+                self.pose_pixel_landmarks,
+                pose_1_key,
+                uv1,
+                tol=3.0
+            )
+            # if it exists, uv2 should have the same key
+            if landmark_key is not None:
+                self.pose_pixel_landmarks.setdefault(pose_2_key, {}).setdefault(uv2, landmark_key)
+                new_factors.add(make_pose_to_point_factor(pose_1_key, landmark_key, obs_c1, nm1))
+                new_factors.add(make_pose_to_point_factor(pose_2_key, landmark_key, obs_c2, nm2))
+
+            else:
+                landmark_key = gtsam.symbol('l', self.next_landmark_id)
+                landmark_keys.append(landmark_key)
+                self.pose_pixel_landmarks.setdefault(pose_1_key, {}).setdefault(uv1, landmark_key)
+                self.pose_pixel_landmarks.setdefault(pose_2_key, {}).setdefault(uv2, landmark_key)
+
+                # Factors for current frame pair
+                new_factors.add(make_pose_to_point_factor(pose_1_key, landmark_key, obs_c1, nm1))
+                new_factors.add(make_pose_to_point_factor(pose_2_key, landmark_key, obs_c2, nm2))
+
+                self.next_landmark_id += 1
+
+            # Initial for landmark if missing: use cam1 observation lifted into world with P1
+            if not est.exists(landmark_key) and not new_values.exists(landmark_key):
+                pw_init = P1.transformFrom(np.asarray(obs_c1, dtype=np.float64).reshape(3,))
+                new_values.insert(landmark_key, pw_init)
+
+        try:
+            update = self.isam.update(new_factors, new_values)
+        except Exception as e:
+            print(f"Error during iSAM update: {e}")
+        # update = self.isam.update()
+
+        pose_window = self.get_pose_window(self.isam, self.frame_idx, K=50)
+        frame_idexes = list(pose_window.keys())
+        pose_estimates = [pose_window[idx] for idx in frame_idexes]
+
+        # landmark_positions = [result.atPoint3(landmark_keys[i]) for i in range(len(landmark_keys))]
+        landmark_idx, landmark_points = self.get_all_landmarks(self.isam)
+        # Convert landmark_points (list of gtsam.Point3) to torch.Tensor (N,3)
+        if len(landmark_points) > 0:
+            landmark_points = torch.tensor(np.stack([np.asarray(p) for p in landmark_points]), dtype=torch.float32)
+        else:
+            landmark_points = torch.empty((0, 3), dtype=torch.float32)
+
+        self.graph_output = GTSAM_GraphOutput(
+            frame_idexes=frame_idexes,
+            pose_estimates=pose_estimates,
+            landmark_indexes=landmark_idx,
+            map_points=landmark_points,
+            )
+
+        # self.log_plot_data(pose_1=pose_1, pose_2=pose_2, landmark_positions=landmark_positions)
+
+        new_factors.resize(0)  # Clear new_factors to save memory; iSAM2 has already incorporated them
+        new_values.clear()  # Clear new_values to save memory; iSAM2 has already incorporated them
+
+        # Clear dictionary to speed up future lookups; iSAM2 has already incorporated the landmarks
+        if len(self.pose_pixel_landmarks) > 3:
+            for k in sorted(self.pose_pixel_landmarks.keys())[:-3]:
+                del self.pose_pixel_landmarks[k]
+
+
+    @staticmethod
+    def get_pose_window(isam: gtsam.ISAM2, end_idx: int, K: int):
+        """
+        Returns dict {pose_index: gtsam.Pose3} for indices in [max(0,end_idx-K+1), end_idx]
+        that exist in the current estimate.
+        """
+        est: gtsam.Values = isam.calculateEstimate()
+
+        start_idx = max(0, end_idx - K + 1)
+        poses = {}
+
+        for i in range(start_idx, end_idx + 1):
+            key = gtsam.symbol('p', i)
+            if est.exists(key):
+                poses[i] = pose3_to_pypose(est.atPose3(key))
+
+        return poses
+
+    @staticmethod
+    def get_all_landmarks(isam: gtsam.ISAM2):
+        """
+        Returns:
+            indices: list[int]        # sorted landmark indices
+            points:  list[gtsam.Point3]
+        """
+        est = isam.calculateEstimate()
+
+        landmark_keys = []
+
+        # Collect all 'l' symbols
+        for key in est.keys():
+            sym = gtsam.Symbol(key)
+            if sym.chr() == ord('l'):  # landmark symbol
+                landmark_keys.append((sym.index(), key))
+
+        # Sort by index
+        landmark_keys.sort(key=lambda x: x[0])
+
+        indices = []
+        points = []
+
+        for idx, key in landmark_keys:
+            indices.append(idx)
+            points.append(est.atPoint3(key))
+
+        return indices, points
+
+    def write_back(self):
+        return self.graph_output
+
+    def covariance_array(self) -> torch.Tensor:
+        return torch.from_numpy(self.obs2_covTc)
+
+    def log_save_data(self, graph_data: GTSAM_GraphInput):
+        import os
+        import json
+        import tempfile
+
+        frame_idx = graph_data.current_graph_data.frame_idx.cpu().item()
+
+        frame_data = {
+            "from_idx": graph_data.current_graph_data.from_idx.cpu().item(),
+            "from_pose": graph_data.current_graph_data.from_pose.cpu().tolist(),
+            "init_motion": graph_data.current_graph_data.init_motion.cpu().tolist(),
+            "pixel1_uv": graph_data.current_graph_data.observations.data["pixel1_uv"].cpu().tolist(),
+            "pixel2_uv": graph_data.current_graph_data.observations.data["pixel2_uv"].cpu().tolist(),
+            "pixel1_uv_cov": graph_data.current_graph_data.observations.data["pixel1_uv_cov"].cpu().tolist(),
+            "pixel2_uv_cov": graph_data.current_graph_data.observations.data["pixel2_uv_cov"].cpu().tolist(),
+            "obs_Tc_1": self.obs_Tc_1.tolist(),
+            "obs_Tc_2": self.obs_Tc_2.tolist(),
+            "pts_Tw": graph_data.current_graph_data.points.data["pos_Tw"].cpu().tolist(),
+            "obs1_covTc": self.obs1_covTc.tolist(),
+            "obs2_covTc": self.obs2_covTc.tolist(),
+            "pts_covTw": self.pts_covTw.tolist(),
+            "images_intrinsic": graph_data.current_graph_data.images_intrinsic.cpu().tolist(),
+        }
+
+        json_path = os.path.join(os.getcwd(), "graph_data_dump.json")
+        tmp_path = json_path + ".tmp"
+
+        # Load existing data if file exists
+        if os.path.exists(json_path):
+            with open(json_path, "r") as f:
+                try:
+                    all_data = json.load(f)
+                except json.JSONDecodeError:
+                    all_data = {}
+        else:
+            all_data = {}
+
+        # Use frame_idx as key (string for JSON safety)
+        all_data[str(frame_idx)] = frame_data
+
+        # Write back to file
+        with open(tmp_path, "w") as f:
+            json.dump(all_data, f, indent=2)
+
+        os.replace(tmp_path, json_path)
+
+        print(f"graph_data for frame {frame_idx} saved to {json_path}")
+
+
+    def log_plot_data(self, pose_1, pose_2, landmark_positions):
+        from Utility.Visualize import rr_plt
+        rr.init("debug", spawn=True)
+        i = int(self.from_idx.cpu().item())
+        rr.set_time("frame_idx", sequence=i)
+        pose_2_q = pose_2.rotation().toQuaternion()
+        pose_2_t = pose_2.translation()
+        pose_2 = pose3_to_pypose(pose_2)
+        pose_1_q = pose_1.rotation().toQuaternion()
+        pose_1_t = pose_1.translation()
+        rr.log("/world/cam/{}".format(self.from_idx.cpu().item()),
+                rr.Transform3D(
+                    translation=pose_1_t,
+                    quaternion=[pose_1_q.x(), pose_1_q.y(), pose_1_q.z(), pose_1_q.w()],
+                    axis_length=1.0,
+                ))
+        K = np.array([[459.2732,   0.0000, 345.8487],
+                        [  0.0000, 459.2732, 349.7954],
+                        [  0.0000,   0.0000,   1.0000]])
+        rr.log(
+            "/world/cam/{}/points_i1".format(self.from_idx.cpu().item()),
+            rr.Points3D(self.obs_Tc_1, colors=[255, 165, 0])
+            )
+        rr.log(
+            "/world/cam/{}/points_i2".format(self.frame_idx.cpu().item()),
+            rr.Points3D(self.obs_Tc_2, colors=[255, 0, 0])
+            )
+
+        # rr.set_time_sequence("step", graph_data.frame_idx)
+        rr.log("/world/cam/{}".format(self.frame_idx.cpu().item()),
+                rr.Transform3D(
+                    translation=pose_2_t,
+                    quaternion=[pose_2_q.x(), pose_2_q.y(), pose_2_q.z(), pose_2_q.w()],
+                    axis_length=1.0
+                ))
+
+        rr.log(
+            "/world/optimized/{}/points".format(self.frame_idx.cpu().item()),
+            rr.Points3D(landmark_positions, colors=[0, 255, 0])
+            )
+
+def next_landmark_index(values: gtsam.Values) -> int:
+    max_idx = -1
+    for k in values.keys():
+        s = gtsam.Symbol(k)
+        if s.chr() == ord('l'):
+            max_idx = max(max_idx, s.index())
+    return max_idx + 1
+
+def find_nearest_landmark(
+    pose_pixel_landmarks: PosePixelMap,
+    pose_key: int,
+    uv: Tuple[float, float],
+    tol: float = 1.0,
+) -> Optional[int]:
+    inner = pose_pixel_landmarks.get(pose_key)
+    if not inner:
+        return None
+
+    best_key = None
+    best_dist2 = tol * tol
+
+    u0, v0 = uv
+    for (u, v), lk in inner.items():
+        d2 = (u - u0)**2 + (v - v0)**2
+        if d2 <= best_dist2:
+            best_dist2 = d2
+            best_key = lk
+
+    return best_key

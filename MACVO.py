@@ -4,6 +4,7 @@ import rerun as rr
 import numpy as np
 import pypose as pp
 from pathlib import Path
+from typing import List
 
 from DataLoader import SequenceBase, Frame, smart_transform
 from Evaluation.EvalSeq import EvaluateSequences
@@ -16,7 +17,7 @@ from Utility.Visualize import fig_plt, rr_plt
 from Utility.Timer import Timer
 from Utility.read_eiva_vslam_outputs import load_vslam_track
 
-def VisualizeRerunCallback(frame: Frame, system: MACVO, pb: ColoredTqdm):
+def VisualizeRerunCallback(frame: Frame, system: MACVO, pb: ColoredTqdm, gt: List[torch.Tensor] | None = None):
     rr.set_time("frame_idx", sequence=frame.frame_idx)
 
     # Non-key frame does not need visualization
@@ -25,13 +26,35 @@ def VisualizeRerunCallback(frame: Frame, system: MACVO, pb: ColoredTqdm):
     if frame.frame_idx > 0:
         rr_plt.log_trajectory("/world/est", pp.SE3(system.graph.frames.data["pose"].tensor))
 
+    # if gt is not None:
+    #     gt = torch.stack(gt)
+    #     gt = pp.SE3(gt)
+    #     rr_plt.log_trajectory("/world/gt" , gt)
+
+    if gt is not None:
+        gt = pp.SE3(torch.stack(gt))  # (N,7) typically
+
+        R = pp.euler2SO3(torch.tensor([-np.pi/2, 0., 0.], device=gt.device, dtype=gt.dtype))
+
+        # Build SE3 with zero translation + rotation R
+        batch = gt.shape[:-1]  # e.g. (N,)
+        t0 = torch.zeros(*batch, 3, device=gt.device, dtype=gt.dtype)
+        q  = R.tensor().expand(*batch, 4)  # quaternion part from SO3
+        T_rot = pp.SE3(torch.cat([t0, q], dim=-1))
+
+        gt = T_rot @ gt   # left-multiply: rotate in /world
+        rr_plt.log_trajectory("/world/gt", gt)
+
     rr_plt.log_camera("/world/macvo/cam_left", pp.SE3(system.graph.frames.data["pose"][-1]), system.graph.frames.data["K"][-1])
     rr_plt.log_image ("/world/macvo/cam_left/rgb", frame.camera.imageL[0].permute(1, 2, 0))
     match_obs = system.graph.get_frame2match(system.graph.frames[-1:])
     rr_plt.log_keypoints("/world/macvo/cam_left/kpts", match_obs)
 
     map_points = system.graph.get_frame2map(system.graph.frames[-1:])
-    rr_plt.log_points("/world/point_cloud", map_points.data["pos_Tw"].detach(), map_points.data["color"].detach(), map_points.data["cov_Tw"].detach(), "sphere")
+    rr_plt.log_points("/world/point_cloud_incremental", map_points.data["pos_Tw"].detach(), map_points.data["color"].detach(), map_points.data["cov_Tw"].detach(), "sphere")
+
+    map_points = system.graph.get_frame2map(system.graph.frames[:])
+    rr_plt.log_points("/world/point_cloud_all", map_points.data["pos_Tw"].detach(), map_points.data["color"].detach(), map_points.data["cov_Tw"].detach(), "sphere")
 
     vo_points  = system.graph.get_match2point(system.graph.get_frame2match(system.graph.frames[-1:]))
     rr_plt.log_points("/world/vo_tracking", vo_points.data["pos_Tw"].detach(), vo_points.data["color"].detach(), vo_points.data["cov_Tw"].detach(), "sphere")
@@ -136,8 +159,8 @@ if __name__ == "__main__":
     Timer.setup(active=args.timing)
     fig_plt.default_mode = "image" if args.saveplt else "none"
 
-    def onFrameFinished(frame: Frame, system: MACVO, pb: ColoredTqdm):
-        VisualizeRerunCallback(frame, system, pb)
+    def onFrameFinished(frame: Frame, system: MACVO, pb: ColoredTqdm, gt: List[torch.Tensor] | None = None):
+        VisualizeRerunCallback(frame, system, pb, gt)
         VisualizeVRAMUsage(frame, system, pb)
 
     # Initialize data source

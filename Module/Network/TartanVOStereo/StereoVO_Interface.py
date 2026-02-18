@@ -19,13 +19,13 @@ class TartanStereoVONetInterface:
     An interface class used to build connection between MAC-VO and TartanVO codebase.
     """
 
-    def __init__(self, weight: Path | str, eval_mode: bool, device: str = "cuda"):
+    def __init__(self, weight: Path | str, eval_mode: bool, device: str = "cuda", stereo: bool = True):
         assert eval_mode is not None
 
         from .StereoVO import StereoVONet
         self.device = device
         self.model = StereoVONet(
-            flowNormFactor=1.0, stereoNormFactor=0.02, poseDepthNormFactor=0.25
+            flowNormFactor=1.0, stereoNormFactor=0.02, poseDepthNormFactor=0.25, stereo=stereo
         )
         self.transform = Compose(
             [
@@ -54,12 +54,60 @@ class TartanStereoVONetInterface:
         self.flow_norm = 0.05
 
     def loadWeight(self, weight: Path | str):
-        state_dict = torch.load(weight, map_location="cpu", weights_only=True)
-        converted_dict = OrderedDict()
-        for key in state_dict:
-            if key.startswith("module."):
-                converted_dict[key[7:]] = state_dict[key]
-        self.model.load_state_dict(converted_dict)
+        ckpt = torch.load(weight, map_location="cpu", weights_only=True)
+
+        # Normalize keys: strip "module." if present
+        converted = OrderedDict()
+        for k, v in ckpt.items():
+            nk = k[7:] if k.startswith("module.") else k
+            converted[nk] = v
+
+        model_state = self.model.state_dict()
+
+        # Build a filtered dict containing only keys that exist AND match shape
+        filtered = OrderedDict()
+        skipped = []      # (key, ckpt_shape, model_shape, reason)
+        unexpected = []   # keys in ckpt not in model
+
+        for k, v in converted.items():
+            if k not in model_state:
+                unexpected.append(k)
+                continue
+
+            if model_state[k].shape != v.shape:
+                skipped.append((k, tuple(v.shape), tuple(model_state[k].shape), "shape_mismatch"))
+                continue
+
+            filtered[k] = v
+
+        # Load filtered weights
+        missing, unexpected_from_load = self.model.load_state_dict(filtered, strict=False)
+
+        # ---- Reporting ----
+        if skipped:
+            print(f"[loadWeight] Skipped {len(skipped)} tensor(s) due to shape mismatch:")
+            for k, s_ckpt, s_model, reason in skipped:
+                print(f"  - {k}: ckpt{s_ckpt} != model{s_model} ({reason})")
+
+        if unexpected:
+            print(f"[loadWeight] {len(unexpected)} unexpected key(s) in checkpoint (not in model). Showing up to 50:")
+            for k in unexpected[:50]:
+                print(f"  - {k}")
+            if len(unexpected) > 50:
+                print("  ...")
+
+        # missing are model keys not provided by `filtered` (includes skipped + genuinely missing)
+        if missing:
+            print(f"[loadWeight] {len(missing)} missing key(s) after load (model params left init/default). Showing up to 50:")
+            for k in missing[:50]:
+                print(f"  - {k}")
+            if len(missing) > 50:
+                print("  ...")
+
+        # Sometimes PyTorch also returns "unexpected" from load_state_dict; usually empty here.
+        if unexpected_from_load:
+            print(f"[loadWeight] Unexpected keys reported by load_state_dict: {unexpected_from_load}")
+
 
     @staticmethod
     def frame2Sample(
@@ -153,8 +201,8 @@ class TartanStereoVOMatch(TartanStereoVONetInterface):
 
 
 class TartanStereoVOMotion(TartanStereoVONetInterface):
-    def __init__(self, weight: Path, eval_mode: bool, device: str = "cuda"):
-        super().__init__(weight, eval_mode, device)
+    def __init__(self, weight: Path, eval_mode: bool, device: str = "cuda", stereo: bool = True):
+        super().__init__(weight, eval_mode, device, stereo)
 
     @staticmethod
     def cropAndResize(x: torch.Tensor, target_shape: tuple[int, int]) -> torch.Tensor:
@@ -175,8 +223,8 @@ class TartanStereoVOMotion(TartanStereoVONetInterface):
     def inference(self, frame0: Frame, flow: torch.Tensor, depth: torch.Tensor) -> torch.Tensor:
         meta = frame0.camera
 
-        baseline = torch.as_tensor(meta.baseline, device=depth.device, dtype=depth.dtype)
-        K = meta.K.to(depth.device)
+        baseline = torch.as_tensor(meta.baseline, device=flow.device, dtype=flow.dtype)
+        K = meta.K.to(flow.device)
 
         tensor_intrinsic = make_device_intrinsic_layer(
             meta.height, meta.width, meta.fx, meta.fy, meta.cx, meta.cy, torch.device(self.device)
@@ -185,15 +233,18 @@ class TartanStereoVOMotion(TartanStereoVONetInterface):
         # (112, 160) is the size of feature map received by the PoseNet in original TartanVO paper.
         # See paper at https://arxiv.org/abs/2011.00359
         tensor_intrinsic_resize = self.cropAndResize(tensor_intrinsic, (112, 160))
-        depth_resize = self.cropAndResize(depth, (112, 160))
+
         flow_resize  = self.cropAndResize(flow, (112, 160)) * self.flow_norm
 
-        stereo = (baseline * K[:,0,0]) / depth_resize
-        stereo = torch.nan_to_num(stereo * self.model.stereoNormFactor, nan=0.0).clamp(min=0.0)
+        if self.model.stereo:
+            depth_resize = self.cropAndResize(depth, (112, 160))
+            stereo = (baseline * K[:,0,0]) / depth_resize
+            stereo = torch.nan_to_num(stereo * self.model.stereoNormFactor, nan=0.0).clamp(min=0.0)
+            depth_resize = stereo / (baseline * K[:,0,0]) / float(self.model.stereoNormFactor * self.model.poseDepthNormFactor)
+            inputTensor = torch.cat((flow_resize, depth_resize, tensor_intrinsic_resize), dim=1).to(self.device)
+        else:
+            inputTensor = torch.cat((flow_resize, tensor_intrinsic_resize), dim=1).to(self.device)
 
-        depth_resize = stereo / (baseline * K[:,0,0]) / float(self.model.stereoNormFactor * self.model.poseDepthNormFactor)
-
-        inputTensor = torch.cat((flow_resize, depth_resize, tensor_intrinsic_resize), dim=1).to(self.device)
         pose = self.model.flowPoseNet(inputTensor, scale_disp=1.0)
 
         return pose.squeeze() * self.pose_norm

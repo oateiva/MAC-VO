@@ -39,7 +39,7 @@ class IOdometry(ABC, Generic[T_Data]):
                     reference_poses.append(frame.gt_pose)
                     reference_time.append(frame.time_ns[0])
 
-                if on_frame_finished is not None: on_frame_finished(frame, self, pb)
+                if on_frame_finished is not None: on_frame_finished(frame, self, pb, reference_poses)
 
             self.terminate()
             global_map = self.get_map()

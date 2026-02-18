@@ -22,7 +22,7 @@ TartanAir_NoIMU:
       height: 476
       width : 630
       interp: nearest
-EuRoC:
+EuRoC_NoIMU:
   - type: SmartResizeFrame
     args:
       height: 476
@@ -48,4 +48,11 @@ SubPipe:
     args:
       height: 378
       width : 672
+      interp: nearest
+
+Aqualoc_NoIMU:
+  - type: SmartResizeFrame
+    args:
+      height: 434
+      width : 700
       interp: nearest

@@ -1,0 +1,118 @@
+-   type: Aqualoc_NoIMU
+    name: aqualoc_archaeological_site_1
+    args:
+        root: D:\Datasets\Aqualoc\Archaeological_site_sequences\raw_data\images_sequence_1
+        is_stereo: false
+        gt_pose: true
+
+-   type: Aqualoc_NoIMU
+    name: aqualoc_archaeological_site_2
+    args:
+        root: D:\Datasets\Aqualoc\Archaeological_site_sequences\raw_data\images_sequence_2
+        is_stereo: false
+        gt_pose: true
+
+-   type: Aqualoc_NoIMU
+    name: aqualoc_archaeological_site_3
+    args:
+        root: D:\Datasets\Aqualoc\Archaeological_site_sequences\raw_data\images_sequence_3
+        is_stereo: false
+        gt_pose: true
+
+-   type: Aqualoc_NoIMU
+    name: aqualoc_archaeological_site_4
+    args:
+        root: D:\Datasets\Aqualoc\Archaeological_site_sequences\raw_data\images_sequence_4
+        is_stereo: false
+        gt_pose: true
+
+-   type: Aqualoc_NoIMU
+    name: aqualoc_archaeological_site_5
+    args:
+        root: D:\Datasets\Aqualoc\Archaeological_site_sequences\raw_data\images_sequence_5
+        is_stereo: false
+        gt_pose: true
+
+-   type: Aqualoc_NoIMU
+    name: aqualoc_archaeological_site_6
+    args:
+        root: D:\Datasets\Aqualoc\Archaeological_site_sequences\raw_data\images_sequence_6
+        is_stereo: false
+        gt_pose: true
+
+-   type: Aqualoc_NoIMU
+    name: aqualoc_archaeological_site_7
+    args:
+        root: D:\Datasets\Aqualoc\Archaeological_site_sequences\raw_data\images_sequence_7
+        is_stereo: false
+        gt_pose: true
+
+-   type: Aqualoc_NoIMU
+    name: aqualoc_archaeological_site_8
+    args:
+        root: D:\Datasets\Aqualoc\Archaeological_site_sequences\raw_data\images_sequence_8
+        is_stereo: false
+        gt_pose: true
+
+-   type: Aqualoc_NoIMU
+    name: aqualoc_archaeological_site_9
+    args:
+        root: D:\Datasets\Aqualoc\Archaeological_site_sequences\raw_data\images_sequence_9
+        is_stereo: false
+        gt_pose: true
+
+-   type: Aqualoc_NoIMU
+    name: aqualoc_archaeological_site_10
+    args:
+        root: D:\Datasets\Aqualoc\Archaeological_site_sequences\raw_data\images_sequence_10
+        is_stereo: false
+        gt_pose: true
+
+-   type: Aqualoc_NoIMU
+    name: aqualoc_harbor_site_1
+    args:
+        root: D:\Datasets\Aqualoc\Harbor_sites_sequences\raw_data\harbor_images_sequence_01
+        is_stereo: false
+        gt_pose: true
+
+-   type: Aqualoc_NoIMU
+    name: aqualoc_harbor_site_2
+    args:
+        root: D:\Datasets\Aqualoc\Harbor_sites_sequences\raw_data\harbor_images_sequence_02
+        is_stereo: false
+        gt_pose: true
+
+-   type: Aqualoc_NoIMU
+    name: aqualoc_harbor_site_3
+    args:
+        root: D:\Datasets\Aqualoc\Harbor_sites_sequences\raw_data\harbor_images_sequence_03
+        is_stereo: false
+        gt_pose: true
+
+-   type: Aqualoc_NoIMU
+    name: aqualoc_harbor_site_4
+    args:
+        root: D:\Datasets\Aqualoc\Harbor_sites_sequences\raw_data\harbor_images_sequence_04
+        is_stereo: false
+        gt_pose: true
+
+-   type: Aqualoc_NoIMU
+    name: aqualoc_harbor_site_5
+    args:
+        root: D:\Datasets\Aqualoc\Harbor_sites_sequences\raw_data\harbor_images_sequence_05
+        is_stereo: false
+        gt_pose: true
+
+-   type: Aqualoc_NoIMU
+    name: aqualoc_harbor_site_6
+    args:
+        root: D:\Datasets\Aqualoc\Harbor_sites_sequences\raw_data\harbor_images_sequence_06
+        is_stereo: false
+        gt_pose: true
+
+-   type: Aqualoc_NoIMU
+    name: aqualoc_harbor_site_7
+    args:
+        root: D:\Datasets\Aqualoc\Harbor_sites_sequences\raw_data\harbor_images_sequence_07
+        is_stereo: false
+        gt_pose: true

@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 
 class StereoVONet(nn.Module):
-    def __init__(self, flowNormFactor=1.0, stereoNormFactor=1.0, poseDepthNormFactor=0.25):
+    def __init__(self, flowNormFactor=1.0, stereoNormFactor=1.0, poseDepthNormFactor=0.25, stereo=True):
         """
         flowNormFactor: difference between flownet and posenet
         stereoNormFactor: norm value used in stereo training
@@ -15,10 +15,10 @@ class StereoVONet(nn.Module):
         from Module.Network.PWCNet.pwc import PWCDCNet_Adapted as FlowNet
         from .StereoNet import StereoNet7 as StereoNet
         from .FlowPoseNet import VOFlowRes as FlowPoseNet
-
+        self.stereo = stereo
         self.flowNet = FlowNet()
         self.stereoNet = StereoNet()
-        self.flowPoseNet = FlowPoseNet(config=1, stereo=False, autoDistTarget=0., down_scale=True, out_feature=False, intrinsic=True)
+        self.flowPoseNet = FlowPoseNet(config=1, stereo=self.stereo, autoDistTarget=0., down_scale=True, out_feature=False, intrinsic=True)
         self.flowNormFactor = flowNormFactor
         self.stereoNormFactor = stereoNormFactor
         self.poseDepthNormFactor = poseDepthNormFactor

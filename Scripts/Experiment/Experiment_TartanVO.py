@@ -17,7 +17,7 @@ def execute_experiment(name, cfg, cfg_dict, root_box: Sandbox) -> str:
     sequence = smart_transform(
         SequenceBase[Frame].instantiate(cfg.Data.type, cfg.Data.args),
         cfg.Preprocess
-    ).preload()
+    )#.preload()
     system = TartanVO.from_config(cfg, sequence)
     system.receive_frames(sequence, exp_space)
 

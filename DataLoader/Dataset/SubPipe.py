@@ -60,11 +60,11 @@ class SubPipeSequence(SequenceBase[Frame]):
         # Metadata (common)
         self.lcam_T_BS = pp.identity_SE3(1)
         self.lcam_K    = torch.tensor([
-            [1847.5905420747683, 0.0, 1391.3],
-            [0.0, 1847.5905420747683, 1407.177],
+            [1847.5905420747683, 0.0, 1352],
+            [0.0, 1847.5905420747683, 760],
             [0.0, 0.0, 1.0]]).unsqueeze(0)
-        self.width     = 2704
-        self.height    = 1520
+        self.width     = 2704 # 1352
+        self.height    = 1520 # 760
         # End
 
         self.is_stereo = cfg.is_stereo if hasattr(cfg, "is_stereo") else False

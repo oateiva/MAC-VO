@@ -204,7 +204,7 @@ class TartanVOMatcher(IMatcher):
         super().__init__(config)
 
         from ..Network.TartanVOStereo.StereoVO_Interface import TartanStereoVOMatch
-        model = TartanStereoVOMatch(self.config.weight, True, self.config.device)
+        model = TartanStereoVOMatch(self.config.weight, True, self.config.device, self.config.stereo)
         self.model = model
 
     @property
