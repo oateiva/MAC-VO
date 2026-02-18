@@ -17,6 +17,7 @@ from Utility.Sandbox import Sandbox
 import rerun as rr
 from Utility.Visualize import fig_plt, rr_plt
 from MACVO import VisualizeRerunCallback, VisualizeVRAMUsage
+from Utility.read_eiva_vslam_outputs import load_vslam_track, load_vslam_pointcloud
 
 def onFrameFinished(frame: Frame, system: MACVO, pb: ColoredTqdm):
     """
@@ -104,11 +105,18 @@ if __name__ == "__main__":
                 if args.useRR:
                     rr_plt.default_mode = "rerun"
                     rr_plt.init_connect(run_cfg_template["Project"])
+                    if run_cfg_template["Data"]["args"]["vslam"]:
+                        load_vslam_track(run_cfg_template["Data"]["args"]["vslam"], entity_name=run_cfg_template["Project"])
+                    vslampc_path = run_cfg_template["Data"]["args"].get("vslampc")
+                    if vslampc_path:
+                        load_vslam_pointcloud(vslampc_path, entity_name=run_cfg_template["Project"])
                 # Build dynamic config for this run
                 cfg, cfg_dict = build_dynamic_config(run_cfg_template)
                 Logger.write("info", cfg_dict)
                 # Execute experiment and collect result folder
                 spaces.append(execute_experiment(cfg.Project, cfg, cfg_dict, root_box))
+                if args.useRR:
+                    rr.save(str(Path(spaces[-1]) / f"{run_cfg_template['Project']}.rrd"))
 
     # Log summary and save run directories
     Logger.write(
@@ -119,5 +127,5 @@ if __name__ == "__main__":
         f.write("\n".join(spaces))
 
     # Evaluate all experiment results and print summary table
-    eval_header, eval_results = EvaluateSequences(spaces, correct_scale=False)
-    print_as_table(eval_header, eval_results)
+    # eval_header, eval_results = EvaluateSequences(spaces, correct_scale=False)
+    # print_as_table(eval_header, eval_results)
