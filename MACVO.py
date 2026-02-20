@@ -153,7 +153,9 @@ if __name__ == "__main__":
         rr_plt.default_mode = "rerun"
         rr_plt.init_connect(project_name)
 
-    if datacfg.args.vslam:
+    # Safely handle missing 'args' or 'vslam' attribute
+    vslam_track = None
+    if hasattr(datacfg, 'args') and hasattr(datacfg.args, 'vslam') and datacfg.args.vslam:
         vslam_track = load_vslam_track(datacfg.args.vslam, entity_name=project_name)
 
     Timer.setup(active=args.timing)
