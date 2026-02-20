@@ -326,7 +326,8 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         depth = depth[:, 1:2, :, :]
         precision = prediction.depth_conf[:, 1:2, :, :]
         variance = 1.0 / (precision + 1e-8)
-        covariance = variance.sqrt()
+        sky = prediction.sky
+        # covariance = variance.sqrt()
         # covariance = prediction.depth_conf
         # print min and max for depth conf
         # print("Depth covariance - min:", covariance.min().item(), "max:", covariance.max().item())
@@ -337,11 +338,16 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
             scale_factor=300.,
         )
 
+
+        # print(f"Precision (conf) stats - min: {precision.min().item():.4f}, median: {precision.median().item():.4f}, max: {precision.max().item():.4f}")
+        # print(f"Variance (var) stats   - min: {variance.min().item():.4f}, median: {variance.median().item():.4f}, max: {variance.max().item():.4f}")
+
         return IDepth.Output(
             depth=scaled_depth,
             disparity=None,
-            cov=covariance,
-            disparity_uncertainty=None
+            cov=variance,
+            disparity_uncertainty=None,
+            mask=sky,
             )
 
 
