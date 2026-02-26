@@ -83,6 +83,11 @@ class TartanStereoVONetInterface:
         # Load filtered weights
         missing, unexpected_from_load = self.model.load_state_dict(filtered, strict=False)
 
+        if filtered:
+            print(f"[loadWeight] Loaded {len(filtered)} weight(s):")
+            for k in filtered.keys():
+                print(f"  - {k}")
+
         # ---- Reporting ----
         if skipped:
             print(f"[loadWeight] Skipped {len(skipped)} tensor(s) due to shape mismatch:")

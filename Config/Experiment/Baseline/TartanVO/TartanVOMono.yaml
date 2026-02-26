@@ -1,5 +1,5 @@
 Odometry:
-  name: TartanVOStereo
+  name: TartanVOMono
 
   depth:
     type: TartanVODepth
@@ -11,12 +11,12 @@ Odometry:
   match:
     type: TartanVOMatcher
     args:
-      weight: ./Model/MACVO_posenet.pkl
+      weight: ./Model/tartanvo_1914.pkl
       device: cuda
       stereo: false
 
   tartanvo:
-      weight: ./Model/MACVO_posenet.pkl
+      weight: ./Model/tartanvo_1914.pkl
       device: cuda
       stereo: false
 
