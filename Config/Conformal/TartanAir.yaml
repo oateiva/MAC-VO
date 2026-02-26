@@ -1,0 +1,34 @@
+Common:
+  # Some configurations are shared across multiple modules in Odometry, so I write them here.
+  device: &device cuda
+
+
+Train:
+  data: !flatten_seq
+    - !include ../Sequence/Training_Dataset/TartanAir_Demo.yaml
+
+Evaluate:
+  data: !flatten_seq
+    - !include ../Sequence/Training_Dataset/TartanAir_Demo.yaml
+
+Preprocess: !include ../Experiment/Common/Preprocess.yaml
+
+Data: !flatten_seq
+  - !include ../Sequence/TartanAir_sample_dataset_mono.yaml
+
+Frontend:
+  type: MonocularFrontend
+  args:
+    device: *device
+    enc_dtype: fp32
+    dec_dtype: fp32
+    decoder_depth: 12
+    enforce_positive_disparity: false
+    flow:
+      weight: ./Model/MACVO_FrontendCov.pth
+    monodepth:
+      type: DepthAnythingV3
+      args:
+        model_name: da3nested-giant-large
+        weight: depth-anything/DA3NESTED-GIANT-LARGE-1.1
+        device: *device

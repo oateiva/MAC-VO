@@ -184,12 +184,9 @@ class Rerun_Visualizer:
         assert rr is not None
         # If the flow covariance has two channels (e.g., shape [H, W, 2]), visualize each channel separately
         if covariance.ndim == 4 and covariance.shape[1] > 1:
-            # To visualize the covariance of the optical flow, we compute the determinant of the covariance matrix
-            # and take the logarithm to enhance visibility. The determinant gives a measure of the uncertainty
-            # associated with the flow vectors.
-            # We then use a colormap to represent the uncertainty visually.
-            flow_cov_det = (covariance[:, 0] * covariance[:, 1] - covariance[:, 2].square())[0].log10()
-            rr.log(rerun_path, rr.DepthImage(flow_cov_det, colormap=4))
+            # Average
+            flow_cov = (covariance[:,0,:]+covariance[:,1,:])/2
+            rr.log(rerun_path, rr.DepthImage(flow_cov, colormap=4))
         if covariance.ndim == 4 and covariance.shape[1] == 1:
             rr.log(rerun_path, rr.DepthImage(covariance, colormap=4))
 

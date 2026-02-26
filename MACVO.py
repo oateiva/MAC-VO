@@ -34,15 +34,15 @@ def VisualizeRerunCallback(frame: Frame, system: MACVO, pb: ColoredTqdm, gt: Lis
     if gt is not None:
         gt = pp.SE3(torch.stack(gt))  # (N,7) typically
 
-        R = pp.euler2SO3(torch.tensor([-np.pi/2, 0., 0.], device=gt.device, dtype=gt.dtype))
+        # R = pp.euler2SO3(torch.tensor([-np.pi/2, 0., 0.], device=gt.device, dtype=gt.dtype))
 
-        # Build SE3 with zero translation + rotation R
-        batch = gt.shape[:-1]  # e.g. (N,)
-        t0 = torch.zeros(*batch, 3, device=gt.device, dtype=gt.dtype)
-        q  = R.tensor().expand(*batch, 4)  # quaternion part from SO3
-        T_rot = pp.SE3(torch.cat([t0, q], dim=-1))
+        # # Build SE3 with zero translation + rotation R
+        # batch = gt.shape[:-1]  # e.g. (N,)
+        # t0 = torch.zeros(*batch, 3, device=gt.device, dtype=gt.dtype)
+        # q  = R.tensor().expand(*batch, 4)  # quaternion part from SO3
+        # T_rot = pp.SE3(torch.cat([t0, q], dim=-1))
 
-        gt = T_rot @ gt   # left-multiply: rotate in /world
+        # gt = T_rot @ gt   # left-multiply: rotate in /world
         rr_plt.log_trajectory("/world/gt", gt)
 
     rr_plt.log_camera("/world/macvo/cam_left", pp.SE3(system.graph.frames.data["pose"][-1]), system.graph.frames.data["K"][-1])
@@ -51,7 +51,7 @@ def VisualizeRerunCallback(frame: Frame, system: MACVO, pb: ColoredTqdm, gt: Lis
     rr_plt.log_keypoints("/world/macvo/cam_left/kpts", match_obs)
 
     map_points = system.graph.get_frame2map(system.graph.frames[-1:])
-    rr_plt.log_points("/world/point_cloud_incremental", map_points.data["pos_Tw"].detach(), map_points.data["color"].detach(), map_points.data["cov_Tw"].detach(), "sphere")
+    # rr_plt.log_points("/world/point_cloud_incremental", map_points.data["pos_Tw"].detach(), map_points.data["color"].detach(), map_points.data["cov_Tw"].detach(), "sphere")
 
     map_points = system.graph.get_frame2map(system.graph.frames[:])
     rr_plt.log_points("/world/point_cloud_all", map_points.data["pos_Tw"].detach(), map_points.data["color"].detach(), map_points.data["cov_Tw"].detach(), "sphere")

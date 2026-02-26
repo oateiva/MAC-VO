@@ -41,7 +41,10 @@ class FlowFormerCov(FlowFormer):
 
         flow_pre = padder.unpad(flow_pre[0])
         cov_pre = padder.unpad(cov_pre[0])
-        return flow_pre, torch.exp(cov_pre * 2)
+        cov_pre = torch.exp(cov_pre * 2)
+        flow_q90 = 4.6747
+        flow_pre = flow_pre * flow_q90
+        return flow_pre, cov_pre
 
     def load_ddp_state_dict(self, ckpt: OrderedDict):
         cvt_ckpt = OrderedDict()

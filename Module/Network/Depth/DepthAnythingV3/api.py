@@ -321,16 +321,21 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
 
         torch.cuda.synchronize(self.device)
 
+
         depth = prediction.depth
         # although we might use more than one frame to estimate depth, we only return the depth map for the first frame
         depth = depth[:, 1:2, :, :]
         precision = prediction.depth_conf[:, 1:2, :, :]
         variance = 1.0 / (precision + 1e-8)
+        depth_q90 = 1.2491
+        variance *= depth_q90
         sky = prediction.sky
-        # covariance = variance.sqrt()
-        # covariance = prediction.depth_conf
-        # print min and max for depth conf
-        # print("Depth covariance - min:", covariance.min().item(), "max:", covariance.max().item())
+
+        # Multiply by 1000 the pixels in the variance image that correspond to sky=True
+        if sky is not None:
+            # Ensure sky mask matches depth shape
+            sky_mask = sky[:, 1:2, :, :]
+            variance = torch.where(sky_mask, variance * 1000.0, variance)
 
         scaled_depth = apply_metric_scaling(
             torch.as_tensor(depth).to(device=self.device),
@@ -338,17 +343,13 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
             scale_factor=300.,
         )
 
-
-        # print(f"Precision (conf) stats - min: {precision.min().item():.4f}, median: {precision.median().item():.4f}, max: {precision.max().item():.4f}")
-        # print(f"Variance (var) stats   - min: {variance.min().item():.4f}, median: {variance.median().item():.4f}, max: {variance.max().item():.4f}")
-
         return IDepth.Output(
             depth=scaled_depth,
             disparity=None,
             cov=variance,
             disparity_uncertainty=None,
             mask=sky,
-            )
+        )
 
 
     def _preprocess_inputs(
