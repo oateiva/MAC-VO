@@ -72,6 +72,7 @@ class EuRoC_StereoSequence(SequenceBase[Frame]):
         self.seqRoot  = Path(cfg.root)
 
         self.is_stereo = cfg.is_stereo if hasattr(cfg, "is_stereo") else True
+        self.window_length = cfg.window_length if hasattr(cfg, "window_length") else 1
 
         # ref: https://github.com/raulmur/ORB_SLAM2/blob/master/Examples/Stereo/EuRoC.yaml
         # in this file only bl * fx is provided , the baseline here is derived by bf/fx
@@ -84,6 +85,7 @@ class EuRoC_StereoSequence(SequenceBase[Frame]):
         T_BS_lcam = np.array(l_sensor_config.T_BS.data).reshape(4, 4)
         self.ImageL = EurocMonocularDataset(
             Path(self.seqRoot, "cam0", "data"),
+            self.window_length,
             K=self.build_intrinsic(l_sensor_config.intrinsics),
             T_BS=T_BS_lcam,
             undistort=np.array([-0.28340811, 0.07395907, 0.00019359, 1.76187114e-05, 0.0])
@@ -95,6 +97,7 @@ class EuRoC_StereoSequence(SequenceBase[Frame]):
             T_BS_rcam = np.array(r_sensor_config.T_BS.data).reshape(4, 4)
             self.ImageR = EurocMonocularDataset(
                 Path(self.seqRoot, "cam1", "data"),
+                self.window_length,
                 K=self.build_intrinsic(r_sensor_config.intrinsics),
                 T_BS=T_BS_rcam,
                 undistort=np.array([-0.28368365, 0.07451284, -0.00010473, -3.555907e-05, 0.0])
@@ -107,6 +110,8 @@ class EuRoC_StereoSequence(SequenceBase[Frame]):
             assert len(self.ImageL) == len(self.ImageR), f"ImageL={len(self.ImageL)} and ImageR={len(self.ImageR)} is not sync'd as expected."
         else:
             self.ImageR = None
+            self.K = torch.tensor(self.ImageL.K, dtype=torch.float).unsqueeze(0)
+            self.cam_timestamps = self.ImageL.cam_timestamps
 
         # Setup metadata
         self.T_BS_lcam = pp.from_matrix(
@@ -120,7 +125,8 @@ class EuRoC_StereoSequence(SequenceBase[Frame]):
                 self.ImageL.cam_timestamps
             )
             self.ImageL.apply_mask(self.cam_time_mask)
-            self.ImageR.apply_mask(self.cam_time_mask)
+            if self.is_stereo:
+                self.ImageR.apply_mask(self.cam_time_mask)
         else:
             self.gt_pose_data = None
 
@@ -128,10 +134,12 @@ class EuRoC_StereoSequence(SequenceBase[Frame]):
 
     def __getitem__(self, local_index: int) -> Frame:
         index = self.get_index(local_index)
+        window_slice = slice(index, index + self.window_length)
+        window_index_list = list(range(window_slice.start, window_slice.stop, window_slice.step or 1))
 
         if self.is_stereo is True:
             return Frame(
-                idx=[local_index],
+                idx=window_index_list,
                 time_ns=[int(self.cam_timestamps[index].item())],
                 camera=CameraData.from_stereo(
                     T_BS=self.T_BS_lcam,
@@ -147,12 +155,12 @@ class EuRoC_StereoSequence(SequenceBase[Frame]):
             )
         else:
             return Frame(
-                idx=[local_index],
+                idx=window_index_list,
                 time_ns=[int(self.cam_timestamps[index].item())],
                 camera = CameraData.from_mono(
                     T_BS=self.T_BS_lcam,
                     K=self.K,
-                    baseline=torch.tensor(self.baseline),
+                    baseline=torch.tensor([self.baseline]),
                     time_ns=[int(self.cam_timestamps[index].item())],
                     height=self.height,
                     width=self.width,
@@ -214,8 +222,9 @@ class EurocMonocularDataset(Dataset):
     """
     Return images in the given directory ends with .png
     """
-    def __init__(self, directory: Path, K: np.ndarray, undistort: np.ndarray, T_BS: np.ndarray) -> None:
+    def __init__(self, directory: Path, window_length: int,K: np.ndarray, undistort: np.ndarray, T_BS: np.ndarray) -> None:
         super().__init__()
+        self.window_length = window_length
         self.directory = directory
         self.K = K
         self.T_BS = T_BS
@@ -241,18 +250,23 @@ class EurocMonocularDataset(Dataset):
         return self.correct_distortion(cv2.imread(str(path)))
 
     def __len__(self):
-        return self.length
+        return int(self.length - self.window_length + 1)
 
     def __getitem__(self, index: int) -> torch.Tensor:
-        # Output image tensor in shape of (1, C, H, W)
-        result = self.load_png(self.file_names[index])
-        result = torch.tensor(result, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0)
-        result /= 255.
+        # Output image tensor in shape of (N, C, H, W)
+        result = []
+        for i in range(self.window_length):
+             img = self.load_png(self.file_names[index])
+             img_tensor = torch.tensor(img, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0)
+             img_tensor /= 255.
+             result.append(img_tensor)
+        result = torch.cat(result, dim=0)  # (N, C, H, W)
         return result
 
     def correct_distortion(self, image: np.ndarray) -> np.ndarray:
         if self.undistort_map is None:
-            raise Exception("Monocular sequence is not rectified.")
+            # raise Exception("Monocular sequence is not rectified.")
+            undistorted_image = cv2.undistort(image, self.K ,self.distort_factor)
         else:
             undistorted_image = cv2.remap(image, self.undistort_map[0], self.undistort_map[1], cv2.INTER_LINEAR)
         return undistorted_image

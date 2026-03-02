@@ -37,6 +37,8 @@ class Aqualoc_MonoSequence(SequenceBase[Frame]):
     def __init__(self, config: SimpleNamespace | dict[str, Any]) -> None:
         cfg = self.config_dict2ns(config)
 
+        self.window_length = cfg.window_length if hasattr(cfg, "window_length") else 1
+
         self.root = Path(cfg.root)
         assert self.root.exists(), f"Aqualoc root does not exist: {self.root}"
 
@@ -72,6 +74,7 @@ class Aqualoc_MonoSequence(SequenceBase[Frame]):
         # Dataset providing mono images and camera timestamps
         self.Image = AqualocMonocularDataset(
             image_dir=self.image_dir,
+            window_length = self.window_length,
             image_csv=self.image_csv,
             K=self.K,
             distort=self.distort,
@@ -237,6 +240,7 @@ class AqualocMonocularDataset(Dataset):
     def __init__(
         self,
         image_dir: Path,
+        window_length:int,
         image_csv: Path,
         K: np.ndarray,
         distort: np.ndarray,
@@ -248,6 +252,7 @@ class AqualocMonocularDataset(Dataset):
         self.K = K
         self.distort = distort
         self.width, self.height = resolution
+        self.window_length = window_length
 
         assert self.image_dir.exists(), f"Aqualoc image dir does not exist: {self.image_dir}"
         assert self.image_csv.exists(), f"Aqualoc image CSV does not exist: {self.image_csv}"
@@ -277,21 +282,25 @@ class AqualocMonocularDataset(Dataset):
         return torch.tensor(ts, dtype=torch.long), files
 
     def __len__(self) -> int:
-        return self.length
+        return int(self.length - self.window_length + 1)
 
     def __getitem__(self, index: int) -> torch.Tensor:
-        img = cv2.imread(str(self.file_names[index]), cv2.IMREAD_COLOR)
-        if img is None:
-            raise FileNotFoundError(f"Could not read image: {self.file_names[index]}")
-        # BGR->RGB (optional). If your pipeline expects BGR like EuRoC code currently uses, remove this.
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        result = []
+        for i in range(self.window_length):
+            img = cv2.imread(str(self.file_names[index]), cv2.IMREAD_COLOR)
+            if img is None:
+                raise FileNotFoundError(f"Could not read image: {self.file_names[index]}")
+            # BGR->RGB (optional). If your pipeline expects BGR like EuRoC code currently uses, remove this.
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-        # Undistort image if distortion coefficients are nonzero
-        if np.any(self.distort != 0):
-            img = cv2.undistort(img, self.K, self.distort)
+            # Undistort image if distortion coefficients are nonzero
+            if np.any(self.distort != 0):
+                img = cv2.undistort(img, self.K, self.distort)
 
-        t = torch.tensor(img, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0) / 255.0
-        return t
+            t = torch.tensor(img, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0) / 255.0
+            result.append(t)
+        result = torch.cat(result, dim=0)
+        return result
 
 
 def load_AqualocGTPose(

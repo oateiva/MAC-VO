@@ -420,6 +420,7 @@ class GTSAM_Pose2Point(FactorGraph):
         self.from_idx   = graph_data.current_graph_data.from_idx
         self.frame_idx  = graph_data.current_graph_data.frame_idx
 
+        self.init_pypose = graph_data.current_graph_data.init_motion
         self.init_pose = pypose_to_pose3(graph_data.current_graph_data.init_motion)
 
         self.P0 = pypose_to_pose3(pp.SE3(graph_data.previous_graph_data.from_pose))
@@ -555,7 +556,8 @@ class GTSAM_Pose2Point(FactorGraph):
 
         # Optimize the graph
         params = gtsam.LevenbergMarquardtParams()
-        params.setVerbosityLM("SUMMARY")
+        # params.setVerbosityLM("SUMMARY")
+        params.setMaxIterations(30)
 
         optimizer = gtsam.LevenbergMarquardtOptimizer(graph, initial_estimate, params)
         result = optimizer.optimize()
@@ -566,8 +568,13 @@ class GTSAM_Pose2Point(FactorGraph):
         landmark_positions = torch.stack([torch.from_numpy(pos).double() for pos in landmark_positions], dim=0)  # (N,3)
 
         # self.log_plot_data(pose_1=pose_1, pose_2=pose_2, landmark_positions=landmark_positions)
-        pose_1 = pose3_to_pypose(pose_1)
-        pose_2 = pose3_to_pypose(pose_2)
+        try:
+            pose_1 = pose3_to_pypose(pose_1)
+            pose_2 = pose3_to_pypose(pose_2)
+        except Exception as e:
+            print(f"Error converting optimized poses to PyPose format: {e}")
+            pose_1 = self.init_pypose
+            pose_2 = self.init_pypose
 
         self.graph_output = GTSAM_GraphOutput(
             frame_idexes=[int(self.from_idx.cpu().item()), int(self.frame_idx.cpu().item())],
