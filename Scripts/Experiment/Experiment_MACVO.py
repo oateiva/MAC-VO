@@ -1,4 +1,3 @@
-
 # Experiment runner for MACVO system
 # This script loads configuration(s), runs experiments, logs results, and evaluates sequences.
 
@@ -45,9 +44,15 @@ def execute_experiment(name, cfg, cfg_dict, root_box: Sandbox) -> str:
     exp_space = root_box.new_child(name)
     exp_space.config = cfg_dict
 
+
+
+    # Set seq_from and seq_to based on presence in cfg.Data.args
+    seq_from = getattr(cfg.Data.args, 'seq_from', 0)
+    seq_to = getattr(cfg.Data.args, 'seq_to', -1)
+
     # Instantiate and preprocess the sequence
     sequence = smart_transform(
-        SequenceBase[Frame].instantiate(cfg.Data.type, cfg.Data.args),
+        SequenceBase[Frame].instantiate(cfg.Data.type, cfg.Data.args).clip(seq_from, seq_to),
         cfg.Preprocess
     )
     # .preload() can be enabled for large RAM systems
@@ -108,8 +113,9 @@ if __name__ == "__main__":
                 if args.useRR:
                     rr_plt.default_mode = "rerun"
                     rr_plt.init_connect(run_cfg_template["Project"])
-                    if run_cfg_template["Data"]["args"]["vslam"]:
-                        load_vslam_track(run_cfg_template["Data"]["args"]["vslam"], entity_name=run_cfg_template["Project"])
+                    vslam_path = run_cfg_template["Data"]["args"].get("vslam")
+                    if vslam_path:
+                        load_vslam_track(vslam_path, entity_name=run_cfg_template["Project"])
                     vslampc_path = run_cfg_template["Data"]["args"].get("vslampc")
                     if vslampc_path:
                         load_vslam_pointcloud(vslampc_path, entity_name=run_cfg_template["Project"])

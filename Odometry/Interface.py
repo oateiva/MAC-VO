@@ -51,6 +51,7 @@ class IOdometry(ABC, Generic[T_Data]):
 
             np.save(saveto.path("poses.npy"), np.concatenate([time_ns, body_poses], axis=-1))
             np.savez_compressed(saveto.path("tensor_map.npz"), **global_map.serialize())
+            np.save(saveto.path("frame_status.npy"), global_map.frames.data["need_interp"].cpu().numpy())
 
             if len(reference_poses) > 1:    # At least two poses for a non-trivial trajectory
                 ref_body_poses: np.ndarray = torch.cat(reference_poses, dim=0).numpy()

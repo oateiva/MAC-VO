@@ -310,6 +310,9 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GraphOutput]):
         for frame_idx, pose_estimate in zip(result.frame_idexes, result.pose_estimates):
             global_map.frames.data["pose"][frame_idx] = pose_estimate.float()
 
+        if result.need_interp is not None:
+            global_map.frames.data["need_interp"][result.frame_idexes[-1]] = result.need_interp
+
         # if result.map_points is not None and result.landmark_indexes is not None:
         #     idx = torch.tensor(result.landmark_indexes, dtype=torch.long, device=result.map_points.device)
         #     global_map.map_points.data["pos_Tw"][idx] = result.map_points.to(dtype=torch.float32, device=global_map.map_points.data["pos_Tw"].device)

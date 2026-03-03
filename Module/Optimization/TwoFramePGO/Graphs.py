@@ -46,6 +46,7 @@ class GTSAM_GraphOutput:
     pose_estimates: List[torch.Tensor]
     landmark_indexes: Optional[list[int] | None] = None
     map_points: Optional[torch.Tensor] = None
+    need_interp: Optional[bool] = None
 
 PosePixelMap = Dict[int, Dict[Tuple[float, float], int]]
 
@@ -568,6 +569,7 @@ class GTSAM_Pose2Point(FactorGraph):
         landmark_positions = torch.stack([torch.from_numpy(pos).double() for pos in landmark_positions], dim=0)  # (N,3)
 
         # self.log_plot_data(pose_1=pose_1, pose_2=pose_2, landmark_positions=landmark_positions)
+        need_interp = False
         try:
             pose_1 = pose3_to_pypose(pose_1)
             pose_2 = pose3_to_pypose(pose_2)
@@ -575,12 +577,14 @@ class GTSAM_Pose2Point(FactorGraph):
             print(f"Error converting optimized poses to PyPose format: {e}")
             pose_1 = self.init_pypose
             pose_2 = self.init_pypose
+            need_interp = True
 
         self.graph_output = GTSAM_GraphOutput(
             frame_idexes=[int(self.from_idx.cpu().item()), int(self.frame_idx.cpu().item())],
             pose_estimates=[pose_1, pose_2],
             landmark_indexes=landmark_idx,
-            map_points=landmark_positions
+            map_points=landmark_positions,
+            need_interp=need_interp
             )
 
     def write_back(self):

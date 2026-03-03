@@ -34,13 +34,15 @@ def VisualizeRerunCallback(frame: Frame, system: MACVO, pb: ColoredTqdm, gt: Lis
     if gt is not None:
         gt = pp.SE3(torch.stack(gt))  # (N,7) typically
 
-        R = pp.euler2SO3(torch.tensor([-np.pi/2, 0., 0.], device=gt.device, dtype=gt.dtype))
+        T_rot = gt[0].Inv()
 
-        # Build SE3 with zero translation + rotation R
-        batch = gt.shape[:-1]  # e.g. (N,)
-        t0 = torch.zeros(*batch, 3, device=gt.device, dtype=gt.dtype)
-        q  = R.tensor().expand(*batch, 4)  # quaternion part from SO3
-        T_rot = pp.SE3(torch.cat([t0, q], dim=-1))
+        # R = pp.euler2SO3(torch.tensor([-np.pi/2, 0., 0.], device=gt.device, dtype=gt.dtype))
+
+        # # Build SE3 with zero translation + rotation R
+        # batch = gt.shape[:-1]  # e.g. (N,)
+        # t0 = torch.zeros(*batch, 3, device=gt.device, dtype=gt.dtype)
+        # q  = R.tensor().expand(*batch, 4)  # quaternion part from SO3
+        # T_rot = pp.SE3(torch.cat([t0, q], dim=-1))
 
         gt = T_rot @ gt   # left-multiply: rotate in /world
         rr_plt.log_trajectory("/world/gt", gt)
