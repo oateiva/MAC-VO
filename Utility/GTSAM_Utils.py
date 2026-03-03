@@ -51,10 +51,10 @@ def pypose_to_pose3(se3: pp.SE3) -> gtsam.Pose3:
 
 def pose3_to_pypose(p: gtsam.Pose3) -> pp.SE3:
     T = torch.eye(4, dtype=torch.float64)
-    T[:3, :3] = torch.from_numpy(p.rotation().matrix())
-    T[:3, 3] = torch.tensor([p.x(), p.y(), p.z()], dtype=torch.float)
-    T = T.to(dtype=torch.float)
-    T_SE3 = pp.from_matrix(T.unsqueeze(0), pp.SE3_type)
+    T[:3, :3] = torch.from_numpy(p.rotation().matrix()).to(torch.float64)
+    T[:3, 3] = torch.tensor([p.x(), p.y(), p.z()], dtype=torch.float64)
+    T_SE3 = pp.from_matrix(T.unsqueeze(0), pp.SE3_type).to(torch.float32)
+
     # # Permutation matrix to convert from GTSAM (X-forward, Y-left, Z-up) to MACVO NED (Z-down, X-forward, Y-right)
     # P = torch.tensor([[0, 1, 0, 0],
     #                   [0, 0, 1, 0],
