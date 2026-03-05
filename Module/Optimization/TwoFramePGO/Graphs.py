@@ -410,8 +410,6 @@ class Analytic_ReprojDepth_TwoFramePGO(ReprojDepth_TwoFramePGO, AnalyticModule):
 class GTSAM_Pose2Point(FactorGraph):
     def __init__(self):
         super().__init__()
-        # self.parse_graph_data(graph_data)
-        # self.log_save_data(graph_data)
 
 
     def parse_graph_data(self, graph_data: GTSAM_GraphInput):
@@ -452,6 +450,8 @@ class GTSAM_Pose2Point(FactorGraph):
 
         self.previous_graph_data = graph_data.previous_graph_data
         self.indexes_prev_curr = graph_data.indexes_prev_curr
+
+        # self.log_save_data(graph_data)
 
     def run_gtsam_optimization(self):
 
@@ -519,7 +519,7 @@ class GTSAM_Pose2Point(FactorGraph):
                 obs_Tc_0_i = self.obs_Tc_0[pi]
                 cov_Tc_0_i = self.previous_graph_data.observations.data["obs1_covTc"][pi].detach().cpu().numpy()
                 noise_model_0 = gtsam.noiseModel.Gaussian.Covariance(cov_Tc_0_i)
-                m_huber_0 = gtsam.noiseModel.mEstimator.Huber.Create(0.1)
+                m_huber_0 = gtsam.noiseModel.mEstimator.Huber.Create(1.)
                 noise_model_0 = gtsam.noiseModel.Robust.Create(m_huber_0, noise_model_0)
                 factor0 = make_pose_to_point_factor(pose_0_key, landmark_key, obs_Tc_0_i, noise_model_0)
                 graph.add(factor0)
@@ -596,7 +596,6 @@ class GTSAM_Pose2Point(FactorGraph):
     def log_save_data(self, graph_data: GTSAM_GraphInput):
         import os
         import json
-        import tempfile
 
         frame_idx = graph_data.current_graph_data.frame_idx.cpu().item()
 
@@ -618,26 +617,19 @@ class GTSAM_Pose2Point(FactorGraph):
         }
 
         json_path = os.path.join(os.getcwd(), "graph_data_dump.json")
-        tmp_path = json_path + ".tmp"
+        tmp_path = json_path + ".tmp"  # kept for structure/compat, but not used for append mode
 
-        # Load existing data if file exists
-        if os.path.exists(json_path):
-            with open(json_path, "r") as f:
-                try:
-                    all_data = json.load(f)
-                except json.JSONDecodeError:
-                    all_data = {}
-        else:
-            all_data = {}
+        # Append-only JSON Lines: one frame per line, constant memory.
+        record = {"frame_idx": int(frame_idx), "frame_data": frame_data}
 
-        # Use frame_idx as key (string for JSON safety)
-        all_data[str(frame_idx)] = frame_data
+        # Ensure directory exists (cwd should, but safe if you later change path)
+        os.makedirs(os.path.dirname(json_path) or ".", exist_ok=True)
 
-        # Write back to file
-        with open(tmp_path, "w") as f:
-            json.dump(all_data, f, indent=2)
-
-        os.replace(tmp_path, json_path)
+        with open(json_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, separators=(",", ":")))
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())  # makes it robust if you crash mid-run
 
         print(f"graph_data for frame {frame_idx} saved to {json_path}")
 
@@ -945,7 +937,6 @@ class ISAM(FactorGraph):
     def log_save_data(self, graph_data: GTSAM_GraphInput):
         import os
         import json
-        import tempfile
 
         frame_idx = graph_data.current_graph_data.frame_idx.cpu().item()
 
@@ -967,29 +958,21 @@ class ISAM(FactorGraph):
         }
 
         json_path = os.path.join(os.getcwd(), "graph_data_dump.json")
-        tmp_path = json_path + ".tmp"
+        tmp_path = json_path + ".tmp"  # kept for structure/compat, but not used for append mode
 
-        # Load existing data if file exists
-        if os.path.exists(json_path):
-            with open(json_path, "r") as f:
-                try:
-                    all_data = json.load(f)
-                except json.JSONDecodeError:
-                    all_data = {}
-        else:
-            all_data = {}
+        # Append-only JSON Lines: one frame per line, constant memory.
+        record = {"frame_idx": int(frame_idx), "frame_data": frame_data}
 
-        # Use frame_idx as key (string for JSON safety)
-        all_data[str(frame_idx)] = frame_data
+        # Ensure directory exists (cwd should, but safe if you later change path)
+        os.makedirs(os.path.dirname(json_path) or ".", exist_ok=True)
 
-        # Write back to file
-        with open(tmp_path, "w") as f:
-            json.dump(all_data, f, indent=2)
-
-        os.replace(tmp_path, json_path)
+        with open(json_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, separators=(",", ":")))
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())  # makes it robust if you crash mid-run
 
         print(f"graph_data for frame {frame_idx} saved to {json_path}")
-
 
     def log_plot_data(self, pose_1, pose_2, landmark_positions):
         from Utility.Visualize import rr_plt
