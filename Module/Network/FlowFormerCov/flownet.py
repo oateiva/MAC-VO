@@ -10,7 +10,7 @@ class FlowFormerCov(FlowFormer):
     def __init__(self, cfg, encoder_dtype: torch.dtype=torch.float32, decoder_dtype: torch.dtype=torch.float32):
         super(FlowFormerCov, self).__init__(cfg)
         self.memory_decoder = MemoryCovDecoder(self.cfg, decoder_dtype)
-
+        self.q90 = 1.
         self.enc_dtype = encoder_dtype
         self.context_encoder = self.context_encoder.to(dtype=self.enc_dtype)
         self.memory_encoder  = self.memory_encoder.to(dtype=self.enc_dtype)
@@ -41,7 +41,9 @@ class FlowFormerCov(FlowFormer):
 
         flow_pre = padder.unpad(flow_pre[0])
         cov_pre = padder.unpad(cov_pre[0])
-        return flow_pre, torch.exp(cov_pre * 2)
+        cov_pre = torch.exp(cov_pre * 2)
+        cov_pre_q90 = cov_pre*self.q90
+        return flow_pre, cov_pre_q90
 
     def load_ddp_state_dict(self, ckpt: OrderedDict):
         cvt_ckpt = OrderedDict()

@@ -109,6 +109,7 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
             config: Optional configuration dictionary (currently unused).
         """
         self.device = config.device if hasattr(config, 'device') else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.q90 = getattr(config, "q90", 1.)
         weight_path = getattr(config, "weight", None)
         if weight_path is None:
             raise ValueError("`config.weight` must be set for DepthAnything3")
@@ -326,6 +327,7 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         depth = depth[:, 1:2, :, :]
         precision = prediction.depth_conf[:, 1:2, :, :]
         variance = 1.0 / (precision + 1e-8)
+        variance = variance * self.q90
         covariance = variance.sqrt()
         # covariance = prediction.depth_conf
         # print min and max for depth conf
@@ -340,7 +342,7 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         return IDepth.Output(
             depth=scaled_depth,
             disparity=None,
-            cov=covariance,
+            cov=variance,
             disparity_uncertainty=None
             )
 
