@@ -4,8 +4,8 @@ import pypose as pp
 
 from typing import Any
 # CI/CD PyRight pass cannot cover the DPVO as it requires to compile CUDA kernels
-from dpvo.dpvo import DPVO      #type: ignore
-from dpvo.config import cfg     #type: ignore
+# from dpvo.dpvo import DPVO      #type: ignore
+# from Baseline.DPVO.dpvo.config import cfg     #type: ignore
 DPVO: Any
 cfg : Any
 

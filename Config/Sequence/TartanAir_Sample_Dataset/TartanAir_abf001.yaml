@@ -3,10 +3,10 @@ name: abf001
 args:
   root: D:\Datasets\TartanAir_Sample\abandonedfactory_sample_P001\P001
   # Controls optional data sources
-  gtDepth: false
-  gtFlow: false
+  gtDepth: true
+  gtFlow: true
   gtPose: true
   is_stereo: false
-  window_length: 5
+  window_length: 2
 
   compressed: false

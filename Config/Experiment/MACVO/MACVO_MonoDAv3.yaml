@@ -53,8 +53,8 @@ Odometry:
       device: *device
       kernel_size: 7
       mask_width: 32
-      max_match_cov: 100.
-      max_depth: 20.0
+      max_match_cov: 10.
+      max_depth: 7.0
       max_depth_cov: 1.
 
   mappoint:
@@ -63,7 +63,7 @@ Odometry:
     type: MappingPointSelector
     args:
       device: *device
-      max_depth: 20.0
+      max_depth: 7.0
       max_depth_cov: 1.0
       mask_width: 32
 
@@ -81,7 +81,7 @@ Odometry:
         type: DepthAnythingV3
         args:
           model_name: da3nested-giant-large
-          weight: depth-anything/DA3NESTED-GIANT-LARGE
+          weight: depth-anything/DA3NESTED-GIANT-LARGE-1.1
           device: *device
 
 

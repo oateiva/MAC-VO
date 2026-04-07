@@ -6,8 +6,8 @@
         gtDepth: true
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -19,8 +19,8 @@
         gtDepth: true
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -32,8 +32,8 @@
         gtDepth: true
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -45,8 +45,8 @@
         gtDepth: true
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -58,8 +58,8 @@
         gtDepth: true
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -71,8 +71,8 @@
         gtDepth: true
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -84,8 +84,8 @@
         gtDepth: true
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -97,8 +97,8 @@
         gtDepth: true
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -110,8 +110,8 @@
         gtDepth: true
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 -   type: TartanAir_NoIMU
@@ -122,8 +122,8 @@
         gtDepth: true
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -135,8 +135,8 @@
         gtDepth: true
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -148,8 +148,8 @@
         gtDepth: true
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -161,8 +161,8 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -174,8 +174,8 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -187,8 +187,8 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -200,8 +200,8 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -213,8 +213,8 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -226,8 +226,8 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -239,8 +239,8 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -252,8 +252,8 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -265,8 +265,8 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -278,8 +278,8 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -291,8 +291,8 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false
 
@@ -304,7 +304,7 @@
         gtDepth: false
         gtFlow: true
         gtPose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         step_size: 1
         compressed: false

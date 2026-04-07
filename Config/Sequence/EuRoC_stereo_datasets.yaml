@@ -3,8 +3,8 @@
     args:
         root: D:\\Datasets\\EuRoC\\MH_01_easy\\mav0
         gt_pose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         seq_from: 948
 
 -   type: EuRoC_NoIMU
@@ -12,8 +12,8 @@
     args:
         root: D:\\Datasets\\EuRoC\\MH_02_easy\\mav0
         gt_pose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         seq_from: 124
 
 -   type: EuRoC_NoIMU
@@ -21,8 +21,8 @@
     args:
         root: D:\\Datasets\\EuRoC\\MH_03_medium\\mav0
         gt_pose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         seq_from: 393
 
 -   type: EuRoC_NoIMU
@@ -30,8 +30,8 @@
     args:
         root: D:\\Datasets\\EuRoC\\MH_04_difficult\\mav0
         gt_pose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         seq_from: 36
 
 -   type: EuRoC_NoIMU
@@ -39,8 +39,8 @@
     args:
         root: D:\\Datasets\\EuRoC\\MH_05_difficult\\mav0
         gt_pose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         seq_from: 81
 
 -   type: EuRoC_NoIMU
@@ -48,8 +48,8 @@
     args:
         root: D:\\Datasets\\EuRoC\\V1_01_easy\\mav0
         gt_pose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         seq_from: 144
 
 -   type: EuRoC_NoIMU
@@ -57,8 +57,8 @@
     args:
         root: D:\\Datasets\\EuRoC\\V1_02_medium\\mav0
         gt_pose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         seq_from: 100
 
 -   type: EuRoC_NoIMU
@@ -66,8 +66,8 @@
     args:
         root: D:\\Datasets\\EuRoC\\V1_03_difficult\\mav0
         gt_pose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         seq_from: 153
 
 -   type: EuRoC_NoIMU
@@ -75,8 +75,8 @@
     args:
         root: D:\\Datasets\\EuRoC\\V2_01_easy\\mav0
         gt_pose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         seq_from: 116
 
 -   type: EuRoC_NoIMU
@@ -84,8 +84,8 @@
     args:
         root: D:\\Datasets\\EuRoC\\V2_02_medium\\mav0
         gt_pose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         seq_from: 75
 
 -   type: EuRoC_NoIMU
@@ -93,6 +93,6 @@
     args:
         root: D:\\Datasets\\EuRoC\\V2_03_difficult\\mav0
         gt_pose: true
-        is_stereo: false
-        window_length: 2
+        is_stereo: true
+        window_length: 1
         seq_from: 207

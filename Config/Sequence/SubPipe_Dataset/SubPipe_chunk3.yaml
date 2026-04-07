@@ -4,4 +4,5 @@ args:
     root: D:\\Datasets\\SubPipe\\SubPipe\\DATA\\Chunk3
     gt_pose: true
     is_stereo: false
-    step_size: 10
+    step_size: 1
+    window_length: 2
