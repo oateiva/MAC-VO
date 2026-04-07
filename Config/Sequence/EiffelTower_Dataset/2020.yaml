@@ -1,12 +1,11 @@
-type: EIVA_NoIMU
-name: plane_tail1
+type: EiffelTower_NoIMU
+name: EiffelTower2020
 args:
-  root: D:\Datasets\EIVA\plane_tail1
+  root: D:\Datasets\EiffelTower\2020
   # Controls optional data sources
   gtDepth: false
   gtFlow: false
   gtPose: true
+  window_length: 1
   is_stereo: false
-  window_length: 2 # 1 with dav2, N with dav3
-
   compressed: true

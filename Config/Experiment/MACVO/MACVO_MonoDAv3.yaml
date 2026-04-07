@@ -48,14 +48,14 @@ Odometry:
         min_flow_cov: 0.25
 
   keypoint:
-    type: CovAwareSelector
+    type: CovAwareSelector_NoDepth
     args:
       device: *device
       kernel_size: 7
       mask_width: 32
       max_match_cov: 100.
-      max_depth: 20.0
-      max_depth_cov: 1.
+      max_depth: 6.0
+      max_depth_cov: 4.
 
   mappoint:
     # Mapping feature can be conveniently turn off by using
@@ -63,7 +63,7 @@ Odometry:
     type: MappingPointSelector
     args:
       device: *device
-      max_depth: 20.0
+      max_depth: 4.0
       max_depth_cov: 1.0
       mask_width: 32
 
@@ -77,12 +77,14 @@ Odometry:
       enforce_positive_disparity: false
       flow:
         weight: ./Model/MACVO_FrontendCov.pth
+        q90: 1.
       monodepth:
         type: DepthAnythingV3
         args:
           model_name: da3nested-giant-large
           weight: depth-anything/DA3NESTED-GIANT-LARGE
           device: *device
+          q90: 1.
 
 
   motion:

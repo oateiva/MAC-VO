@@ -18,7 +18,7 @@ Common:
   device: &device cuda
 
 Odometry:
-  name: MACVO-DAv2-pose2point
+  name: MACVO-DAv2
   args:
     # Device directive to the VO system
     # NOTE: the system may not follow this device config strictly since some module
@@ -54,7 +54,7 @@ Odometry:
       kernel_size: 7
       mask_width: 32
       max_match_cov: 1.
-      max_depth: 20.0
+      max_depth: 7.0
       max_depth_cov: 1.
 
   mappoint:
