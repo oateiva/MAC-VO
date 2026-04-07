@@ -16,7 +16,7 @@ from django.db.models import QuerySet, OuterRef, Subquery
 
 from ..SequenceBase import SequenceBase
 from ..Interface    import Frame, CameraData
-from ..Django_Sequence import DjangoORMSequence, ensure_django
+from Utility.Config import load_config
 
 
 def load_poses_from_txt_eiffeltower(file_name: str):
@@ -49,22 +49,62 @@ def load_poses_from_txt_eiffeltower(file_name: str):
 
     return poses
 
+def load_camera_parameters(config_path: str) -> tuple[torch.Tensor, int, int]:
+    """Read camera intrinsic matrix from a COLMAP cameras.txt file.
+
+    Supported models: SIMPLE_PINHOLE, PINHOLE, RADIAL
+
+    Returns:
+        K (torch.Tensor): intrinsic matrix of shape (1, 3, 3), dtype=torch.float32
+        width (int): image width
+        height (int): image height
+    """
+    with open(config_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("#") or not line:
+                continue
+            parts = line.split()
+            model = parts[1]
+            width, height = int(parts[2]), int(parts[3])
+            params = [float(x) for x in parts[4:]]
+            if model == "SIMPLE_PINHOLE":
+                # params: f, cx, cy
+                fx = fy = params[0]
+                cx, cy = params[1], params[2]
+            elif model == "PINHOLE":
+                # params: fx, fy, cx, cy
+                fx, fy, cx, cy = params[0], params[1], params[2], params[3]
+            elif model == "RADIAL":
+                # params: f, cx, cy, k1, k2
+                fx = fy = params[0]
+                cx, cy = params[1], params[2]
+            else:
+                raise ValueError(f"Unsupported COLMAP camera model: {model}")
+            K = torch.tensor([
+                [fx,  0., cx],
+                [0.,  fy, cy],
+                [0.,  0., 1.],
+            ], dtype=torch.float32).unsqueeze(0)
+            return K, width, height
+    raise ValueError(f"No camera data found in {config_path}")
+
+
+
 
 class EiffelTowerSequence(SequenceBase[Frame]):
     @classmethod
-    def name(cls) -> str: return "EiffelTower"
+    def name(cls) -> str: return "EiffelTower_NoIMU"
 
     def __init__(self, config: SimpleNamespace | dict[str, Any]):
         cfg = self.config_dict2ns(config)
 
         # Metadata (common)
         self.lcam_T_BS = pp.identity_SE3(1)
-        self.lcam_K    = torch.tensor([
-            [1847.5905420747683, 0.0, 1391.3],
-            [0.0, 1847.5905420747683, 1407.177],
-            [0.0, 0.0, 1.0]]).unsqueeze(0)
-        self.width     = 2704
-        self.height    = 1520
+        K, width, height = load_camera_parameters(str(Path(cfg.root, "sfm", "cameras.txt")))
+        self.lcam_K    = K
+        self.width     = width
+        self.height    = height
         # End
 
         self.is_stereo = cfg.is_stereo if hasattr(cfg, "is_stereo") else False
@@ -72,7 +112,7 @@ class EiffelTowerSequence(SequenceBase[Frame]):
         self.step_size = cfg.step_size if hasattr(cfg, "step_size") else 1
 
         # Loaders
-        self.lcam_loader = EiffelTowerMonocularDataset(Path(cfg.root, "Cam0_images"), window_length=self.window_length, step_size=self.step_size)
+        self.lcam_loader = EiffelTowerMonocularDataset(Path(cfg.root, "images"), window_length=self.window_length, step_size=self.step_size)
 
         if self.is_stereo:
             assert ("EiffelTower does not provide stereo images, please set is_stereo to false in config if you wish to use this dataset")
@@ -80,12 +120,12 @@ class EiffelTowerSequence(SequenceBase[Frame]):
             self.rcam_loader = None
             self.baseline    = -1.
 
-        cam_time_file_path = Path(cfg.root, "Cam0_images")
+        cam_time_file_path = Path(cfg.root, "images")
         # list all files in dir
         cam_files = list(cam_time_file_path.glob("*.jpg")) + list(cam_time_file_path.glob("*.png"))
         cam_files.sort()
         # parse GT and timestamps
-        poses_ts = load_poses_from_txt_EiffelTower(Path(cfg.root, "EstimatedState.csv"))
+        poses_ts = loadEiffelTowerGT(Path(cfg.root, "sfm", "images.txt"))
 
         self.lcam_time = [values for values in poses_ts.keys()]
         self.gt_poses = [values for values in poses_ts.values()]
@@ -170,24 +210,59 @@ class EiffelTowerMonocularDataset(Dataset):
         return result
 
 
-def loadEiffelTowerGT(path: Path) -> pp.LieTensor:
-    # Parse poses from the Zephyr Voyis format
-    pose_list = []
-    with open(str(path), 'r') as file:
-        for line in file:
-            parts = line.split(' ')
-            position = torch.tensor([float(x) for x in parts[1:4]], dtype=torch.float32)
-            so3_matrix = np.array([float(x) for x in parts[4:]])
-            so3_matrix = torch.tensor(so3_matrix, dtype=torch.float32).reshape(3, 3)
-            se3_matrix = torch.eye(4, dtype=torch.float32)
-            se3_matrix[:3, :3] = so3_matrix
-            se3_matrix[:3, 3] = position
-            se3_matrix = se3_matrix.inverse()
-            quat = roma.rotmat_to_unitquat(se3_matrix[:3, :3])
-            t = se3_matrix[:3, 3]
-            se3_data = np.concatenate([t, quat])
-            pose_list.append(se3_data)
-    poses = torch.tensor(pose_list, dtype=torch.float32)
-    se3_data = pp.SE3(poses)
+from pathlib import Path
+from datetime import datetime, timezone
 
-    return se3_data
+def parse_timestamp_to_ns(name: str) -> float:
+    """Convert '20200918T061018.000Z.png' -> nanoseconds (float)."""
+    ts_str = Path(name).stem  # remove extension
+
+    # Parse ISO-like format
+    dt = datetime.strptime(ts_str, "%Y%m%dT%H%M%S.%fZ")
+    dt = dt.replace(tzinfo=timezone.utc)
+
+    # Convert to nanoseconds
+    timestamp_ns = int(dt.timestamp() * 1e9)
+    return timestamp_ns
+
+
+def loadEiffelTowerGT(path: Path) -> dict:
+    """Return {timestamp_ns: T_wc}."""
+
+    poses = {}
+
+    with open(path, "r") as f:
+        non_comment = [l.rstrip("\n") for l in f if not l.startswith("#") and l.strip()]
+
+    for i in range(0, len(non_comment), 2):
+        parts = non_comment[i].split()
+
+        qw, qx, qy, qz = map(float, parts[1:5])
+        tx, ty, tz = map(float, parts[5:8])
+        name = parts[9]
+        timestamp_ns = parse_timestamp_to_ns(name)
+
+        T_cw = pp.SE3([tx, ty, tz, qx, qy, qz, qw])
+        T_wc = T_cw.Inv()
+
+        poses[timestamp_ns] = T_wc
+
+    # Sort poses by timestamp_ns
+    poses = dict(sorted(poses.items()))
+
+    # Normalize first pose to identity
+    if poses:
+        first_key = next(iter(poses))
+        inv_pose_0 = poses[first_key].Inv()
+        for k in poses:
+            poses[k] = inv_pose_0 @ poses[k]
+
+    # Convert to NED frame (X=North/forward, Y=East/right, Z=Down)
+    # After normalization the world frame aligns with the initial camera frame
+    # (COLMAP/OpenCV: X right, Y down, Z forward).
+    # R_ned maps: X_ned=Z_cam, Y_ned=X_cam, Z_ned=Y_cam  →  q=[0.5, 0.5, 0.5, 0.5]
+    ned_R = pp.SE3(torch.tensor([0., 0., 0., 0.5, 0.5, 0.5, 0.5]))
+    for k in poses:
+        poses[k] = ned_R @ poses[k]
+
+    return poses
