@@ -364,6 +364,8 @@ class MonocularFrontend(IFrontend):
         cfg = get_cfg()
         cfg.latentcostformer.decoder_depth = self.config.decoder_depth
         flow_model = build_flowformer(cfg, reflect_torch_dtype(config.enc_dtype), reflect_torch_dtype(config.dec_dtype))
+        flow_model.q90 = getattr(config.flow, "q90", 1.)
+
         flow_model.eval()
         flow_model.to(self.config.device)
         ckpt  = torch.load(self.config.flow.weight, map_location=self.config.device, weights_only=True)

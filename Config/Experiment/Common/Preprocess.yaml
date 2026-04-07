@@ -56,3 +56,10 @@ Aqualoc_NoIMU:
       height: 434
       width : 700
       interp: nearest
+
+EiffelTower_NoIMU:
+  - type: SmartResizeFrame
+    args:
+      height: 406
+      width : 700
+      interp: nearest

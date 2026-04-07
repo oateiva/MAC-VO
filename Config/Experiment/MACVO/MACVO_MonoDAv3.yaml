@@ -48,7 +48,7 @@ Odometry:
         min_flow_cov: 0.25
 
   keypoint:
-    type: CovAwareSelector
+    type: CovAwareSelector_NoDepth
     args:
       device: *device
       kernel_size: 7
@@ -77,12 +77,14 @@ Odometry:
       enforce_positive_disparity: false
       flow:
         weight: ./Model/MACVO_FrontendCov.pth
+        q90: 1.
       monodepth:
         type: DepthAnythingV3
         args:
           model_name: da3nested-giant-large
           weight: depth-anything/DA3NESTED-GIANT-LARGE-1.1
           device: *device
+          q90: 1.
 
 
   motion:

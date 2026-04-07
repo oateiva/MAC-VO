@@ -313,6 +313,6 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GraphOutput]):
         if result.need_interp is not None:
             global_map.frames.data["need_interp"][result.frame_idexes[-1]] = result.need_interp
 
-        # if result.map_points is not None and result.landmark_indexes is not None:
-        #     idx = torch.tensor(result.landmark_indexes, dtype=torch.long, device=result.map_points.device)
-        #     global_map.map_points.data["pos_Tw"][idx] = result.map_points.to(dtype=torch.float32, device=global_map.map_points.data["pos_Tw"].device)
+        if result.map_points is not None and result.landmark_indexes is not None:
+            idx = torch.tensor(result.landmark_indexes, dtype=torch.long, device=result.map_points.device)
+            global_map.map_points.data["pos_Tw"][idx] = result.map_points.to(dtype=torch.float32, device=global_map.map_points.data["pos_Tw"].device)
