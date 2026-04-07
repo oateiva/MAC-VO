@@ -36,13 +36,13 @@ def VisualizeRerunCallback(frame: Frame, system: MACVO, pb: ColoredTqdm, gt: Lis
 
         T_rot = gt[0].Inv()
 
-        # R = pp.euler2SO3(torch.tensor([-np.pi/2, 0., 0.], device=gt.device, dtype=gt.dtype))
+        R = pp.euler2SO3(torch.tensor([-np.pi/2, 0., 0.], device=gt.device, dtype=gt.dtype))
 
-        # # Build SE3 with zero translation + rotation R
-        # batch = gt.shape[:-1]  # e.g. (N,)
-        # t0 = torch.zeros(*batch, 3, device=gt.device, dtype=gt.dtype)
-        # q  = R.tensor().expand(*batch, 4)  # quaternion part from SO3
-        # T_rot = pp.SE3(torch.cat([t0, q], dim=-1))
+        # Build SE3 with zero translation + rotation R
+        batch = gt.shape[:-1]  # e.g. (N,)
+        t0 = torch.zeros(*batch, 3, device=gt.device, dtype=gt.dtype)
+        q  = R.tensor().expand(*batch, 4)  # quaternion part from SO3
+        T_rot = pp.SE3(torch.cat([t0, q], dim=-1))
 
         gt = T_rot @ gt   # left-multiply: rotate in /world
         rr_plt.log_trajectory("/world/gt", gt)
@@ -55,8 +55,8 @@ def VisualizeRerunCallback(frame: Frame, system: MACVO, pb: ColoredTqdm, gt: Lis
     map_points = system.graph.get_frame2map(system.graph.frames[-1:])
     rr_plt.log_points("/world/point_cloud_incremental", map_points.data["pos_Tw"].detach(), map_points.data["color"].detach(), map_points.data["cov_Tw"].detach(), "sphere")
 
-    # map_points = system.graph.get_frame2map(system.graph.frames[:])
-    # rr_plt.log_points("/world/point_cloud_all", map_points.data["pos_Tw"].detach(), map_points.data["color"].detach(), map_points.data["cov_Tw"].detach(), "sphere")
+    map_points = system.graph.get_frame2map(system.graph.frames[:])
+    rr_plt.log_points("/world/point_cloud_all", map_points.data["pos_Tw"].detach(), map_points.data["color"].detach(), map_points.data["cov_Tw"].detach(), "sphere")
 
     vo_points  = system.graph.get_match2point(system.graph.get_frame2match(system.graph.frames[-1:]))
     rr_plt.log_points("/world/vo_tracking", vo_points.data["pos_Tw"].detach(), vo_points.data["color"].detach(), vo_points.data["cov_Tw"].detach(), "sphere")
@@ -155,7 +155,7 @@ if __name__ == "__main__":
         rr_plt.default_mode = "rerun"
         rr_plt.init_connect(project_name)
 
-    if datacfg.args.vslam:
+    if hasattr(datacfg.args, "vslam") and datacfg.args.vslam:
         vslam_track = load_vslam_track(datacfg.args.vslam, entity_name=project_name)
 
     Timer.setup(active=args.timing)
