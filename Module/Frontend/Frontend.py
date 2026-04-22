@@ -422,3 +422,61 @@ class MonocularFrontend(IFrontend):
     @property
     def provide_cov(self) -> tuple[bool, bool]:
         return False, True
+
+
+class CUDAGraph_MonocularFrontend(MonocularFrontend):
+    """
+    MonocularFrontend with CUDAGraph acceleration on the flow estimation model.
+    Monodepth model is not CUDAGraphed (takes CameraData, may have dynamic control flow).
+    """
+
+    def __init__(self, config: SimpleNamespace):
+        super().__init__(config)
+        self.cuda_graph_flow: CUDAGraphHandler | None = None
+        assert "cuda" in self.config.device.lower(), "CUDAGraph_MonocularFrontend requires a CUDA device."
+
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.set_float32_matmul_precision("medium")
+        torch.backends.cuda.preferred_linalg_library = "cusolver"
+
+    def _cuda_graph_flow_estimate(self, inp_A: torch.Tensor, inp_B: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.cuda_graph_flow is None:
+            Logger.write("info", "Building CUDAGraph for MonocularFrontend flow model")
+            static_A = torch.empty_like(inp_A, device="cuda")
+            static_B = torch.empty_like(inp_B, device="cuda")
+            static_A.copy_(inp_A)
+            static_B.copy_(inp_B)
+
+            s = torch.cuda.Stream()
+            s.wait_stream(torch.cuda.current_stream())  # type: ignore
+            with torch.cuda.stream(s):                  # type: ignore
+                for _ in range(3):
+                    out_val, out_cov = self.model["flow_model"].inference(static_A, static_B)
+            torch.cuda.current_stream().wait_stream(s)
+
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                static_out, static_out_cov = self.model["flow_model"].inference(static_A, static_B)
+
+            self.cuda_graph_flow = CUDAGraphHandler(
+                graph, inp_A.shape,
+                static_input={"input_A": static_A, "input_B": static_B},
+                static_ouput={"flow": static_out, "flow_cov": static_out_cov},
+            )
+            Logger.write("info", "CUDAGraph Built for MonocularFrontend flow model.")
+            return out_val, out_cov
+        else:
+            g = self.cuda_graph_flow
+            assert inp_A.shape == g.shape, f"CUDAGraph input shape mismatch: {inp_A.shape} != {g.shape}"
+            g.static_input["input_A"].copy_(inp_A)
+            g.static_input["input_B"].copy_(inp_B)
+            g.graph.replay()
+            time.sleep(0.0)  # hint OS scheduler for context switch
+            return g.static_ouput["flow"].clone(), g.static_ouput["flow_cov"].clone()
+
+    def estimate_flowcov(self, frame_t1: CameraData, frame_t2: CameraData) -> IMatcher.Output:
+        image_t1_left = frame_t1.imageL.to(self.config.device)[0:1, :, :, :]
+        image_t2_left = frame_t2.imageL.to(self.config.device)[0:1, :, :, :]
+        est_flow, est_cov = self._cuda_graph_flow_estimate(image_t1_left, image_t2_left)
+        return self.inference_2_match(est_flow.float(), est_cov.float())
