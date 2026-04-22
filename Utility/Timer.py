@@ -133,8 +133,7 @@ class Timer:
                     f" | AvgTime={(sum(elapsed) / len(starts)) : 3f} ms".ljust(20) + \
                     f" | MedianTime={median_elapsed : 3f} ms\n"
 
-        # Logger.write("info", report_str)
-        print(report_str)
+        Logger.write("info", report_str)
 
     @classmethod
     def save_elapsed(cls, json_file: str | Path):

@@ -3,6 +3,7 @@ import signal
 import typing as T
 from types import SimpleNamespace
 from abc import ABC, abstractmethod
+from dataclasses import fields, is_dataclass
 
 import torch.multiprocessing as mp
 from multiprocessing.context import SpawnProcess
@@ -11,7 +12,6 @@ from multiprocessing.connection import _ConnectionBase as Conn_Type
 from Module.Map import TensorBundle, VisualMap
 from Utility.PrettyPrint import Logger
 from Utility.Extensions import ConfigTestableSubclass
-from Utility.Utils      import tensor_safe_asdict
 
 if T.TYPE_CHECKING:
     from _typeshed import DataclassInstance
@@ -25,16 +25,15 @@ T_GraphOutput = T.TypeVar("T_GraphOutput", bound=DataclassInstance)
 
 
 def move_dataclass_to_local(obj: T_GraphInput) -> T_GraphInput:
-    data_dict: dict = tensor_safe_asdict(obj)   # pyright: ignore
-    for key, value in data_dict.items():
-        if isinstance(value, torch.Tensor):
-            data_dict[key] = value.clone()
-        elif isinstance(value, TensorBundle):
-            value.apply(lambda x: x.clone())
-            data_dict[key] = value
-        else:
-            data_dict[key] = value
-    return type(obj)(**data_dict)
+    if is_dataclass(obj) and not isinstance(obj, type):
+        return type(obj)(**{f.name: move_dataclass_to_local(getattr(obj, f.name)) for f in fields(obj)})  # pyright: ignore
+    elif isinstance(obj, torch.Tensor):
+        return obj.clone()  # pyright: ignore
+    elif isinstance(obj, TensorBundle):
+        obj.apply(lambda x: x.clone())
+        return obj  # pyright: ignore
+    else:
+        return obj  # pyright: ignore
 
 
 class IOptimizer(ABC, T.Generic[T_GraphInput, T_Context, T_GraphOutput], ConfigTestableSubclass):

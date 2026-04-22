@@ -1,6 +1,5 @@
 import torch
 import pypose as pp
-import pypose.module as pm
 
 from abc import ABC, abstractmethod
 from pathlib import Path

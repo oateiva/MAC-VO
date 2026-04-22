@@ -34,6 +34,7 @@ class ZedSequence(SequenceBase[Frame]):
         self.width = width
         self.height = height
 
+        self.timestamp_unit = getattr(cfg, 'timestamp_unit', 'ms')
         self.ImageL = ZedMonocularDataset(Path(self.seqRoot), left=True)
         self.ImageR = ZedMonocularDataset(Path(self.seqRoot), left=False)
 
@@ -42,17 +43,23 @@ class ZedSequence(SequenceBase[Frame]):
 
     def __getitem__(self, local_index: int) -> Frame:
         index = self.get_index(local_index)
+        stem = Path(self.ImageL.file_names[index]).stem
+        try:
+            raw_ts = int(stem)
+            time_ns = raw_ts * {"ms": 1_000_000, "us": 1_000, "ns": 1}[self.timestamp_unit]
+        except (ValueError, KeyError):
+            time_ns = local_index * 1000
 
         return Frame(
             idx    = [local_index],
-            time_ns= [local_index * 1000],   # FIXME: a fake timestamp.
+            time_ns= [time_ns],
             camera = CameraData.from_stereo(
                 T_BS     = pp.identity_SE3(1),
                 K        = self.K,
                 baseline = torch.tensor([self.baseline]),
                 width    = self.width,
                 height   = self.height,
-                time_ns  = [local_index * 1000],   # FIXME: a fake timestamp.
+                time_ns  = [time_ns],
                 imageL   = self.ImageL[index],
                 imageR   = self.ImageR[index]
             )

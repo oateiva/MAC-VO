@@ -8,6 +8,7 @@ from pypose.optim.strategy import TrustRegion
 from pypose.optim.solver import Cholesky
 from pypose.optim.corrector import FastTriggs
 from pypose.optim.optimizer import _Optimizer, Trivial, RobustModel
+from Utility.PrettyPrint import Logger
 
 
 class FactorGraph(nn.Module, ABC):
@@ -120,7 +121,7 @@ class LM_autograd(_Optimizer):
                 try:
                     D = self.solver(A = A, b = -J_T @ R.view(-1, 1))
                 except Exception as e:
-                    print(e, "\nLinear solver failed. Breaking optimization step...")
+                    Logger.write("error", f"{e}\nLinear solver failed. Breaking optimization step...")
                     break
                 self.update_parameter(pg['params'], D)
                 self.loss = self.model.loss(input, target)
@@ -180,7 +181,7 @@ class LM_analytic(_Optimizer):
                 try:
                     D = self.solver(A = A, b = -J_T @ R.view(-1, 1))
                 except Exception as e:
-                    print(e, "\nLinear solver failed. Breaking optimization step...")
+                    Logger.write("error", f"{e}\nLinear solver failed. Breaking optimization step...")
                     break
 
                 self.update_parameter(pg['params'], D)

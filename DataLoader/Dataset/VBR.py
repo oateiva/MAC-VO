@@ -70,8 +70,6 @@ class VBR_StereoSequence(SequenceBase[Frame]):
         self.root = Path(cfg.root)
         self.sequence_name = self.root.name
 
-        self.width = 1388
-        self.high = 700
         with open(Path(self.root, "vbr_calib.yaml"), "r") as f:
                 calib_data = yaml.safe_load(f)
                 # left camera
@@ -89,9 +87,9 @@ class VBR_StereoSequence(SequenceBase[Frame]):
                 # right camera
                 cam_r = calib_data["cam_r"]
                 distortion_r = np.array(cam_r["distortion_coeffs"])
-                intrinsics_l = cam_r["intrinsics"] ## intrinsics: [Fx, Fy, Cx, Cy]
-                self.cam_r_K_np = np.array([[intrinsics_l[0], 0.0,               intrinsics_l[2]],
-                                            [0.0,               intrinsics_l[1], intrinsics_l[3]],
+                intrinsics_r = cam_r["intrinsics"] ## intrinsics: [Fx, Fy, Cx, Cy]
+                self.cam_r_K_np = np.array([[intrinsics_r[0], 0.0,               intrinsics_r[2]],
+                                            [0.0,               intrinsics_r[1], intrinsics_r[3]],
                                             [0.0,               0.0,               1]])
                 cam_r_T = np.array(cam_r["T_b"])
                 self.cam_r_t = cam_r_T[:3, 3]
