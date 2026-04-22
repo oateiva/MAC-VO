@@ -343,12 +343,65 @@ class TartanAirGTFlowDataset(Dataset):
         return flow, mask
 
 
-class TartanAirIMULoader(Dataset[tuple[IMUData, AttitudeData]]):
+class _TartanAirIMUBase(Dataset[tuple[IMUData, AttitudeData]]):
+    """Shared frameRangeQuery and __getitem__ logic for both IMU loader variants.
+
+    Subclasses must expose: _T_BS, _gravity, timestamp (1,N), lin_acc (1,N,3),
+    rot_vel (1,N,3), gt_pos (1,N,3), gt_vel (1,N,3), gt_rot (1,N,4), cam2imuIdx (M,).
+    """
+
+    def frameRangeQuery(self, start_frame: int, end_frame: int) -> tuple[IMUData, AttitudeData]:
+        """Retrieve IMU data in range [start_frame, end_frame)."""
+        start_imu_idx = self.cam2imuIdx[start_frame]
+        end_imu_idx   = self.cam2imuIdx[end_frame]
+        assert (
+            start_imu_idx != -1 and end_imu_idx != -1
+        ), "Requested frame is not aligned with IMU Sequence"
+        return IMUData(
+            T_BS=self._T_BS,
+            gravity=[self._gravity],
+            time_ns=self.timestamp[:, start_imu_idx:end_imu_idx],
+            acc =self.lin_acc[:, start_imu_idx:end_imu_idx],
+            gyro=self.rot_vel[:, start_imu_idx:end_imu_idx],
+        ), AttitudeData(
+            T_BS=self._T_BS,
+            gravity=[self._gravity],
+            time_ns=self.timestamp[:, start_imu_idx:end_imu_idx],
+            gt_pos=self.gt_pos[:, start_imu_idx:end_imu_idx],
+            gt_vel=self.gt_vel[:, start_imu_idx:end_imu_idx],
+            gt_rot=cast(pp.LieTensor, self.gt_rot[:, start_imu_idx:end_imu_idx]),
+            init_pos=self.gt_pos[:, start_imu_idx:start_imu_idx + 1],
+            init_vel=self.gt_vel[:, start_imu_idx:start_imu_idx + 1],
+            init_rot=cast(pp.LieTensor, self.gt_rot[:, start_imu_idx:start_imu_idx + 1]),
+        )
+
+    def __getitem__(self, index: int) -> tuple[IMUData, AttitudeData]:
+        s, e = index, index + 1
+        return IMUData(
+            T_BS=self._T_BS,
+            gravity=[self._gravity],
+            time_ns=self.timestamp[:, s:e],
+            acc =self.lin_acc[:, s:e],
+            gyro=self.rot_vel[:, s:e],
+        ), AttitudeData(
+            T_BS=self._T_BS,
+            gravity=[self._gravity],
+            time_ns=self.timestamp[:, s:e],
+            gt_pos=self.gt_pos[:, s:e],
+            gt_vel=self.gt_vel[:, s:e],
+            gt_rot=cast(pp.LieTensor, self.gt_rot[:, s:e]),
+            init_pos=self.gt_pos[:, s:s + 1],
+            init_vel=self.gt_vel[:, s:s + 1],
+            init_rot=cast(pp.LieTensor, self.gt_rot[:, s:s + 1]),
+        )
+
+
+class TartanAirIMULoader(_TartanAirIMUBase):
     def __init__(self, imuPath: Path) -> None:
         super().__init__()
         assert imuPath.exists(), f"IMU Data path ({imuPath}) does not exist"
-        self.limu_T_BS = pp.identity_SE3(1)     # Body -> Sensor Transformation
-        self.limu_g    = 9.81                   # Gravity
+        self._T_BS  = pp.identity_SE3(1)     # Body -> Sensor Transformation
+        self._gravity = 9.81                 # Gravity
 
         self.imuPath = imuPath
         # IMU Data
@@ -432,58 +485,6 @@ class TartanAirIMULoader(Dataset[tuple[IMUData, AttitudeData]]):
         assert (
             start_imu_idx != -1 and end_imu_idx != -1
         ), "Requested frame is not aligned with IMU Sequence"
-        return IMUData(
-            T_BS=self.limu_T_BS,
-            gravity=[self.limu_g],
-            time_ns=self.timestamp[:, start_imu_idx:end_imu_idx],
-
-            acc =self.lin_acc [:, start_imu_idx:end_imu_idx],
-            gyro=self.rot_vel [:, start_imu_idx:end_imu_idx],
-        ), AttitudeData(
-            T_BS=self.limu_T_BS,
-            gravity=[self.limu_g],
-            time_ns=self.timestamp[:, start_imu_idx:end_imu_idx],
-
-            gt_pos=self.gt_pos[:, start_imu_idx:end_imu_idx],
-            gt_vel=self.gt_vel[:, start_imu_idx:end_imu_idx],
-            gt_rot=cast(pp.LieTensor, self.gt_rot[:, start_imu_idx:end_imu_idx]),
-
-            init_pos=self.gt_pos[:, start_imu_idx : start_imu_idx + 1],
-            init_vel=self.gt_vel[:, start_imu_idx : start_imu_idx + 1],
-            init_rot=cast(pp.LieTensor, self.gt_rot[:, start_imu_idx : start_imu_idx + 1]),
-        )
-
-    def __getitem__(self, index) -> tuple[IMUData, AttitudeData]:
-        """
-        Args:
-            index (int): the index of IMU record to retrieve
-
-        Returns: {
-            "acc": (1, 3) tensor for linear acceleration
-            "ang_vel": (1, 3) tensor for angular velocity
-            "time": (1,) tnesor for timestamp
-        }
-        """
-        return IMUData(
-            T_BS=self.limu_T_BS,
-            gravity=[self.limu_g],
-            time_ns=self.timestamp[:, index : index + 1],
-
-            acc =self.lin_acc[:, index : index + 1],
-            gyro=self.rot_vel[:, index : index + 1],
-        ), AttitudeData(
-            T_BS=self.limu_T_BS,
-            gravity=[self.limu_g],
-            time_ns=self.timestamp[:, index : index + 1],
-
-            gt_pos=self.gt_pos[:, index : index + 1],
-            gt_vel=self.gt_vel[:, index : index + 1],
-            gt_rot=cast(pp.LieTensor, self.gt_rot[:, index : index + 1]),
-
-            init_pos=self.gt_pos[:, index : index + 1],
-            init_vel=self.gt_vel[:, index : index + 1],
-            init_rot=cast(pp.LieTensor, self.gt_rot[:, index : index + 1]),
-        )
 
 
 def loadTartanAirGT(path: Path) -> pp.LieTensor:
@@ -491,14 +492,14 @@ def loadTartanAirGT(path: Path) -> pp.LieTensor:
     return pp.SE3(se3_data)
 
 
-class TartanAirIMUSimulator(Dataset[tuple[IMUData, AttitudeData]]):
+class TartanAirIMUSimulator(_TartanAirIMUBase):
     def __init__(self, config: SimpleNamespace, gtPath: Path, fps=100) -> None:
         super().__init__()
         self.fps = fps
-        self.g_factor = 9.81
-        self.imu_T_BS = pp.identity_SE3(1)
+        self._gravity = 9.81
+        self._T_BS = pp.identity_SE3(1)
 
-        self.g      = np.array([0, 0, self.g_factor])
+        self.g      = np.array([0, 0, self._gravity])
         self.gtPath = gtPath
         self.camFPS = 10.0
 
@@ -601,77 +602,6 @@ class TartanAirIMUSimulator(Dataset[tuple[IMUData, AttitudeData]]):
                 "warn",
                 f"{self.timestamp.shape[0] - imu_idx} IMU samples remain unmatched",
             )
-
-    def frameRangeQuery(self, start_frame, end_frame) -> tuple[IMUData, AttitudeData]:
-        """Retrieve IMU data in range of [start_frame, end_frame)
-
-        Args:
-            start_frame (int): start image frame to get IMU sequence
-            end_frame (int): end image frame to get (exclusive)
-
-        Returns:
-            IMUResult: A range of IMU Results
-        """
-        start_imu_idx = self.cam2imuIdx[start_frame]
-        end_imu_idx = self.cam2imuIdx[end_frame]
-        assert (
-            start_imu_idx != -1 and end_imu_idx != -1
-        ), "Requested frame is not aligned with IMU Sequence"
-
-        return IMUData(
-            T_BS=self.imu_T_BS,
-            gravity=[self.g_factor],
-            time_ns=self.timestamp[:, start_imu_idx:end_imu_idx],
-
-            acc    = self.lin_acc[:, start_imu_idx:end_imu_idx],
-            gyro   = self.rot_vel[:, start_imu_idx:end_imu_idx],
-        ), AttitudeData(
-            T_BS=self.imu_T_BS,
-            gravity=[self.g_factor],
-            time_ns=self.timestamp[:, start_imu_idx:end_imu_idx],
-
-            gt_pos = self.gt_pos [:, start_imu_idx:end_imu_idx],
-            gt_vel = self.gt_vel [:, start_imu_idx:end_imu_idx],
-            gt_rot = cast(pp.LieTensor, self.gt_rot [:, start_imu_idx:end_imu_idx]),
-
-            init_pos=self.gt_pos [:, start_imu_idx:start_imu_idx+1],
-            init_vel=self.gt_vel [:, start_imu_idx:start_imu_idx+1],
-            init_rot=cast(pp.LieTensor, self.gt_rot [:, start_imu_idx:start_imu_idx+1]),
-        )
-
-    def __getitem__(self, index) -> tuple[IMUData, AttitudeData]:
-        """
-        Args:
-            index (int): the index of IMU record to retrieve
-
-        Returns: {
-            "acc": (1, 3) tensor for linear acceleration
-            "ang_vel": (1, 3) tensor for angular velocity
-            "time": (1,) tnesor for timestamp
-        }
-        """
-        start_imu_idx = index
-        end_imu_idx   = index + 1
-        return IMUData(
-            T_BS=self.imu_T_BS,
-            gravity=[self.g_factor],
-            time_ns=self.timestamp[:, start_imu_idx:end_imu_idx],
-
-            acc    = self.lin_acc[:, start_imu_idx:end_imu_idx],
-            gyro   = self.rot_vel[:, start_imu_idx:end_imu_idx],
-        ), AttitudeData(
-            T_BS=self.imu_T_BS,
-            gravity=[self.g_factor],
-            time_ns=self.timestamp[:, start_imu_idx:end_imu_idx],
-
-            gt_pos = self.gt_pos [:, start_imu_idx:end_imu_idx],
-            gt_vel = self.gt_vel [:, start_imu_idx:end_imu_idx],
-            gt_rot = cast(pp.LieTensor, self.gt_rot [:, start_imu_idx:end_imu_idx]),
-
-            init_pos=self.gt_pos [:, start_imu_idx:start_imu_idx+1],
-            init_vel=self.gt_vel [:, start_imu_idx:start_imu_idx+1],
-            init_rot=cast(pp.LieTensor, self.gt_rot [:, start_imu_idx:start_imu_idx+1]),
-        )
 
 
 class IMUNoiseGenerator(ConfigTestable):

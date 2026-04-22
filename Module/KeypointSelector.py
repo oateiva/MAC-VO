@@ -254,13 +254,19 @@ class CovAwareSelector(IKeypointSelector):
     Selecting keypoints based on estimated depth, depth_cov, and flow_cov. See sect III.B
     of paper for detail.
     """
+    def __init__(self, config: SimpleNamespace):
+        super().__init__(config)
+        self._max_depth: float | None = None
+
     @Timer.cpu_timeit("KPSelector.select")
     @Timer.gpu_timeit("KPSelector.select")
     @torch.inference_mode()
     def select_point(self, frame: CameraData, numPoint: int, depth0_est: IDepth.Output, depth1_est: IDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
         assert depth0_est.cov is not None
         assert depth1_est.cov is not None
-        if self.config.max_depth == "auto": self.config.max_depth = frame.fx * frame.frame_baseline
+        if self._max_depth is None and self.config.max_depth == "auto":
+            self._max_depth = frame.fx * frame.frame_baseline
+        max_depth = self._max_depth if self._max_depth is not None else self.config.max_depth
 
         depth0_map     = depth0_est.depth.to(self.config.device)
         depth0_cov_map = depth0_est.cov.to(self.config.device)
@@ -294,7 +300,7 @@ class CovAwareSelector(IKeypointSelector):
         ] = True
 
         # Positions that are sufficiently close to camera.
-        depth_mask = (depth0_map < self.config.max_depth) & (depth1_map < self.config.max_depth)
+        depth_mask = (depth0_map < max_depth) & (depth1_map < max_depth)
 
         depth0_cov_thresh = min(self.config.max_depth_cov, depth0_cov_map[quality_nms].nanmedian().item() * 1.5)
         # depth1_cov_thresh = min(self.config.max_depth_cov, depth1_cov_map[quality_nms].nanmedian().item() * 2.0)

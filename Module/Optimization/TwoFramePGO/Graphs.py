@@ -6,6 +6,7 @@ import typing as typ
 from dataclasses import dataclass
 
 from Module.Map import MatchObs, PointNode
+from Utility.PrettyPrint import Logger
 from Utility.Point import pixel2point_NED, point2pixel_NED
 from Utility.GTSAM_Utils import pypose_to_pose3, pose3_to_pypose, make_pose_to_point_factor
 from ..PyposeOptimizers import AnalyticModule, FactorGraph
@@ -574,7 +575,7 @@ class GTSAM_Pose2Point(FactorGraph):
             pose_1 = pose3_to_pypose(pose_1)
             pose_2 = pose3_to_pypose(pose_2)
         except Exception as e:
-            print(f"Error converting optimized poses to PyPose format: {e}")
+            Logger.write("error", f"Error converting optimized poses to PyPose format: {e}")
             pose_1 = self.init_pypose
             pose_2 = self.init_pypose
             need_interp = True
@@ -631,7 +632,6 @@ class GTSAM_Pose2Point(FactorGraph):
             f.flush()
             os.fsync(f.fileno())  # makes it robust if you crash mid-run
 
-        print(f"graph_data for frame {frame_idx} saved to {json_path}")
 
 
     def log_plot_data(self, pose_1, pose_2, landmark_positions):
@@ -848,7 +848,7 @@ class ISAM(FactorGraph):
         try:
             update = self.isam.update(new_factors, new_values)
         except Exception as e:
-            print(f"Error during iSAM update: {e}")
+            Logger.write("error", f"Error during iSAM update: {e}")
         # update = self.isam.update()
 
         pose_window = self.get_pose_window(self.isam, self.frame_idx, K=50)
@@ -972,7 +972,6 @@ class ISAM(FactorGraph):
             f.flush()
             os.fsync(f.fileno())  # makes it robust if you crash mid-run
 
-        print(f"graph_data for frame {frame_idx} saved to {json_path}")
 
     def log_plot_data(self, pose_1, pose_2, landmark_positions):
         from Utility.Visualize import rr_plt

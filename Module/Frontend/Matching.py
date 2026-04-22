@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from DataLoader import CameraData
-from Utility.Utils import padTo, reflect_torch_dtype
+from Utility.Utils import padTo, reflect_torch_dtype, retrieve_scalar_map_pixels
 from Utility.Extensions import ConfigTestableSubclass
 from Utility.Config import build_dynamic_config
 
@@ -85,13 +85,7 @@ class IMatcher(ABC, ConfigTestableSubclass):
 
         #### Note that only first sample of scalar_map is used. (Batch idx=0)
         """
-        if scalar_map is None: return None
-
-        if interpolate:
-            raise NotImplementedError("Not implemented yet")
-        else:
-            values = scalar_map[0, ..., pixel_uv[..., 1].long(), pixel_uv[..., 0].long()]
-            return values
+        return retrieve_scalar_map_pixels(pixel_uv, scalar_map, interpolate)
 
 # End #######################
 

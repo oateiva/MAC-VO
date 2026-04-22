@@ -39,6 +39,7 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         post_process    : Module.IMapProcessor,
         kf_selector     : Module.IKeyframeSelector[T_SensorFrame],
         optimizer       : Module.IOptimizer,
+        min_num_point   : int = 10,
         **_excessive_args,
     ) -> None:
         super().__init__(profile=profile)
@@ -62,7 +63,7 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         self.Optimizer = optimizer
         # end
 
-        self.min_num_point = 10
+        self.min_num_point = min_num_point
         self.num_point = num_point
         self.edge_width = edgewidth
         self.isinitiated = False

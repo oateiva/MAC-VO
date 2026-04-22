@@ -9,9 +9,8 @@ from typing import Any
 
 from torch.utils.data import Dataset
 
-# from ..Interface import Frame, StereoData
 from ..SequenceBase import SequenceBase
-from ..Interface import Frame
+from ..Interface import Frame, CameraData
 
 
 class ZedSequence(SequenceBase[Frame]):
@@ -47,7 +46,7 @@ class ZedSequence(SequenceBase[Frame]):
         return Frame(
             idx    = [local_index],
             time_ns= [local_index * 1000],   # FIXME: a fake timestamp.
-            camera = StereoData(
+            camera = CameraData.from_stereo(
                 T_BS     = pp.identity_SE3(1),
                 K        = self.K,
                 baseline = torch.tensor([self.baseline]),

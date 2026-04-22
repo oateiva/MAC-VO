@@ -91,7 +91,6 @@ class ScaleFrame(IDataTransform[Frame, Frame]):
             camera.gt_flow[:, 1] /= round_scale_v
 
         if camera.flow_mask is not None and camera.flow_mask.numel()!=0:
-            print(camera.flow_mask.size())
             camera.flow_mask = resize(camera.flow_mask, [target_h, target_w], interpolation=interp)
 
         if camera.gt_depth is not None:

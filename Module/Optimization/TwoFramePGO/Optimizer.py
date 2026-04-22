@@ -35,9 +35,10 @@ class TwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
         lengths = global_map.frame2match.ranges[frame2opt.index, :, 1].flatten()
         lengths = lengths[lengths >= 0]
         edges_idx = torch.repeat_interleave(torch.arange(lengths.size(0)), lengths.long())
+        P1_last = global_map.frames.data["pose"][frame_idx - 1]
         init_motion = pp.SE3(frame2opt.data["pose"])
         baseline = frame2opt.data["baseline"]
-        return GraphInput(frame_idx, frame_idx - 1, init_motion, baseline, obs, pts, im_intrinsics, edges_idx, "cpu")
+        return GraphInput(frame_idx, frame_idx - 1, P1_last, init_motion, baseline, obs, pts, im_intrinsics, edges_idx, "cpu")
 
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
@@ -94,14 +95,9 @@ class TwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
             scheduler = StopOnPlateau(optimizer, steps=10, patience=2, decreasing=1e-5, verbose=True)
 
             while scheduler.continual():
-                # Compute weight matrix from graph covariance
                 covariance_array = graph.covariance_array().to(context["device"]).double()
-                #max and min values
-                print("Max depth covariance:", covariance_array.max().item())
-                print("Min depth covariance:", covariance_array.min().item())
-
                 weight = torch.block_diag(*(
-                    torch.pinverse(graph.covariance_array().to(context["device"]).double())
+                    torch.pinverse(covariance_array)
                 ))
                 loss = optimizer.step(input=(), weight=weight)
                 scheduler.step(loss)
@@ -172,7 +168,6 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GraphOutput]):
     def __init__(self, config):
         super().__init__(config)
         self.window_size = 2
-        self.super_duper_gtsam_map = {}
     def connect_graphs(self, previous_graph_data: GraphInput, current_graph_data: GraphInput) -> GTSAM_GraphInput:
         matches_prev = previous_graph_data.observations
         matches_curr = current_graph_data.observations

@@ -158,6 +158,25 @@ def IgnoreException(func: Callable[T_In, T_Out]) -> Callable[T_In, Optional[T_Ou
         return result
     return wrapped
 
+def retrieve_scalar_map_pixels(
+    pixel_uv: torch.Tensor,
+    scalar_map: torch.Tensor | None,
+    interpolate: bool = False,
+) -> torch.Tensor | None:
+    """
+    Retrieve pixel values from a scalar map at given (u, v) positions.
+
+    pixel_uv: (N, 2) tensor in (x, y) / (u, v) format.
+    scalar_map: (B, C, H, W) tensor; only batch index 0 is used.
+    Returns (C, N) tensor, or None if scalar_map is None.
+    """
+    if scalar_map is None:
+        return None
+    if interpolate:
+        raise NotImplementedError("Interpolated pixel retrieval is not implemented yet.")
+    return scalar_map[0, ..., pixel_uv[..., 1].long(), pixel_uv[..., 0].long()]
+
+
 def tensor_safe_asdict(obj):
     if is_dataclass(obj):
         return {

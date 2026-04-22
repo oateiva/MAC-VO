@@ -9,7 +9,7 @@ class GridRecorder:
     def __init__(self, axis0: tuple[float, float, float], axis1: tuple[float, float, float]):
         self.axis0_scale, self.axis1_scale = 1/axis0[2], 1/axis1[2]
         self.axis0_start, self.axis0_end, self.axis0_step = axis0
-        self.axis1_start, self.axis1_end, self.axis1_step = axis0
+        self.axis1_start, self.axis1_end, self.axis1_step = axis1
 
         self.get_axis0_index: T.Callable[[np.ndarray], np.ndarray] = lambda v: ((v - self.axis0_start) * self.axis0_scale).astype(int)
         self.get_axis1_index: T.Callable[[np.ndarray], np.ndarray] = lambda v: ((v - self.axis1_start) * self.axis1_scale).astype(int)

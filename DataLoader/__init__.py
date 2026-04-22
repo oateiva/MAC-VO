@@ -10,6 +10,6 @@ from .Dataset.ZedCam     import ZedSequence
 from .Dataset.EuRoC      import EuRoC_StereoSequence, EuRoC_Sequence
 from .Dataset.VBR        import VBR_StereoSequence
 from .Dataset.EIVA       import EIVASequence, EIVA_StereoSequenceORM
-from .Dataset.SubPipe    import SubPipeSequence, SubPipeMonocularDataset
+from .Dataset.SubPipe    import SubPipeSequence
 from .Dataset.Aqualoc    import Aqualoc_MonoSequence
 from .Dataset.EiffelTower import EiffelTowerSequence

@@ -79,6 +79,7 @@ class IOptimizer(ABC, T.Generic[T_GraphInput, T_Context, T_GraphOutput], ConfigT
 
         if self.is_parallel_mode:
             ctx = mp.get_context("spawn")
+            _orig_num_threads = torch.get_num_threads()
             torch.set_num_threads(1)
 
             # Generate Pipe for parent-end and child-end
@@ -91,7 +92,7 @@ class IOptimizer(ABC, T.Generic[T_GraphInput, T_Context, T_GraphOutput], ConfigT
             assert self.child_proc is not None
             self.child_proc.start()
 
-            torch.set_num_threads(4)
+            torch.set_num_threads(_orig_num_threads) # WARNING: this originally was set to 4
 
         self.context = self.init_context(config)
 

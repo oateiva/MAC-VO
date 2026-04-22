@@ -1,9 +1,13 @@
-from typing import Protocol, Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Protocol, Any
 from DataLoader import CameraData
-from Module.Frontend.StereoDepth import IDepth
 
 import torch
 import torch.nn as nn
+
+if TYPE_CHECKING:
+    from Module.Frontend.StereoDepth import IDepth
 
 class DepthModelProtocol(Protocol):
     '''

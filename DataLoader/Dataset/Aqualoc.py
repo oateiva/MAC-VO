@@ -42,10 +42,12 @@ class Aqualoc_MonoSequence(SequenceBase[Frame]):
         self.root = Path(cfg.root)
         assert self.root.exists(), f"Aqualoc root does not exist: {self.root}"
 
-        # Config-driven dataset selection (consistent with your importer logic)
-        # Expected navigation like:
-        #   "harbor_sequence_02_raw_data" or "archaeo_sequence_1_raw_data"
-        self.site = "harbor" if "harbor" in cfg.root else "archaeo"
+        # Determine site variant. Use explicit config field if provided, otherwise
+        # infer from the root path substring (legacy behaviour preserved for existing configs).
+        if hasattr(cfg, "site") and cfg.site in {"harbor", "archaeo"}:
+            self.site = cfg.site
+        else:
+            self.site = "harbor" if "harbor" in cfg.root else "archaeo"
         self.seq_number = self._extract_sequence_number(cfg.root)
 
 

@@ -9,9 +9,13 @@ from django.db import close_old_connections
 from .SequenceBase import SequenceBase, T_Data
 
 
-def ensure_django(settings="annotationserver.core.settings.development"):
+_DJANGO_SETTINGS_DEFAULT = "annotationserver.core.settings.development"
+
+def ensure_django():
+    # Override the settings module via MACVO_DJANGO_SETTINGS or DJANGO_SETTINGS_MODULE env vars.
+    # On non-EIVA machines, set MACVO_DJANGO_SETTINGS to the appropriate Django settings module.
     if not os.environ.get("DJANGO_SETTINGS_MODULE"):
-        os.environ["DJANGO_SETTINGS_MODULE"] = settings
+        os.environ["DJANGO_SETTINGS_MODULE"] = os.environ.get("MACVO_DJANGO_SETTINGS", _DJANGO_SETTINGS_DEFAULT)
         django.setup()
     close_old_connections()
 
