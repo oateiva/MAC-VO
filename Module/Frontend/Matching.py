@@ -158,8 +158,12 @@ class FlowFormerCovMatcher(IMatcher):
         from ..Network.FlowFormer.configs.submission import get_cfg
         from ..Network.FlowFormerCov import build_flowformer
 
+        cfg = get_cfg()
+        if hasattr(config, 'decoder_depth'):
+            cfg.latentcostformer.decoder_depth = config.decoder_depth
+
         model = build_flowformer(
-            get_cfg(),
+            cfg,
             encoder_dtype=reflect_torch_dtype(self.config.enc_dtype),
             decoder_dtype=reflect_torch_dtype(self.config.dec_dtype)
         )
@@ -185,8 +189,8 @@ class FlowFormerCovMatcher(IMatcher):
         cls._enforce_config_spec(config, {
                 "weight"    : lambda s: isinstance(s, str),
                 "device"    : lambda s: isinstance(s, str) and (("cuda" in s) or (s == "cpu")),
-                "enc_dtype" : lambda s: s in {"fp16", "bf16", "fp32"},  # Precision casting for encoder, the network's input and output will still be in fp32.
-                "dec_dtype" : lambda s: s in {"fp16", "bf16", "fp32"},  # Precision casting for decoder, the network's input and output will still be in fp32.
+                "enc_dtype" : lambda s: s in {"fp16", "bf16", "fp32"},
+                "dec_dtype" : lambda s: s in {"fp16", "bf16", "fp32"},
             })
 
 

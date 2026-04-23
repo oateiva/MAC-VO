@@ -21,7 +21,7 @@ import torch
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import overload, Literal, Dict
+from typing import overload, Literal
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -359,34 +359,15 @@ class CUDAGraph_FlowFormerCovFrontend(FlowFormerCovFrontend):
 class MonocularFrontend(IFrontend):
     def __init__(self, config: SimpleNamespace):
         super().__init__(config)
-        from ..Network.FlowFormer.configs.submission import get_cfg
-        from ..Network.FlowFormerCov import build_flowformer
-        cfg = get_cfg()
-        cfg.latentcostformer.decoder_depth = self.config.decoder_depth
-        flow_model = build_flowformer(cfg, reflect_torch_dtype(config.enc_dtype), reflect_torch_dtype(config.dec_dtype))
-        flow_model.q90 = getattr(config.flow, "q90", 1.)
 
-        flow_model.eval()
-        flow_model.to(self.config.device)
-        ckpt  = torch.load(self.config.flow.weight, map_location=self.config.device, weights_only=True)
-        flow_model.load_ddp_state_dict(ckpt)
+        self.match: IMatcher = IMatcher.instantiate(config.match.type, config.match.args)
 
-        # Monocular depth estimation models
-        monodepth_name = self.config.monodepth.type
-        monodepth_args = vars(self.config.monodepth.args)
-
-        monodepth_model = build_depth_model(monodepth_name, **monodepth_args)
-        ## TODO: float16, 32 etc?
+        monodepth_model: DepthModelProtocol = build_depth_model(
+            self.config.monodepth.type, **vars(self.config.monodepth.args)
+        )
         monodepth_model.deepodo_initialize(self.config.monodepth.args)
         monodepth_model.to(self.config.device)
-        # monodepth_model.eval()
-
-
-        # Dict of models: keys are strings, values are torch.nn.Module instances
-        self.model: Dict[str, torch.nn.Module|DepthModelProtocol] = {
-            "flow_model": flow_model,
-            "monodepth_model": monodepth_model,
-        }
+        self.depth_model: DepthModelProtocol = monodepth_model
 
     @Timer.cpu_timeit("Frontend.estimate")
     @Timer.gpu_timeit("Frontend.estimate")
@@ -398,40 +379,34 @@ class MonocularFrontend(IFrontend):
         )
 
     def estimate_depth(self, frame: CameraData) -> IDepth.Output:
+        return self.depth_model.deepodo_inference(frame)
 
-        depth_output = self.model["monodepth_model"].deepodo_inference(frame)
-
-        return depth_output
-
-    def estimate_flowcov(self, frame_t1: CameraData, frame_t2: CameraData)-> IMatcher.Output:
-        image_t1_left = frame_t1.imageL.to(self.config.device)[0:1,: , :, :]  # if window length >1, only use the first frame
-        image_t2_left = frame_t2.imageL.to(self.config.device)[0:1,: , :, :]  # if window length >1, only use the first frame
-        est_flow, est_cov = self.model["flow_model"].inference(image_t1_left, image_t2_left)
-
-        est_flow: torch.Tensor = est_flow.float()
-        est_cov : torch.Tensor = est_cov.float()
-
-        return self.inference_2_match(est_flow, est_cov)
-
-    @staticmethod
-    def inference_2_match(flow_12: torch.Tensor, cov_12: torch.Tensor) -> IMatcher.Output:
-        match_map, match_cov = flow_12, cov_12
-        match_mask = None
-        return IMatcher.Output.from_partial_cov(flow=match_map, cov=match_cov, mask=match_mask)
+    def estimate_flowcov(self, frame_t1: CameraData, frame_t2: CameraData) -> IMatcher.Output:
+        return self.match.estimate(frame_t1, frame_t2)
 
     @property
     def provide_cov(self) -> tuple[bool, bool]:
-        return False, True
+        return True, self.match.provide_cov
+
+    @classmethod
+    def is_valid_config(cls, config: SimpleNamespace | None) -> None:
+        assert config is not None
+        IMatcher.is_valid_config(config.match)
 
 
 class CUDAGraph_MonocularFrontend(MonocularFrontend):
     """
     MonocularFrontend with CUDAGraph acceleration on the flow estimation model.
-    Monodepth model is not CUDAGraphed (takes CameraData, may have dynamic control flow).
+    Requires match to be FlowFormerCovMatcher. Monodepth is not CUDAGraphed.
     """
 
     def __init__(self, config: SimpleNamespace):
         super().__init__(config)
+        from .Matching import FlowFormerCovMatcher
+        assert isinstance(self.match, FlowFormerCovMatcher), \
+            "CUDAGraph_MonocularFrontend requires match.type = FlowFormerCovMatcher"
+        self._flow_model = self.match.model
+
         self.cuda_graph_flow: CUDAGraphHandler | None = None
         assert "cuda" in self.config.device.lower(), "CUDAGraph_MonocularFrontend requires a CUDA device."
 
@@ -452,12 +427,12 @@ class CUDAGraph_MonocularFrontend(MonocularFrontend):
             s.wait_stream(torch.cuda.current_stream())  # type: ignore
             with torch.cuda.stream(s):                  # type: ignore
                 for _ in range(3):
-                    out_val, out_cov = self.model["flow_model"].inference(static_A, static_B)
+                    out_val, out_cov = self._flow_model.inference(static_A, static_B)
             torch.cuda.current_stream().wait_stream(s)
 
             graph = torch.cuda.CUDAGraph()
             with torch.cuda.graph(graph):
-                static_out, static_out_cov = self.model["flow_model"].inference(static_A, static_B)
+                static_out, static_out_cov = self._flow_model.inference(static_A, static_B)
 
             self.cuda_graph_flow = CUDAGraphHandler(
                 graph, inp_A.shape,
@@ -472,11 +447,11 @@ class CUDAGraph_MonocularFrontend(MonocularFrontend):
             g.static_input["input_A"].copy_(inp_A)
             g.static_input["input_B"].copy_(inp_B)
             g.graph.replay()
-            time.sleep(0.0)  # hint OS scheduler for context switch
+            time.sleep(0.0)
             return g.static_ouput["flow"].clone(), g.static_ouput["flow_cov"].clone()
 
     def estimate_flowcov(self, frame_t1: CameraData, frame_t2: CameraData) -> IMatcher.Output:
         image_t1_left = frame_t1.imageL.to(self.config.device)[0:1, :, :, :]
         image_t2_left = frame_t2.imageL.to(self.config.device)[0:1, :, :, :]
         est_flow, est_cov = self._cuda_graph_flow_estimate(image_t1_left, image_t2_left)
-        return self.inference_2_match(est_flow.float(), est_cov.float())
+        return IMatcher.Output.from_partial_cov(flow=est_flow.float(), cov=est_cov.float())
