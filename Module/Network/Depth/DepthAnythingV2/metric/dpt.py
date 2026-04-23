@@ -201,6 +201,7 @@ class DepthAnythingV2(nn.Module):
 
         return depth.squeeze(1)
 
+    @torch.inference_mode()
     def deepodo_inference(self, input: CameraData) -> IDepth.Output:
         image = input.imageL.to(self.device)
         depth_map = self.forward(image)

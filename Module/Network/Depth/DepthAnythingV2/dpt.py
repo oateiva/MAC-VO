@@ -206,6 +206,7 @@ class DepthAnythingV2(nn.Module):
 
         return depth
 
+    @torch.inference_mode()
     def deepodo_inference(self, input: CameraData) -> IDepth.Output:
         image = input.imageL.to(self.device)
         if image.shape[0] > 1:

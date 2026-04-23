@@ -292,6 +292,7 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
 
         return prediction
 
+    @torch.inference_mode()
     def deepodo_inference(self, input: CameraData) -> IDepth.Output:
         """
         Depth inference method for deepodo framework compatibility.

@@ -61,6 +61,9 @@ def execute_experiment(name, cfg, cfg_dict, root_box: Sandbox) -> str:
     system = MACVO[Frame].from_config(cfg)
     system.receive_frames(sequence, exp_space, on_frame_finished=onFrameFinished)
 
+    del system
+    torch.cuda.empty_cache()
+
     return str(exp_space.folder)
 
 

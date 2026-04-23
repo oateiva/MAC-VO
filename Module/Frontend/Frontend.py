@@ -18,18 +18,21 @@ How to use this?
 from __future__ import annotations
 
 import torch
-import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
-from typing import overload, Literal, Callable
+from typing import overload, Literal, Callable, TypeVar
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+
+_A = TypeVar("_A")
+_B = TypeVar("_B")
 
 from DataLoader import CameraData
 from Utility.PrettyPrint import Logger
 from Utility.Timer import Timer
 from Utility.Extensions import ConfigTestableSubclass
-from Utility.Utils import reflect_torch_dtype
+from Utility.Utils import reflect_torch_dtype, retrieve_scalar_map_pixels
 
 from .StereoDepth import IDepth, disparity_to_depth, disparity_to_depth_cov
 from .Matching    import IMatcher
@@ -105,20 +108,7 @@ class IFrontend(ABC, ConfigTestableSubclass):
 
     @staticmethod
     def retrieve_pixels(pixel_uv: torch.Tensor, scalar_map: torch.Tensor | None, interpolate: bool=False) -> torch.Tensor | None:
-        """
-        Given a pixel_uv (Nx2) tensor, retrieve the pixel values (CxN) from scalar_map (BxCxHxW).
-
-        #### Note that the pixel_uv is in (x, y) format, not (row, col) format.
-
-        #### Note that only first sample of scalar_map is used. (Batch idx=0)
-        """
-        if scalar_map is None: return None
-
-        if interpolate:
-            raise NotImplementedError("Not implemented yet")
-        else:
-            values = scalar_map[0, ..., pixel_uv[..., 1].long(), pixel_uv[..., 0].long()]
-            return values
+        return retrieve_scalar_map_pixels(pixel_uv, scalar_map, interpolate)
 
 # End #######################
 
@@ -128,6 +118,7 @@ class CUDAGraphHandler:
     shape: torch.Size
     static_input: dict[str, torch.Tensor]
     static_ouput: dict[str, torch.Tensor]
+    stream: torch.cuda.Stream  # capture stream — must replay on same stream
 
 
 class CUDAGraphMixin:
@@ -145,6 +136,7 @@ class CUDAGraphMixin:
         log_name: str,
     ) -> tuple[CUDAGraphHandler, torch.Tensor, torch.Tensor]:
         Logger.write("info", f"Building CUDAGraph for {log_name}")
+        capture_stream = torch.cuda.Stream()
         static_A = torch.empty_like(inp_A, device="cuda")
         static_B = torch.empty_like(inp_B, device="cuda")
         static_A.copy_(inp_A)
@@ -152,22 +144,22 @@ class CUDAGraphMixin:
 
         out_val: torch.Tensor | None = None
         out_cov: torch.Tensor | None = None
-        s = torch.cuda.Stream()
-        s.wait_stream(torch.cuda.current_stream())  # type: ignore
-        with torch.cuda.stream(s):                  # type: ignore
+        capture_stream.wait_stream(torch.cuda.current_stream())  # type: ignore
+        with torch.cuda.stream(capture_stream):                  # type: ignore
             for _ in range(3):
                 out_val, out_cov = model_fn(static_A, static_B)
-        torch.cuda.current_stream().wait_stream(s)
+        torch.cuda.current_stream().wait_stream(capture_stream)
         assert out_val is not None and out_cov is not None
 
         graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph):
+        with torch.cuda.graph(graph, stream=capture_stream):    # type: ignore
             static_out, static_out_cov = model_fn(static_A, static_B)
 
         handler = CUDAGraphHandler(
             graph, inp_A.shape,
             static_input={"input_A": static_A, "input_B": static_B},
             static_ouput={"flow": static_out, "flow_cov": static_out_cov},
+            stream=capture_stream,
         )
         Logger.write("info", f"CUDAGraph Built for {log_name}.")
         return handler, out_val, out_cov
@@ -181,14 +173,41 @@ class CUDAGraphMixin:
         assert inp_A.shape == handler.shape, f"CUDAGraph input shape mismatch: {inp_A.shape} != {handler.shape}"
         handler.static_input["input_A"].copy_(inp_A)
         handler.static_input["input_B"].copy_(inp_B)
-        handler.graph.replay()
-        time.sleep(0.0)
+        with torch.cuda.stream(handler.stream):  # type: ignore
+            handler.graph.replay()
+        torch.cuda.current_stream().wait_stream(handler.stream)  # type: ignore
         return handler.static_ouput["flow"].clone(), handler.static_ouput["flow_cov"].clone()
+
+
+class ParallelEstimateMixin:
+    @staticmethod
+    def _parallel(fn_a: Callable[[], _A], fn_b: Callable[[], _B]) -> tuple[_A, _B]:
+        """
+        Run fn_a and fn_b concurrently on two threads, each on its own CUDA stream.
+        Blocks until both complete. Re-raises any exception from either thread.
+        Safe for inference-only model calls sharing weights (no gradient state mutated).
+        Falls back to sequential execution when CUDA is unavailable.
+        """
+        if not torch.cuda.is_available():
+            return fn_a(), fn_b()
+
+        def run(fn: Callable[[], object]) -> object:
+            s = torch.cuda.Stream()
+            s.wait_stream(torch.cuda.current_stream())  # type: ignore
+            with torch.cuda.stream(s):                  # type: ignore
+                result = fn()
+            s.synchronize()
+            return result
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            fut_a = pool.submit(run, fn_a)
+            fut_b = pool.submit(run, fn_b)
+            return fut_a.result(), fut_b.result()  # type: ignore[return-value]
 
 
 # Implementations
 
-class FrontendCompose(IFrontend):
+class FrontendCompose(ParallelEstimateMixin, IFrontend):
     def __init__(self, config: SimpleNamespace):
         super().__init__(config)
         self.depth = IDepth.instantiate(self.config.depth.type, self.config.depth.args)
@@ -201,10 +220,12 @@ class FrontendCompose(IFrontend):
     @Timer.cpu_timeit("Frontend.estimate")
     @Timer.gpu_timeit("Frontend.estimate")
     def estimate_pair(self, frame_t1: CameraData, frame_t2: CameraData) -> tuple[IDepth.Output, IMatcher.Output]:
-        return (
-            self.depth.estimate(frame_t2),
-            self.match.estimate(frame_t1, frame_t2)
-        )
+        if getattr(self.config, "parallel", False):
+            return self._parallel(
+                lambda: self.depth.estimate(frame_t2),
+                lambda: self.match.estimate(frame_t1, frame_t2),
+            )
+        return self.depth.estimate(frame_t2), self.match.estimate(frame_t1, frame_t2)
 
     def estimate_depth(self, frame: CameraData) -> IDepth.Output:
         return self.depth.estimate(frame)
@@ -214,6 +235,8 @@ class FrontendCompose(IFrontend):
         assert config is not None
         IMatcher.is_valid_config(config.match)
         IDepth.is_valid_config(config.depth)
+        if hasattr(config, "parallel"):
+            assert isinstance(config.parallel, bool), "parallel must be bool"
 
 
 class FlowFormerCovFrontend(IFrontend):
@@ -342,8 +365,6 @@ class CUDAGraph_FlowFormerCovFrontend(CUDAGraphMixin, FlowFormerCovFrontend):
         input_B = input_B.to(device=self.config.device)
 
         est_flow, est_cov = self.cuda_graph_estimate(input_A, input_B)
-        time.sleep(0.0)
-
         est_flow = est_flow.float()
         est_cov  = est_cov.float()
 
@@ -361,7 +382,7 @@ class CUDAGraph_FlowFormerCovFrontend(CUDAGraphMixin, FlowFormerCovFrontend):
         return self._replay_cuda_graph(self.cuda_graph, inp_A, inp_B)
 
 
-class MonocularFrontend(IFrontend):
+class MonocularFrontend(ParallelEstimateMixin, IFrontend):
     def __init__(self, config: SimpleNamespace):
         super().__init__(config)
 
@@ -376,12 +397,13 @@ class MonocularFrontend(IFrontend):
 
     @Timer.cpu_timeit("Frontend.estimate")
     @Timer.gpu_timeit("Frontend.estimate")
-    @torch.inference_mode()
     def estimate_pair(self, frame_t1: CameraData, frame_t2: CameraData) -> tuple[IDepth.Output, IMatcher.Output]:
-        return (
-            self.estimate_depth(frame_t2),
-            self.estimate_flowcov(frame_t1, frame_t2)
-        )
+        if getattr(self.config, "parallel", True):
+            return self._parallel(
+                lambda: self.estimate_depth(frame_t2),
+                lambda: self.estimate_flowcov(frame_t1, frame_t2),
+            )
+        return self.estimate_depth(frame_t2), self.estimate_flowcov(frame_t1, frame_t2)
 
     def estimate_depth(self, frame: CameraData) -> IDepth.Output:
         return self.depth_model.deepodo_inference(frame)
@@ -397,6 +419,8 @@ class MonocularFrontend(IFrontend):
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
         assert config is not None
         IMatcher.is_valid_config(config.match)
+        if hasattr(config, "parallel"):
+            assert isinstance(config.parallel, bool), "parallel must be bool"
 
 
 class CUDAGraph_MonocularFrontend(CUDAGraphMixin, MonocularFrontend):
