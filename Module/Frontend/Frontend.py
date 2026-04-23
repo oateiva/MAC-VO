@@ -21,7 +21,7 @@ import torch
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import overload, Literal
+from typing import overload, Literal, Callable
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -128,6 +128,63 @@ class CUDAGraphHandler:
     shape: torch.Size
     static_input: dict[str, torch.Tensor]
     static_ouput: dict[str, torch.Tensor]
+
+
+class CUDAGraphMixin:
+    def _setup_cuda_backends(self) -> None:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.set_float32_matmul_precision("medium")
+        torch.backends.cuda.preferred_linalg_library = "cusolver"
+
+    def _build_cuda_graph(
+        self,
+        model_fn: Callable[[torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor]],
+        inp_A: torch.Tensor,
+        inp_B: torch.Tensor,
+        log_name: str,
+    ) -> tuple[CUDAGraphHandler, torch.Tensor, torch.Tensor]:
+        Logger.write("info", f"Building CUDAGraph for {log_name}")
+        static_A = torch.empty_like(inp_A, device="cuda")
+        static_B = torch.empty_like(inp_B, device="cuda")
+        static_A.copy_(inp_A)
+        static_B.copy_(inp_B)
+
+        out_val: torch.Tensor | None = None
+        out_cov: torch.Tensor | None = None
+        s = torch.cuda.Stream()
+        s.wait_stream(torch.cuda.current_stream())  # type: ignore
+        with torch.cuda.stream(s):                  # type: ignore
+            for _ in range(3):
+                out_val, out_cov = model_fn(static_A, static_B)
+        torch.cuda.current_stream().wait_stream(s)
+        assert out_val is not None and out_cov is not None
+
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            static_out, static_out_cov = model_fn(static_A, static_B)
+
+        handler = CUDAGraphHandler(
+            graph, inp_A.shape,
+            static_input={"input_A": static_A, "input_B": static_B},
+            static_ouput={"flow": static_out, "flow_cov": static_out_cov},
+        )
+        Logger.write("info", f"CUDAGraph Built for {log_name}.")
+        return handler, out_val, out_cov
+
+    def _replay_cuda_graph(
+        self,
+        handler: CUDAGraphHandler,
+        inp_A: torch.Tensor,
+        inp_B: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        assert inp_A.shape == handler.shape, f"CUDAGraph input shape mismatch: {inp_A.shape} != {handler.shape}"
+        handler.static_input["input_A"].copy_(inp_A)
+        handler.static_input["input_B"].copy_(inp_B)
+        handler.graph.replay()
+        time.sleep(0.0)
+        return handler.static_ouput["flow"].clone(), handler.static_ouput["flow_cov"].clone()
+
 
 # Implementations
 
@@ -264,26 +321,20 @@ class FlowFormerCovFrontend(IFrontend):
         })
 
 
-class CUDAGraph_FlowFormerCovFrontend(FlowFormerCovFrontend):
+class CUDAGraph_FlowFormerCovFrontend(CUDAGraphMixin, FlowFormerCovFrontend):
     """
     FlowformerCov Frontend, but using CUDAGraph acceleration to improve inference speed.
     """
 
     def __init__(self, config: SimpleNamespace):
         super().__init__(config)
-
         self.cuda_graph: CUDAGraphHandler | None = None
         assert "cuda" in self.config.device.lower(), "CUDAGraph_FlowFormerCovFrontend can only run on CUDA device."
-
-        torch.backends.cuda.matmul.allow_tf32 = True    # Allow tensor cores
-        torch.backends.cudnn.allow_tf32 = True          # Allow tensor cores
-        torch.set_float32_matmul_precision("medium")    # Reduced precision for higher throughput
-        torch.backends.cuda.preferred_linalg_library = "cusolver"   # For faster linalg ops
+        self._setup_cuda_backends()
 
     @Timer.cpu_timeit("Frontend.estimate")
     @Timer.gpu_timeit("Frontend.estimate")
     def estimate_pair(self, frame_t1: CameraData, frame_t2: CameraData) -> tuple[IDepth.Output, IMatcher.Output]:
-        # Joint inference
         input_A = torch.cat([frame_t2.imageL, frame_t1.imageL], dim=0)
         input_B = torch.cat([frame_t2.imageR, frame_t2.imageL], dim=0)
 
@@ -291,7 +342,7 @@ class CUDAGraph_FlowFormerCovFrontend(FlowFormerCovFrontend):
         input_B = input_B.to(device=self.config.device)
 
         est_flow, est_cov = self.cuda_graph_estimate(input_A, input_B)
-        time.sleep(0.0) # Hint OS scheduler for context switch
+        time.sleep(0.0)
 
         est_flow = est_flow.float()
         est_cov  = est_cov.float()
@@ -302,58 +353,12 @@ class CUDAGraph_FlowFormerCovFrontend(FlowFormerCovFrontend):
         )
 
     def cuda_graph_estimate(self, inp_A: torch.Tensor, inp_B: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        If does not exist a cuda graph
-            build one and run inference through it.
-            Store the resulted graph in frontend for future use.
-        If does exist a cuda graph
-            Launch graph with new input.
-        """
         if self.cuda_graph is None:
-            Logger.write("info", "Building CUDAGraph for FlowFormerCovFrontend")
-            static_input_A, static_input_B   = torch.empty_like(inp_A, device='cuda'), torch.empty_like(inp_A, device='cuda')
-
-            static_input_A.copy_(inp_A)
-            static_input_B.copy_(inp_B)
-
-            output_val: None | torch.Tensor = None
-            output_cov: None | torch.Tensor = None
-
-            s = torch.cuda.Stream()
-            s.wait_stream(torch.cuda.current_stream())  #type: ignore
-            with torch.cuda.stream(s):                  #type: ignore
-                for _ in range(3):
-                    output_val, output_cov = self.model.inference(static_input_A, static_input_B)
-            torch.cuda.current_stream().wait_stream(s)
-            assert output_val is not None and output_cov is not None
-
-            graph = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(graph):
-                static_output, static_output_cov = self.model.inference(static_input_A, static_input_B)
-
-            self.cuda_graph = CUDAGraphHandler(
-                graph, inp_A.shape,
-                static_input={"input_A": static_input_A, "input_B": static_input_B},
-                static_ouput={"flow": static_output, "flow_cov": static_output_cov}
+            self.cuda_graph, out_val, out_cov = self._build_cuda_graph(
+                self.model.inference, inp_A, inp_B, "FlowFormerCovFrontend"
             )
-            Logger.write("info", "CUDAGraph Built. Will use CUDAGraph for accelerated inference.")
-
-            return output_val, output_cov
-        else:
-            g_context = self.cuda_graph
-
-            assert inp_A.shape == g_context.shape, f"Input shape mismatch for CUDAGraph replay: {inp_A.shape} != {g_context.shape}"
-
-            g_context.static_input["input_A"].copy_(inp_A)
-            g_context.static_input["input_B"].copy_(inp_B)
-
-            g_context.graph.replay()
-            time.sleep(0.0) # Hint OS scheduler for context switch
-
-            result_val = g_context.static_ouput["flow"].clone()
-            result_cov = g_context.static_ouput["flow_cov"].clone()
-
-        return result_val, result_cov
+            return out_val, out_cov
+        return self._replay_cuda_graph(self.cuda_graph, inp_A, inp_B)
 
 
 class MonocularFrontend(IFrontend):
@@ -394,7 +399,7 @@ class MonocularFrontend(IFrontend):
         IMatcher.is_valid_config(config.match)
 
 
-class CUDAGraph_MonocularFrontend(MonocularFrontend):
+class CUDAGraph_MonocularFrontend(CUDAGraphMixin, MonocularFrontend):
     """
     MonocularFrontend with CUDAGraph acceleration on the flow estimation model.
     Requires match to be FlowFormerCovMatcher. Monodepth is not CUDAGraphed.
@@ -409,46 +414,15 @@ class CUDAGraph_MonocularFrontend(MonocularFrontend):
 
         self.cuda_graph_flow: CUDAGraphHandler | None = None
         assert "cuda" in self.config.device.lower(), "CUDAGraph_MonocularFrontend requires a CUDA device."
-
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
-        torch.set_float32_matmul_precision("medium")
-        torch.backends.cuda.preferred_linalg_library = "cusolver"
+        self._setup_cuda_backends()
 
     def _cuda_graph_flow_estimate(self, inp_A: torch.Tensor, inp_B: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if self.cuda_graph_flow is None:
-            Logger.write("info", "Building CUDAGraph for MonocularFrontend flow model")
-            static_A = torch.empty_like(inp_A, device="cuda")
-            static_B = torch.empty_like(inp_B, device="cuda")
-            static_A.copy_(inp_A)
-            static_B.copy_(inp_B)
-
-            s = torch.cuda.Stream()
-            s.wait_stream(torch.cuda.current_stream())  # type: ignore
-            with torch.cuda.stream(s):                  # type: ignore
-                for _ in range(3):
-                    out_val, out_cov = self._flow_model.inference(static_A, static_B)
-            torch.cuda.current_stream().wait_stream(s)
-
-            graph = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(graph):
-                static_out, static_out_cov = self._flow_model.inference(static_A, static_B)
-
-            self.cuda_graph_flow = CUDAGraphHandler(
-                graph, inp_A.shape,
-                static_input={"input_A": static_A, "input_B": static_B},
-                static_ouput={"flow": static_out, "flow_cov": static_out_cov},
+            self.cuda_graph_flow, out_val, out_cov = self._build_cuda_graph(
+                self._flow_model.inference, inp_A, inp_B, "MonocularFrontend flow model"
             )
-            Logger.write("info", "CUDAGraph Built for MonocularFrontend flow model.")
             return out_val, out_cov
-        else:
-            g = self.cuda_graph_flow
-            assert inp_A.shape == g.shape, f"CUDAGraph input shape mismatch: {inp_A.shape} != {g.shape}"
-            g.static_input["input_A"].copy_(inp_A)
-            g.static_input["input_B"].copy_(inp_B)
-            g.graph.replay()
-            time.sleep(0.0)
-            return g.static_ouput["flow"].clone(), g.static_ouput["flow_cov"].clone()
+        return self._replay_cuda_graph(self.cuda_graph_flow, inp_A, inp_B)
 
     def estimate_flowcov(self, frame_t1: CameraData, frame_t2: CameraData) -> IMatcher.Output:
         image_t1_left = frame_t1.imageL.to(self.config.device)[0:1, :, :, :]
