@@ -71,6 +71,7 @@ Odometry:
     type: MonocularFrontend
     args:
       device: *device
+      parallel: true
       match:
         type: FlowFormerCovMatcher
         args:
