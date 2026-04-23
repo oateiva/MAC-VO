@@ -71,12 +71,14 @@ Odometry:
     type: MonocularFrontend
     args:
       device: *device
-      enc_dtype: fp32
-      dec_dtype: fp32
-      decoder_depth: 12
-      enforce_positive_disparity: false
-      flow:
-        weight: ./Model/MACVO_FrontendCov.pth
+      match:
+        type: FlowFormerCovMatcher
+        args:
+          weight: ./Model/MACVO_FrontendCov.pth
+          device: *device
+          enc_dtype: fp32
+          dec_dtype: fp32
+          decoder_depth: 12
       monodepth:
         type: DepthAnythingV2
         args:
@@ -112,7 +114,7 @@ Odometry:
     args:
       device: cpu
       vectorize: true
-      parallel: false
+      parallel: true
       graph_type: pose2point
 
 Datas: !include ../Common/DeepODO_mono_experiments.yaml

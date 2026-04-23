@@ -183,6 +183,9 @@ class DepthAnythingV2(nn.Module):
             ckpt = torch.load(weight, weights_only=True)
             self.load_state_dict(ckpt)
 
+    @property
+    def provide_cov(self) -> bool: return True
+
     def deepodo_initialize(self, config):
         self.device = config.device
         self.to(self.device)

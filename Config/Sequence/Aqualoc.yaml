@@ -2,6 +2,7 @@
 #     name: aqualoc_archaeological_site_1
 #     args:
 #         root: D:\Datasets\Aqualoc\Archaeological_site_sequences\raw_data\images_sequence_1
+#         site: archaeo
 #         is_stereo: false
 #         gt_pose: true
 #         window_length: 2
@@ -10,6 +11,7 @@
 #     name: aqualoc_archaeological_site_2
 #     args:
 #         root: D:\Datasets\Aqualoc\Archaeological_site_sequences\raw_data\images_sequence_2
+#         site: archaeo
 #         is_stereo: false
 #         gt_pose: true
 #         window_length: 2
@@ -18,6 +20,7 @@
     name: aqualoc_archaeological_site_3
     args:
         root: D:\Datasets\Aqualoc\Archaeological_site_sequences\raw_data\images_sequence_3
+        site: archaeo
         is_stereo: false
         gt_pose: true
         window_length: 2
@@ -26,6 +29,7 @@
 #     name: aqualoc_archaeological_site_4
 #     args:
 #         root: D:\Datasets\Aqualoc\Archaeological_site_sequences\raw_data\images_sequence_4
+#         site: archaeo
 #         is_stereo: false
 #         gt_pose: true
 #         window_length: 2
@@ -34,6 +38,7 @@
     name: aqualoc_archaeological_site_5
     args:
         root: D:\Datasets\Aqualoc\Archaeological_site_sequences\raw_data\images_sequence_5
+        site: archaeo
         is_stereo: false
         gt_pose: true
         window_length: 2
@@ -42,6 +47,7 @@
 #     name: aqualoc_archaeological_site_6
 #     args:
 #         root: D:\Datasets\Aqualoc\Archaeological_site_sequences\raw_data\images_sequence_6
+#         site: archaeo
 #         is_stereo: false
 #         gt_pose: true
 #         window_length: 2
@@ -50,6 +56,7 @@
 #     name: aqualoc_archaeological_site_7
 #     args:
 #         root: D:\Datasets\Aqualoc\Archaeological_site_sequences\raw_data\images_sequence_7
+#         site: archaeo
 #         is_stereo: false
 #         gt_pose: true
 #         window_length: 2
@@ -58,6 +65,7 @@
 #     name: aqualoc_archaeological_site_8
 #     args:
 #         root: D:\Datasets\Aqualoc\Archaeological_site_sequences\raw_data\images_sequence_8
+#         site: archaeo
 #         is_stereo: false
 #         gt_pose: true
 #         window_length: 2
@@ -66,6 +74,7 @@
 #     name: aqualoc_archaeological_site_9
 #     args:
 #         root: D:\Datasets\Aqualoc\Archaeological_site_sequences\raw_data\images_sequence_9
+#         site: archaeo
 #         is_stereo: false
 #         gt_pose: true
 #         window_length: 2
@@ -74,6 +83,7 @@
 #     name: aqualoc_archaeological_site_10
 #     args:
 #         root: D:\Datasets\Aqualoc\Archaeological_site_sequences\raw_data\images_sequence_10
+#         site: archaeo
 #         is_stereo: false
 #         gt_pose: true
 #         window_length: 2
@@ -82,6 +92,7 @@
     name: aqualoc_harbor_site_1
     args:
         root: D:\Datasets\Aqualoc\Harbor_sites_sequences\raw_data\harbor_images_sequence_01
+        site: harbor
         is_stereo: false
         gt_pose: true
         window_length: 2
@@ -90,6 +101,7 @@
 #     name: aqualoc_harbor_site_2
 #     args:
 #         root: D:\Datasets\Aqualoc\Harbor_sites_sequences\raw_data\harbor_images_sequence_02
+#         site: harbor
 #         is_stereo: false
 #         gt_pose: true
 #         window_length: 2
@@ -98,6 +110,7 @@
     name: aqualoc_harbor_site_3
     args:
         root: D:\Datasets\Aqualoc\Harbor_sites_sequences\raw_data\harbor_images_sequence_03
+        site: harbor
         is_stereo: false
         gt_pose: true
         window_length: 2
@@ -106,6 +119,7 @@
 #     name: aqualoc_harbor_site_4
 #     args:
 #         root: D:\Datasets\Aqualoc\Harbor_sites_sequences\raw_data\harbor_images_sequence_04
+#         site: harbor
 #         is_stereo: false
 #         gt_pose: true
 #         window_length: 2
@@ -114,6 +128,7 @@
 #     name: aqualoc_harbor_site_5
 #     args:
 #         root: D:\Datasets\Aqualoc\Harbor_sites_sequences\raw_data\harbor_images_sequence_05
+#         site: harbor
 #         is_stereo: false
 #         gt_pose: true
 #         window_length: 2
@@ -122,6 +137,7 @@
 #     name: aqualoc_harbor_site_6
 #     args:
 #         root: D:\Datasets\Aqualoc\Harbor_sites_sequences\raw_data\harbor_images_sequence_06
+#         site: harbor
 #         is_stereo: false
 #         gt_pose: true
 #         window_length: 2
@@ -130,6 +146,7 @@
     name: aqualoc_harbor_site_7
     args:
         root: D:\Datasets\Aqualoc\Harbor_sites_sequences\raw_data\harbor_images_sequence_07
+        site: harbor
         is_stereo: false
         gt_pose: true
         window_length: 2

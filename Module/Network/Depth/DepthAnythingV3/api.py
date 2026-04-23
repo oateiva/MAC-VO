@@ -101,6 +101,9 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         # Device management (set by user)
         self.device = None
 
+    @property
+    def provide_cov(self) -> bool: return True
+
     def deepodo_initialize(self, config) -> None:
         """
         Initialize the model for deepodo framework compatibility.

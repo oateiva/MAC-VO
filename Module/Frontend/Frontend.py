@@ -386,7 +386,7 @@ class MonocularFrontend(IFrontend):
 
     @property
     def provide_cov(self) -> tuple[bool, bool]:
-        return True, self.match.provide_cov
+        return self.depth_model.provide_cov, self.match.provide_cov
 
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:

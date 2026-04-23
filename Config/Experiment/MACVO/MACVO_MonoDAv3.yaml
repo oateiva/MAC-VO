@@ -71,13 +71,14 @@ Odometry:
     type: MonocularFrontend
     args:
       device: *device
-      enc_dtype: fp32
-      dec_dtype: fp32
-      decoder_depth: 12
-      enforce_positive_disparity: false
-      flow:
-        weight: ./Model/MACVO_FrontendCov.pth
-        q90: 1.
+      match:
+        type: FlowFormerCovMatcher
+        args:
+          weight: ./Model/MACVO_FrontendCov.pth
+          device: *device
+          enc_dtype: fp32
+          dec_dtype: fp32
+          decoder_depth: 12
       monodepth:
         type: DepthAnythingV3
         args:

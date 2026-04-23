@@ -69,36 +69,7 @@ class IDepth(ABC, ConfigTestableSubclass):
 
 # End #######################
 
-
-# Monocular Depth Implementation ###
-
-class MonoDepth(IDepth):
-    def __init__(self, config):
-        super().__init__(config)
-        from ..Network.DepthAnythingV2 import build_depth_anything_v2
-        model = build_depth_anything_v2(config)
-        ## TODO: float16, 32 etc?
-        if getattr(self.config, 'weight', None):
-            ckpt  = torch.load(self.config.weight, weights_only=True)
-            model.load_state_dict(ckpt)
-        model.to(self.config.device)
-        model.eval()
-
-        self.model = model
-
-    @torch.inference_mode()
-    def estimate(self, frame: CameraData) -> IDepth.Output:
-        assert not frame.is_stereo, "MonoDepth requires monocular inputs"
-
-        mono_frame = frame.imageL.to(self.config.device)
-        depth = self.model.forward(mono_frame)
-
-        return IDepth.Output(depth=depth, disparity=None, cov=None, disparity_uncertainty=None)
-
-
-
 # Stereo Depth Implementation ###
-
 
 class GTDepth(IDepth):
     """
