@@ -72,6 +72,9 @@ Odometry:
     args:
       device: *device
       parallel: true
+      # Multi-GPU: set device_depth to a second GPU to run depth and flow on separate devices.
+      # Requires parallel: true for concurrent execution. Omit to use a single GPU.
+      device_depth: cuda:1
       match:
         type: FlowFormerCovMatcher
         args:

@@ -388,11 +388,14 @@ class MonocularFrontend(ParallelEstimateMixin, IFrontend):
 
         self.match: IMatcher = IMatcher.instantiate(config.match.type, config.match.args)
 
+        self._device_depth: str = getattr(config, 'device_depth', config.device)
         monodepth_model: DepthModelProtocol = build_depth_model(
             self.config.monodepth.type, **vars(self.config.monodepth.args)
         )
         monodepth_model.deepodo_initialize(self.config.monodepth.args)
-        monodepth_model.to(self.config.device)
+        monodepth_model.to(self._device_depth)
+        if hasattr(monodepth_model, 'device'):
+            monodepth_model.device = self._device_depth  # type: ignore[assignment]
         self.depth_model: DepthModelProtocol = monodepth_model
 
     @Timer.cpu_timeit("Frontend.estimate")
@@ -406,7 +409,10 @@ class MonocularFrontend(ParallelEstimateMixin, IFrontend):
         return self.estimate_depth(frame_t2), self.estimate_flowcov(frame_t1, frame_t2)
 
     def estimate_depth(self, frame: CameraData) -> IDepth.Output:
-        return self.depth_model.deepodo_inference(frame)
+        out = self.depth_model.deepodo_inference(frame)
+        if self._device_depth != self.config.device:
+            return out.to(self.config.device)
+        return out
 
     def estimate_flowcov(self, frame_t1: CameraData, frame_t2: CameraData) -> IMatcher.Output:
         return self.match.estimate(frame_t1, frame_t2)
@@ -421,6 +427,9 @@ class MonocularFrontend(ParallelEstimateMixin, IFrontend):
         IMatcher.is_valid_config(config.match)
         if hasattr(config, "parallel"):
             assert isinstance(config.parallel, bool), "parallel must be bool"
+        if hasattr(config, "device_depth"):
+            assert isinstance(config.device_depth, str) and "cuda" in config.device_depth, \
+                "device_depth must be a CUDA device string (e.g. 'cuda:1')"
 
 
 class CUDAGraph_MonocularFrontend(CUDAGraphMixin, MonocularFrontend):

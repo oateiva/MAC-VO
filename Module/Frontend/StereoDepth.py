@@ -39,6 +39,15 @@ class IDepth(ABC, ConfigTestableSubclass):
         mask     : Jt.Bool   [torch.Tensor, "B 1 H W"] | None = None  # None if not applicable
         disparity_uncertainty: Jt.Float32[torch.Tensor, "B 1 H W"] | None = None
 
+        def to(self, device: str | torch.device) -> "IDepth.Output":
+            return IDepth.Output(
+                depth=self.depth.to(device),
+                disparity=self.disparity.to(device) if self.disparity is not None else None,
+                cov=self.cov.to(device) if self.cov is not None else None,
+                mask=self.mask.to(device) if self.mask is not None else None,
+                disparity_uncertainty=self.disparity_uncertainty.to(device) if self.disparity_uncertainty is not None else None,
+            )
+
     def __init__(self, config: SimpleNamespace):
         self.config : SimpleNamespace = config
 
