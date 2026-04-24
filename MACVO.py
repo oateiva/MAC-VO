@@ -130,6 +130,12 @@ def get_args():
         default=None,
         help="Path to VSLAM track txt file for visualization in Rerun."
     )
+    parser.add_argument(
+        "--n_to_align",
+        type=int,
+        default=-1,
+        help="Number of poses used for trajectory alignment during evaluation (-1 = all)."
+    )
     return parser.parse_args()
 
 
@@ -194,5 +200,5 @@ if __name__ == "__main__":
         rr.save(exp_space.path(f"{project_name}.rrd"))
 
     if not args.noeval:
-        header, result = EvaluateSequences([str(exp_space.folder)], align=True, align_origin=False)
+        header, result = EvaluateSequences([str(exp_space.folder)], align=True, align_origin=False, n_to_align=args.n_to_align)
         print_as_table(header, result)

@@ -29,7 +29,8 @@ def EvaluateSequences(
         spaces: list[str],
         correct_scale=False,
         align_origin=True,
-        align=True
+        align=True,
+        n_to_align=-1,
         ):
     eval_results = []
     DECORATOR = "[S]" if correct_scale else ""
@@ -57,10 +58,10 @@ def EvaluateSequences(
                 else: est_traj.data = est_traj.data.scale(scale)
                 break
 
-            ate_res = evaluateATE(gt_traj.data.as_evo, est_traj.data.as_evo, correct_scale=correct_scale, align_origin=align_origin, align=align)
-            rte_res = evaluateRTE(gt_traj.data.as_evo, est_traj.data.as_evo, correct_scale=correct_scale, align_origin=align_origin, align=align)
-            roe_res = evaluateROE(gt_traj.data.as_evo, est_traj.data.as_evo, correct_scale=correct_scale, align_origin=align_origin, align=align)
-            rpe_res = evaluateRPE(gt_traj.data.as_evo, est_traj.data.as_evo, correct_scale=correct_scale, align_origin=align_origin, align=align)
+            ate_res = evaluateATE(gt_traj.data.as_evo, est_traj.data.as_evo, correct_scale=correct_scale, align_origin=align_origin, align=align, n_to_align=n_to_align)
+            rte_res = evaluateRTE(gt_traj.data.as_evo, est_traj.data.as_evo, correct_scale=correct_scale, align_origin=align_origin, align=align, n_to_align=n_to_align)
+            roe_res = evaluateROE(gt_traj.data.as_evo, est_traj.data.as_evo, correct_scale=correct_scale, align_origin=align_origin, align=align, n_to_align=n_to_align)
+            rpe_res = evaluateRPE(gt_traj.data.as_evo, est_traj.data.as_evo, correct_scale=correct_scale, align_origin=align_origin, align=align, n_to_align=n_to_align)
             eval_results.append(
                 [
                     est_traj.name,
@@ -106,6 +107,7 @@ if __name__ == "__main__":
     args.add_argument("--correctScale", action="store_true")
     args.add_argument("--alignOrigin", action="store_true", help="Align origin of estimated trajectory to ground truth.")
     args.add_argument("--align", action="store_true", help="Align estimated trajectory to ground truth.")
+    args.add_argument("--n_to_align", type=int, default=-1, help="Number of poses used for alignment (-1 = all).")
     args.add_argument("--recursive", action="store_true", help="Find and evaluate on leaf sandboxes only.")
     args.add_argument("--csv", type=str, default=None, required=False)
     args = args.parse_args()
@@ -120,7 +122,8 @@ if __name__ == "__main__":
 
     eval_header, eval_results = EvaluateSequences(
         spaces, correct_scale=args.correctScale,
-        align_origin=args.alignOrigin, align=args.align
+        align_origin=args.alignOrigin, align=args.align,
+        n_to_align=args.n_to_align,
     )
 
     print_as_table(eval_header, eval_results, sort_rows=lambda row: row[0])

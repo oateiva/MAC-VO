@@ -11,26 +11,30 @@ def evaluateRTE(
         est_traj: PosePath3D,
         correct_scale=False,
         align_origin=False,
-        align=True
+        align=True,
+        n_to_align=-1,
         ):
     result = main_rpe.rpe(gt_traj, est_traj,
                           pose_relation=PoseRelation.translation_part,
                           align_origin=align_origin,
                           align=align,
                           correct_scale=correct_scale,
+                          n_to_align=n_to_align,
                           delta=1, delta_unit=Unit.frames)
     return result
 
 def evaluateATE(gt_traj: PosePath3D, est_traj: PosePath3D,
                 correct_scale=False,
                 align_origin=False,
-                align=True
+                align=True,
+                n_to_align=-1,
                 ):
     result = main_ape.ape(gt_traj, est_traj,
                           pose_relation=PoseRelation.translation_part,
                           align_origin=align_origin,
                           align=align,
-                          correct_scale=correct_scale)
+                          correct_scale=correct_scale,
+                          n_to_align=n_to_align)
     return result
 
 def evaluateROE(
@@ -38,7 +42,8 @@ def evaluateROE(
         est_traj: PosePath3D,
         correct_scale=False,
         align_origin=False,
-        align=True
+        align=True,
+        n_to_align=-1,
         ):
     """
     Evaluates error of rotation
@@ -53,6 +58,7 @@ def evaluateROE(
                           align_origin=align_origin,
                           align=align,
                           correct_scale=correct_scale,
+                          n_to_align=n_to_align,
                           delta=1, delta_unit=Unit.frames)
     return result
 
@@ -61,7 +67,8 @@ def evaluateRPE(
         est_traj: PosePath3D,
         correct_scale=False,
         align_origin=False,
-        align=True
+        align=True,
+        n_to_align=-1,
         ):
     """
     Evaluates error of se(3) pose
@@ -69,5 +76,6 @@ def evaluateRPE(
     result = main_rpe.rpe(gt_traj, est_traj,
                           pose_relation=PoseRelation.full_transformation,
                           align_origin=align_origin, align=align, correct_scale=correct_scale,
+                          n_to_align=n_to_align,
                           delta=1, delta_unit=Unit.frames)
     return result
