@@ -1,4 +1,5 @@
 import torch
+import contextlib
 from types import SimpleNamespace
 import pypose as pp
 
@@ -82,7 +83,8 @@ class TwoFrame_PGO(IOptimizer[GraphInput, dict, GraphOutput]):
 
     @staticmethod
     def _optimize(context: dict, graph_data: GraphInput) -> tuple[dict, GraphOutput]:
-        with Timer.CPUTimingContext("TwoframePGO"), Timer.GPUTimingContext("TwoframePGO", torch.cuda.current_stream()):
+        gpu_ctx = Timer.GPUTimingContext("TwoframePGO", torch.cuda.current_stream()) if context["device"] != "cpu" else contextlib.nullcontext()
+        with Timer.CPUTimingContext("TwoframePGO"), gpu_ctx:
             graph: FactorGraph = context["pose_graph_class"](graph_data)\
                 .to(device=torch.device(context["device"]), dtype=torch.double)
             assert isinstance(graph, FactorGraph)

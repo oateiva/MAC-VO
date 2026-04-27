@@ -65,8 +65,10 @@ def VisualizeRerunCallback(frame: Frame, system: MACVO, pb: ColoredTqdm, gt: Lis
 
 def VisualizeVRAMUsage(frame: Frame, system: MACVO, pb: ColoredTqdm, iter_ms: float | None = None) -> float | None:
     if torch.cuda.is_available():
-        vram_gb = torch.cuda.memory_reserved(0) / 1e9
-        vram_str = f"{vram_gb:.3f} GB"
+        reserved_gb  = torch.cuda.memory_reserved(0)  / 1e9
+        allocated_gb = torch.cuda.memory_allocated(0) / 1e9
+        vram_gb  = allocated_gb
+        vram_str = f"{allocated_gb:.2f}/{reserved_gb:.2f} GB (alloc/reserved)"
     else:
         vram_gb = None
         vram_str = "N/A"

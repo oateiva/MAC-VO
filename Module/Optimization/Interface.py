@@ -244,10 +244,8 @@ def IOptimizerParallelWorker(
     torch.set_num_threads(max(1, (os.cpu_count() or 2) // 2))
     context = init_context(config) # This is called by child process
     while True:
-        if send_queue.empty(): continue
-
-        graph_args: T_GraphInput = send_queue.get()
-        graph_args_local = graph_args  # move_dataclass_to_local(graph_args) if needed
+        graph_args: T_GraphInput = send_queue.get()  # blocks until work arrives, no spin
+        graph_args_local = graph_args
 
         context, graph_res = optimize(context, graph_args_local)
         recv_queue.put(graph_res)
