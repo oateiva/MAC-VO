@@ -268,7 +268,7 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GraphOutput]):
             case _:
                 raise ValueError(f"Graph type of {config.graph_type} is not supported")
 
-        with Timer.CPUTimingContext("GTSAM_Graph"), Timer.GPUTimingContext("GTSAM_Graph", torch.cuda.current_stream()):
+        with Timer.CPUTimingContext("GTSAM_Graph"):
             # initialize the graph instance
             graph: FactorGraph = PoseGraphClass().to(device=torch.device(config.device), dtype=torch.double)
             assert isinstance(graph, FactorGraph)
@@ -279,7 +279,13 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GraphOutput]):
             context = {
             "device": config.device,
             "graph": graph,
-        }
+            }
+
+        if config.device != "cpu":
+            # Only record GPU event if the graph lives on cuda device, otherwise the GPU event will be meaningless and may cause overhead
+            # Warm up GPU and CUDA context by running a dummy optimization step (to avoid including CUDA initialization time in the first real optimization)
+            with Timer.GPUTimingContext("GTSAM_Graph", torch.cuda.current_stream()):
+                pass
 
         return context
 

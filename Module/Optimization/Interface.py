@@ -94,7 +94,8 @@ class IOptimizer(ABC, T.Generic[T_GraphInput, T_Context, T_GraphOutput], ConfigT
 
             torch.set_num_threads(_orig_num_threads) # WARNING: this originally was set to 4
 
-        self.context = self.init_context(config)
+        if not self.is_parallel_mode: # This is called by parent process
+            self.context = self.init_context(config)
 
     ### Internal Interface to be implemented by the user
     @staticmethod
@@ -254,7 +255,7 @@ def IOptimizerParallelWorker(
     # (parent process will terminate child process on exit in MAC-VO implementation)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     torch.set_num_threads(8)
-    context = init_context(config)
+    context = init_context(config) # This is called by child process
     while True:
         if not child_conn.poll(timeout=0.1): continue
 
