@@ -1,4 +1,5 @@
 import argparse
+import time
 import torch
 import rerun as rr
 import numpy as np
@@ -62,14 +63,17 @@ def VisualizeRerunCallback(frame: Frame, system: MACVO, pb: ColoredTqdm, gt: Lis
     rr_plt.log_points("/world/vo_tracking", vo_points.data["pos_Tw"].detach(), vo_points.data["color"].detach(), vo_points.data["cov_Tw"].detach(), "sphere")
 
 
-def VisualizeVRAMUsage(frame: Frame, system: MACVO, pb: ColoredTqdm):
+def VisualizeVRAMUsage(frame: Frame, system: MACVO, pb: ColoredTqdm, iter_ms: float | None = None) -> float | None:
     if torch.cuda.is_available():
-        allocated_memory = torch.cuda.memory_reserved(0) / 1e9  # Convert to GB
-        allocated_memory = f"{round(allocated_memory, 3)} GB"
+        vram_gb = torch.cuda.memory_reserved(0) / 1e9
+        vram_str = f"{vram_gb:.3f} GB"
     else:
-        allocated_memory = "N/A"
+        vram_gb = None
+        vram_str = "N/A"
 
-    pb.set_description(desc=f"{system.graph}, VRAM={allocated_memory}")
+    fps_str = f", FPS={1000.0 / iter_ms:.1f}" if (iter_ms is not None and iter_ms > 0) else ""
+    pb.set_description(desc=f"{system.graph}, VRAM={vram_str}{fps_str}")
+    return vram_gb
 
 
 def get_args():
@@ -167,9 +171,21 @@ if __name__ == "__main__":
     Timer.setup(active=args.timing)
     fig_plt.default_mode = "image" if args.saveplt else "none"
 
+    _perf_last_t: list[float] = [time.monotonic()]
+    _perf_iter_ms: list[float] = []
+    _perf_vram_gb: list[float] = []
+
     def onFrameFinished(frame: Frame, system: MACVO, pb: ColoredTqdm, gt: List[torch.Tensor] | None = None):
+        now = time.monotonic()
+        iter_ms = (now - _perf_last_t[0]) * 1000.0
+        _perf_last_t[0] = now
+        if frame.frame_idx > 0:
+            _perf_iter_ms.append(iter_ms)
+
         VisualizeRerunCallback(frame, system, pb, gt)
-        VisualizeVRAMUsage(frame, system, pb)
+        vram_gb = VisualizeVRAMUsage(frame, system, pb, iter_ms if frame.frame_idx > 0 else None)
+        if vram_gb is not None:
+            _perf_vram_gb.append(vram_gb)
 
     # Initialize data source
     sequence = smart_transform(
@@ -182,6 +198,11 @@ if __name__ == "__main__":
 
     system = MACVO[Frame].from_config(asNamespace(exp_space.config))
     system.receive_frames(sequence, exp_space, on_frame_finished=onFrameFinished)
+
+    if _perf_iter_ms:
+        np.save(exp_space.path("iter_time_ms.npy"), np.array(_perf_iter_ms))
+    if _perf_vram_gb:
+        np.save(exp_space.path("vram_usage_gb.npy"), np.array(_perf_vram_gb))
 
     rr_plt.log_trajectory("/world/est"  , torch.tensor(np.load(exp_space.path("poses.npy"))[:, 1:]))
     try:
@@ -200,5 +221,5 @@ if __name__ == "__main__":
         rr.save(exp_space.path(f"{project_name}.rrd"))
 
     if not args.noeval:
-        header, result = EvaluateSequences([str(exp_space.folder)], align=True, align_origin=False, n_to_align=args.n_to_align)
+        header, result = EvaluateSequences([str(exp_space.folder)], align=True, correct_scale=True ,align_origin=False, n_to_align=args.n_to_align)
         print_as_table(header, result)

@@ -12,6 +12,7 @@ from multiprocessing.connection import _ConnectionBase as Conn_Type
 from Module.Map import TensorBundle, VisualMap
 from Utility.PrettyPrint import Logger
 from Utility.Extensions import ConfigTestableSubclass
+from Utility.Timer import Timer
 
 if T.TYPE_CHECKING:
     from _typeshed import DataclassInstance
@@ -130,7 +131,8 @@ class IOptimizer(ABC, T.Generic[T_GraphInput, T_Context, T_GraphOutput], ConfigT
     def __launch_optim_sequential(self, graph_data: T_GraphInput) -> None:
         assert self.context is not None
         self.has_opt_job = True
-        self.context, self.optimize_res = self._optimize(self.context, graph_data)
+        with Timer.CPUTimingContext("Optimizer.optimize"):
+            self.context, self.optimize_res = self._optimize(self.context, graph_data)
 
     def __get_output_sequential(self) -> T_GraphOutput | None:
         return self.optimize_res
