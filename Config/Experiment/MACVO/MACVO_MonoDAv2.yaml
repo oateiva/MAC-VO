@@ -120,6 +120,7 @@ Odometry:
       vectorize: true
       parallel: true
       graph_type: pose2point
+      parallel_timeout_s: 1.0 # timeout for waiting for parallel optimization result, in seconds. Set to None to wait indefinitely.
 
 Datas: !include ../Common/DeepODO_mono_experiments.yaml
 Preprocess: !include ../Common/Preprocess.yaml

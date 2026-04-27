@@ -180,8 +180,20 @@ class CUDAGraphMixin:
 
 
 class ParallelEstimateMixin:
+    def __init__(self, config: SimpleNamespace):
+        super().__init__(config)
+        self._thread_pool = ThreadPoolExecutor(max_workers=2)
+
     @staticmethod
-    def _parallel(fn_a: Callable[[], _A], fn_b: Callable[[], _B]) -> tuple[_A, _B]:
+    def _run_on_stream(fn: Callable[[], object]) -> object:
+        s = torch.cuda.Stream()
+        s.wait_stream(torch.cuda.current_stream())  # type: ignore
+        with torch.cuda.stream(s):                  # type: ignore
+            result = fn()
+        s.synchronize()
+        return result
+
+    def _parallel(self, fn_a: Callable[[], _A], fn_b: Callable[[], _B]) -> tuple[_A, _B]:
         """
         Run fn_a and fn_b concurrently on two threads, each on its own CUDA stream.
         Blocks until both complete. Re-raises any exception from either thread.
@@ -190,19 +202,9 @@ class ParallelEstimateMixin:
         """
         if not torch.cuda.is_available():
             return fn_a(), fn_b()
-
-        def run(fn: Callable[[], object]) -> object:
-            s = torch.cuda.Stream()
-            s.wait_stream(torch.cuda.current_stream())  # type: ignore
-            with torch.cuda.stream(s):                  # type: ignore
-                result = fn()
-            s.synchronize()
-            return result
-
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            fut_a = pool.submit(run, fn_a)
-            fut_b = pool.submit(run, fn_b)
-            return fut_a.result(), fut_b.result()  # type: ignore[return-value]
+        fut_a = self._thread_pool.submit(self._run_on_stream, fn_a)
+        fut_b = self._thread_pool.submit(self._run_on_stream, fn_b)
+        return fut_a.result(), fut_b.result()  # type: ignore[return-value]
 
 
 # Implementations

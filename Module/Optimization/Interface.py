@@ -1,13 +1,14 @@
+import os
+import queue
+import time
 import torch
 import signal
 import typing as T
 from types import SimpleNamespace
 from abc import ABC, abstractmethod
-from dataclasses import fields, is_dataclass
 
 import torch.multiprocessing as mp
 from multiprocessing.context import SpawnProcess
-from multiprocessing.connection import _ConnectionBase as Conn_Type
 
 from Module.Map import TensorBundle, VisualMap
 from Utility.PrettyPrint import Logger
@@ -23,18 +24,6 @@ else:
 T_GraphInput  = T.TypeVar("T_GraphInput", bound=DataclassInstance)
 T_Context     = T.TypeVar("T_Context")
 T_GraphOutput = T.TypeVar("T_GraphOutput", bound=DataclassInstance)
-
-
-def move_dataclass_to_local(obj: T_GraphInput) -> T_GraphInput:
-    if is_dataclass(obj) and not isinstance(obj, type):
-        return type(obj)(**{f.name: move_dataclass_to_local(getattr(obj, f.name)) for f in fields(obj)})  # pyright: ignore
-    elif isinstance(obj, torch.Tensor):
-        return obj.clone()  # pyright: ignore
-    elif isinstance(obj, TensorBundle):
-        obj.apply(lambda x: x.clone())
-        return obj  # pyright: ignore
-    else:
-        return obj  # pyright: ignore
 
 
 class IOptimizer(ABC, T.Generic[T_GraphInput, T_Context, T_GraphOutput], ConfigTestableSubclass):
@@ -69,30 +58,27 @@ class IOptimizer(ABC, T.Generic[T_GraphInput, T_Context, T_GraphOutput], ConfigT
         self.optimize_res: None | T_GraphOutput = None
 
         # For parallel mode
-        self.main_conn : None | Conn_Type = None   # For parent-end
-        self.child_conn: None | Conn_Type = None   # For child-end
+        self.send_queue: None | mp.Queue = None
+        self.recv_queue: None | mp.Queue = None
         self.child_proc: None | SpawnProcess = None   # child process running optimization loop
 
         # Keep track if there is a job on child to avoid deadlock (wait forever for child to finish
         # a non-exist job)
         self.has_opt_job: bool = False
+        self.parallel_timeout_s: float | None = getattr(config, 'parallel_timeout_s', None)
 
         if self.is_parallel_mode:
             ctx = mp.get_context("spawn")
-            _orig_num_threads = torch.get_num_threads()
-            torch.set_num_threads(1)
 
-            # Generate Pipe for parent-end and child-end
-            self.main_conn, self.child_conn = ctx.Pipe(duplex=True)
+            self.send_queue = ctx.Queue() # Parent -> Child
+            self.recv_queue = ctx.Queue() # Child -> Parent
             # Spawn child process
             self.child_proc = ctx.Process(
                 target=IOptimizerParallelWorker,
-                args=(config, self.init_context, self._optimize, self.child_conn),
+                args=(config, self.init_context, self._optimize, self.send_queue, self.recv_queue),
             )
             assert self.child_proc is not None
             self.child_proc.start()
-
-            torch.set_num_threads(_orig_num_threads) # WARNING: this originally was set to 4
 
         if not self.is_parallel_mode: # This is called by parent process
             self.context = self.init_context(config)
@@ -140,27 +126,28 @@ class IOptimizer(ABC, T.Generic[T_GraphInput, T_Context, T_GraphOutput], ConfigT
 
     ## Parallel Version
     def __launch_optim_parallel(self, graph_data: T_GraphInput) -> None:
-        assert self.main_conn is not None
+        assert self.send_queue is not None
         assert self.child_proc and self.child_proc.is_alive()
-        self.main_conn.send(graph_data)
+        self.send_queue.put(graph_data)
         self.has_opt_job = True
 
-    def __get_output_parallel(self) -> T_GraphOutput | None:
-        assert self.main_conn is not None
+    def __get_output_parallel(self, timeout_s: float | None = None) -> T_GraphOutput | None:
+        assert self.recv_queue is not None
         assert self.child_proc and self.child_proc.is_alive()
-        if self.has_opt_job:
-            while not self.main_conn.poll(timeout=0.1):
+        deadline = time.monotonic() + timeout_s if timeout_s is not None else None
+        while self.has_opt_job:
+            try:
+                result = self.recv_queue.get(timeout=0.1)
+                self.has_opt_job = False
+                return result
+            except queue.Empty:
                 if not self.child_proc.is_alive():
                     raise RuntimeError("Optimizer child process exited unexpectedly!")
-                pass
-
-            graph_res: T_GraphOutput = self.main_conn.recv()
-            graph_res_local = move_dataclass_to_local(graph_res)
-            del graph_res
-            self.has_opt_job = False
-            return graph_res_local
-        else:
-            return None
+                if deadline is not None and time.monotonic() > deadline:
+                    Logger.write("warn", "Timeout while waiting for optimizer result!")
+                    self.has_opt_job = False # abandon this job
+                    return None
+        return None
 
     ### External Interface used by Users    #############################################
     @T.final
@@ -174,9 +161,9 @@ class IOptimizer(ABC, T.Generic[T_GraphInput, T_Context, T_GraphOutput], ConfigT
             2. The job on child process is finished.
             3. The child process have not received optimization job yet.
         """
-        if self.main_conn is None: return False         # Not in Parallel Mode
+        if self.send_queue is None: return False         # Not in Parallel Mode
         if not self.has_opt_job: return False      # No Job on Child
-        return (not self.main_conn.poll(timeout=0))     # Job on Child but not finished
+        return self.recv_queue.empty()    # Job on Child but not finished
 
     @T.final
     @property
@@ -214,7 +201,7 @@ class IOptimizer(ABC, T.Generic[T_GraphInput, T_Context, T_GraphOutput], ConfigT
 
     def start_optimize(self, graph_data: T_GraphInput) -> None:
         if self.is_parallel_mode:
-            # Send T_GraphArg to child process using Pipe
+            # Send T_GraphArg to child process using Queue
             self.__launch_optim_parallel(graph_data)
         else:
             self.__launch_optim_sequential(graph_data)
@@ -226,8 +213,7 @@ class IOptimizer(ABC, T.Generic[T_GraphInput, T_Context, T_GraphOutput], ConfigT
 
     def write_map(self, global_map: VisualMap):
         if self.is_parallel_mode:
-            # Recv T_GraphArg from child process using Pipe
-            graph_res_local = self.__get_output_parallel()
+            graph_res_local = self.__get_output_parallel(self.parallel_timeout_s)
         else:
             graph_res_local = self.__get_output_sequential()
 
@@ -248,20 +234,20 @@ def IOptimizerParallelWorker(
     config: SimpleNamespace,
     init_context: T.Callable[[SimpleNamespace,], T_Context],
     optimize: T.Callable[[T_Context, T_GraphInput], tuple[T_Context, T_GraphOutput]],
-    child_conn: Conn_Type,
+    send_queue: mp.Queue,
+    recv_queue: mp.Queue
 ):
     Logger.write("info", "OptimizationParallelWorker started")
     # NOTE: child process ignore keyboard interrupt to ignore deadlock
     # (parent process will terminate child process on exit in MAC-VO implementation)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
-    torch.set_num_threads(8)
+    torch.set_num_threads(max(1, (os.cpu_count() or 2) // 2))
     context = init_context(config) # This is called by child process
     while True:
-        if not child_conn.poll(timeout=0.1): continue
+        if send_queue.empty(): continue
 
-        graph_args: T_GraphInput = child_conn.recv()
-        graph_args_local = move_dataclass_to_local(graph_args)
-        del graph_args
+        graph_args: T_GraphInput = send_queue.get()
+        graph_args_local = graph_args  # move_dataclass_to_local(graph_args) if needed
 
         context, graph_res = optimize(context, graph_args_local)
-        child_conn.send(graph_res)
+        recv_queue.put(graph_res)
