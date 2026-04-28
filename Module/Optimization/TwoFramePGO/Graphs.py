@@ -559,7 +559,7 @@ class GTSAM_Pose2Point(FactorGraph):
         # Optimize the graph
         params = gtsam.LevenbergMarquardtParams()
         # params.setVerbosityLM("SUMMARY")
-        params.setMaxIterations(30)
+        params.setMaxIterations(20)
 
         optimizer = gtsam.LevenbergMarquardtOptimizer(graph, initial_estimate, params)
         result = optimizer.optimize()

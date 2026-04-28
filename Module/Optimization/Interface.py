@@ -103,14 +103,12 @@ class IOptimizer(ABC, T.Generic[T_GraphInput, T_Context, T_GraphOutput], ConfigT
         """
         ...
 
+    @abstractmethod
     def get_graph_data(self, global_map: VisualMap, frame_idx: torch.Tensor,
-                       observations: torch.Tensor | None = None, edges: torch.Tensor | None = None) -> T_GraphInput:
-        raise NotImplementedError("The used optimizer did not provide default factory method."
-                                  " Use optimizer.InputType(...) to construct it yourself.")
+                       observations: torch.Tensor | None = None, edges: torch.Tensor | None = None) -> T_GraphInput: ...
 
-    def write_graph_data(self, result: T_GraphOutput | None, global_map: VisualMap) -> None:
-        raise NotImplementedError("The used optimizer did not provide default write method."
-                                  " Decompose the output and write it to map yourself.")
+    @abstractmethod
+    def write_graph_data(self, result: T_GraphOutput | None, global_map: VisualMap) -> None: ...
 
     ### Implementation detail
 
@@ -187,10 +185,10 @@ class IOptimizer(ABC, T.Generic[T_GraphInput, T_Context, T_GraphOutput], ConfigT
         """
         orig_bases = getattr(self.__class__, "__orig_bases__", [])
         for base in orig_bases:
-            if hasattr(base, "__args__") and len(base.__args__) >= 1:
-                input_type = base.__args__[0]
-                if input_type is not T.TypeVar and not isinstance(input_type, T.TypeVar):
-                    return input_type
+            if hasattr(base, "__args__") and len(base.__args__) >= 3:
+                output_type = base.__args__[2]
+                if output_type is not T.TypeVar and not isinstance(output_type, T.TypeVar):
+                    return output_type
         raise TypeError("T_GraphOutput not explicitly specified in IOptimizer subclass.")
 
     def get_optimal(self) -> T_GraphOutput | None:
@@ -208,7 +206,7 @@ class IOptimizer(ABC, T.Generic[T_GraphInput, T_Context, T_GraphOutput], ConfigT
 
     def sequential_optimize(self, graph_data: T_GraphInput) -> T_GraphOutput:
         assert self.context is not None
-        _, optim_res = self._optimize(self.context, graph_data)
+        self.context, optim_res = self._optimize(self.context, graph_data)
         return optim_res
 
     def write_map(self, global_map: VisualMap):
@@ -218,12 +216,6 @@ class IOptimizer(ABC, T.Generic[T_GraphInput, T_Context, T_GraphOutput], ConfigT
             graph_res_local = self.__get_output_sequential()
 
         self.write_graph_data(graph_res_local, global_map)
-
-    def get_result(self) -> T_GraphOutput | None:
-        if self.is_parallel_mode:
-            return self.__get_output_parallel()
-        else:
-            return self.__get_output_sequential()
 
     def terminate(self):
         if self.child_proc and self.child_proc.is_alive():
