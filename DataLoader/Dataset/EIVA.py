@@ -182,6 +182,8 @@ class EIVASequence(SequenceBase[Frame]):
             self.gt_poses = None
 
         self.length = len(self.lcam_loader)
+        if self.gt_poses is not None:
+            self.length = min(self.length, len(self.gt_poses))
 
         super().__init__(self.length)
 
