@@ -2,7 +2,7 @@ Odometry:
   name: DPVO
   args:
     config_file: ./Baseline/DPVO/config/default.yaml
-    weight_file: ./Model/DPVO.pth
+    weight_file: ./Model/dpvo.pth
 
-Data: !include ../Common/DeepODO_mono_experiments.yaml
+Data: !include ../../Common/DeepODO_mono_experiments.yaml
 Preprocess: !include ../../Common/Preprocess.yaml

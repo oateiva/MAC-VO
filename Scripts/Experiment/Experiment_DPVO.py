@@ -35,7 +35,7 @@ if __name__ == "__main__":
     Logger.write("info", f"Using configuration from: {args.config}")
     cfg, cfg_dict = load_config(Path(args.config))
     odometry_cfg = cfg_dict["Odometry"]
-    data_cfgs = cfg_dict["Datas"]
+    data_cfgs = cfg_dict["Data"]
 
     run_configs = [
         {

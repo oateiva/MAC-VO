@@ -4,10 +4,12 @@ import pypose as pp
 
 from typing import Any
 # CI/CD PyRight pass cannot cover the DPVO as it requires to compile CUDA kernels
-# from dpvo.dpvo import DPVO      #type: ignore
-# from Baseline.DPVO.dpvo.config import cfg     #type: ignore
-DPVO: Any
-cfg : Any
+try:
+    from dpvo.dpvo import DPVO      #type: ignore
+    from dpvo.config import cfg     #type: ignore
+except ImportError:
+    DPVO: Any
+    cfg : Any
 
 from DataLoader import SequenceBase, Frame
 from Module.Map import VisualMap, FrameNode
@@ -28,7 +30,7 @@ class DeepPatchVO(IOdometry[Frame]):
         self.cfg.BUFFER_SIZE = 8192
 
         self.map  = VisualMap()
-        self.dpvo = DPVO(self.cfg, self.weight_file, ht=self.height, wd=self.width, viz=False)
+        self.dpvo = DPVO(self.cfg, self.weight_file, ht=self.height, wd=self.width)
 
         self.Ks, self.poses, self.timestep = [], None, None
         self.Ts    = []
@@ -63,14 +65,14 @@ class DeepPatchVO(IOdometry[Frame]):
         for _ in range(12):
             self.dpvo.update()
         self.poses, self.timestep = self.dpvo.terminate()
-        self.poses = self.poses[..., [2, 0, 1, 5, 3, 4, 6]]
-        self.poses = pp.SE3(self.poses)
+        self.poses = torch.from_numpy(self.poses[..., [2, 0, 1, 5, 3, 4, 6]].copy())
 
         n_frame = self.poses.size(0)
         self.map.frames.push(FrameNode.init({
-            "pose": self.poses,
-            "T_BS": torch.stack(self.T_BSs),
-            "K"   : torch.cat(self.Ks, dim=0),
+            "pose"    : self.poses,
+            "T_BS"    : torch.cat([t.as_subclass(torch.Tensor) for t in self.T_BSs], dim=0),
+            "K"       : torch.cat(self.Ks, dim=0),
+            "baseline": torch.zeros((n_frame,), dtype=torch.float32),
             "need_interp": torch.zeros((n_frame,), dtype=torch.bool),
             "time_ns"    : torch.tensor(self.Ts, dtype=torch.long),
         }))
