@@ -73,6 +73,11 @@ class CameraData(Collatable):
     flow_mask: torch.Tensor | None = None    # torch.bool    of shape Bx1xHxW
     gt_depth : torch.Tensor | None = None    # torch.float32 of shape Bx1xHxW
 
+    # Runtime-populated prior (not loaded from disk). A sparse metric depth map
+    # (0 = no prior) used by depth-completion models e.g. DepthCompletion. Built at
+    # runtime by the odometry system (see Odometry/MACVO.py) by projecting map landmarks.
+    depth_prior: torch.Tensor | None = None  # torch.float32 of shape Bx1xHxW
+
     collate_handlers = {
         "height": lambda batch: batch[0],
         "width" : lambda batch: batch[0],

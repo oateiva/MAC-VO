@@ -1,0 +1,121 @@
+#
+# MAC-VO Monocular mode using the depth-completion network
+# (https://github.com/ntnu-frl/depth-completion) as the depth source.
+#
+# The depth-completion model is a DINOv2 + DPT network that takes an RGB image plus a sparse
+# metric depth prior and predicts dense metric depth. MAC-VO supplies the sparse prior by
+# projecting the running map's landmarks into the current frame (see Odometry/MACVO.py,
+# CameraData.depth_prior). On bootstrap (empty map) the first frames run as pure monocular.
+#
+
+Common:
+  # Some configurations are shared across multiple modules in Odometry, so I write them here.
+  device: &device cuda
+
+Odometry:
+  name: MACVO-DepthCompletion
+  args:
+    # Device directive to the VO system
+    # NOTE: the system may not follow this device config strictly since some module
+    # e.g. those rely on PWC-Net, only support running on cuda device.
+    device: *device
+    edgewidth: 32
+    num_point: 200 # Upper bound of KPs in each frame
+
+    # Match covariance for keypoint on first observation (sub-pixel uncertainty
+    # caused by the quantized pixel)
+    match_cov_default: 0.25
+
+    # Profiling the system using torch, generate chrome json trace file.
+    profile: false
+
+    # Mapping mode provides the dense mapping
+    mapping: true
+
+  cov:
+    obs:
+      type: MatchCovariance
+      args:
+        device: *device
+        kernel_size: 31
+        match_cov_default: 0.25
+        min_depth_cov: 0.05
+        min_flow_cov: 0.25
+
+  keypoint:
+    type: CovAwareSelector_NoDepth
+    args:
+      device: *device
+      kernel_size: 7
+      mask_width: 32
+      max_match_cov: 1.
+      max_depth: 7.0
+      max_depth_cov: 1.
+
+  mappoint:
+    # Mapping feature can be conveniently turn off by using
+    # "type: NoKeypointSelector" instead of the config below.
+    type: MappingPointSelector
+    args:
+      device: *device
+      max_depth: 5.0
+      max_depth_cov: .4
+      mask_width: 32
+
+  frontend:
+    type: MonocularFrontend
+    args:
+      device: *device
+      parallel: true
+      # Multi-GPU: set device_depth to a second GPU to run depth and flow on separate devices.
+      # Requires parallel: true for concurrent execution. Omit to use a single GPU.
+      device_depth: cuda:1
+      match:
+        type: FlowFormerCovMatcher
+        args:
+          weight: ./Model/MACVO_FrontendCov.pth
+          device: *device
+          enc_dtype: fp32
+          dec_dtype: fp32
+          decoder_depth: 12
+      monodepth:
+        type: DepthCompletion
+        args:
+          # Upstream checkpoint (dataset/checkpoints/model.pth in the depth-completion repo).
+          weight: ./Model/depth_completion_model.pth
+          encoder: vits
+          depth_min: 0.5
+          depth_max: 80.0
+          focal_length_canonical: 900.0
+          input_resolution: [630, 476]  # (width, height); both multiples of 14
+          cov_scale: 0.1
+          device: *device
+
+
+  motion:
+    type: StaticMotionModel
+    args:
+
+  outlier:
+    type: CovarianceSanityFilter
+    args:
+
+  postprocess:
+    type: MotionInterpolate
+    args:
+
+  keyframe:
+    type: AllKeyframe
+    args:
+
+  optimizer:
+    type: GTSAM_Graph
+    args:
+      device: cpu
+      vectorize: true
+      parallel: true
+      graph_type: pose2point
+      parallel_timeout_s: 1.0 # timeout for waiting for parallel optimization result, in seconds. Set to None to wait indefinitely.
+
+Datas: !include ../Common/DeepODO_mono_experiments.yaml
+Preprocess: !include ../Common/Preprocess.yaml

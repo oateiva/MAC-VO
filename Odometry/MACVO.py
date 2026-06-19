@@ -10,9 +10,9 @@ from rich.panel import Panel
 from typing import Callable
 
 import Module
-from DataLoader import Frame
+from DataLoader import Frame, CameraData
 from Module.Map import VisualMap, FrameNode, MatchObs, PointNode
-from Utility.Point import filterPointsInRange, pixel2point_NED
+from Utility.Point import filterPointsInRange, pixel2point_NED, point2pixel_NED
 from Utility.PrettyPrint import Logger, GlobalConsole
 from Utility.Timer import Timer
 from Utility.Visualize import fig_plt
@@ -181,6 +181,15 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
             return
 
         depth0          = self.prev_keyframe[2]
+
+        # Build a sparse metric depth prior from the current map for depth-completion depth
+        # models (consumed via CameraData.depth_prior). Landmarks are projected with the
+        # previous keyframe pose — which is exactly what the (static) motion model predicts
+        # for frame1, since the new frame's own pose is not estimated until after depth.
+        # No-op (None) when the map is empty or the depth model ignores depth_prior.
+        frame1.camera.depth_prior = self._build_depth_prior(
+            self.graph.frames.data["pose"][self.prev_keyframe[1]], frame1.camera
+        )
         depth1, match01 = self.Frontend.estimate_pair(frame0.camera, frame1.camera)
 
         # Receive optimization result from previous step (if exists) ####################
@@ -344,6 +353,39 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
                 "color" : map0_color,
             }))
             self.graph.frame2map.add(frame_idx, torch.tensor([num_map_orig], dtype=torch.long), torch.tensor([num_mappoint], dtype=torch.long))   # Associate frame -> map
+
+    @torch.no_grad()
+    def _build_depth_prior(self, pose: torch.Tensor, target: CameraData) -> torch.Tensor | None:
+        """
+        Project the current map's landmarks into `target`'s image to produce a sparse metric
+        depth map (1x1xHxW, 0 = no prior) for depth-completion depth models.
+
+        `pose` is the camera->world pose used for the projection (the previous keyframe pose).
+        Returns None when the map is empty or no landmark falls inside the frame.
+        """
+        landmark_sets: list[torch.Tensor] = []
+        if len(self.graph.points) > 0:
+            landmark_sets.append(self.graph.points.data["pos_Tw"].tensor)
+        if len(self.graph.map_points) > 0:
+            landmark_sets.append(self.graph.map_points.data["pos_Tw"].tensor)
+        if len(landmark_sets) == 0:
+            return None
+
+        points_w = torch.cat(landmark_sets, dim=0).to(torch.float32)    # (N, 3) world NED
+        points_c = pp.SE3(pose).Inv().Act(points_w)                     # (N, 3) camera NED
+        depth    = points_c[..., 0]                                     # NED forward = depth
+        uv       = point2pixel_NED(points_c, target.frame_K)            # (N, 2) pixel (u, v)
+
+        inbound = filterPointsInRange(uv, (0, target.width - 1), (0, target.height - 1))
+        valid   = torch.logical_and(inbound, depth > 0)
+        if not bool(valid.any()):
+            return None
+
+        u = uv[valid, 0].round().long().clamp(0, target.width  - 1)
+        v = uv[valid, 1].round().long().clamp(0, target.height - 1)
+        prior = torch.zeros((1, 1, target.height, target.width), dtype=torch.float32)
+        prior[0, 0, v, u] = depth[valid].to(torch.float32)
+        return prior
 
     def push_keyframe(self, frame: T_SensorFrame, est_pose: pp.LieTensor | torch.Tensor, need_interp: bool=False) -> torch.Tensor:
         frame_idx = self.graph.frames.push(FrameNode.init({
