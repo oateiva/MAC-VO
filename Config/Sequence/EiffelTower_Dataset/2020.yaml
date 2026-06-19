@@ -6,6 +6,7 @@ args:
   gtDepth: false
   gtFlow: false
   gtPose: true
-  window_length: 1
   is_stereo: false
+  window_length: 1
+  step_size: 1
   compressed: true

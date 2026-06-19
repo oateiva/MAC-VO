@@ -1,5 +1,5 @@
 !flatten_seq
-- !include ../../Sequence/EuRoC_stereo_datasets.yaml
+# - !include ../../Sequence/EuRoC_stereo_datasets.yaml
 # - !include ../../Sequence/TartanAir_dataset_stereo.yaml
-# - !include ../../Sequence/EIVA_stereo_datasets.yaml
+- !include ../../Sequence/EIVA_stereo_datasets.yaml
 # - !include ../../Sequence/EuRoC_stereo_datasets.yaml

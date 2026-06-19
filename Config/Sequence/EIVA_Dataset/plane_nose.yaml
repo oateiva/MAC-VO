@@ -7,7 +7,7 @@ args:
   gtFlow: false
   gtPose: true
   is_stereo: false
-  window_length: 2 # 1 with dav2, N with dav3
+  window_length: 1 # 1 with dav2, N with dav3
   navigation_names: [plane_nose]
   sequence_camera_names: [left, right]
 

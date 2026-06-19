@@ -99,7 +99,7 @@ class Aqualoc_MonoSequence(SequenceBase[Frame]):
         # Package the camera intrinsics tensor in the shape you use elsewhere
         self.K_t = torch.tensor(self.K, dtype=torch.float32).unsqueeze(0)
 
-        super().__init__(len(self.Image))
+        super().__init__(len(self.gt_pose_data) if self.gt_pose_data is not None else len(self.Image))
 
     def __getitem__(self, local_index: int) -> Frame:
         index = self.get_index(local_index)

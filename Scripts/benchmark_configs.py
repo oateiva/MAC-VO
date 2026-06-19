@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from Evaluation.EvalSeq import EvaluateSequences
 
 CONFIGS = [
+    ("1GPU  No-Para",  "Config/Experiment/MACVO/_bench_1gpu_nopara.yaml", "bench-1gpu-nopara"),
     ("1GPU  Parallel", "Config/Experiment/MACVO/_bench_1gpu_para.yaml",    "bench-1gpu-para"),
     ("2GPU  No-Para",  "Config/Experiment/MACVO/_bench_2gpu_nopara.yaml",  "bench-2gpu-nopara"),
     ("2GPU  Parallel", "Config/Experiment/MACVO/_bench_2gpu_para.yaml",    "bench-2gpu-para"),
@@ -30,7 +31,7 @@ for label, odom_config, odom_name in CONFIGS:
 
     cmd = [
         sys.executable, "MACVO.py",
-        "--useRR",
+        # "--useRR",
         "--data",        DATA_CONFIG,
         "--odom",        odom_config,
         "--n_to_align",  "20",
