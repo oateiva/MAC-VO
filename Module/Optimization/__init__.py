@@ -1,3 +1,8 @@
 from .Interface import IOptimizer
 from .TwoFramePGO import TwoFrame_PGO
 from .PyposeOptimizers import AnalyticModule
+
+try:
+    from .GTSAM import GTSAM_Graph  # registers "GTSAM_Graph" in the SubclassRegistry
+except ImportError:
+    pass  # gtsam not installed; GTSAM_Graph unavailable, two-frame path still works
