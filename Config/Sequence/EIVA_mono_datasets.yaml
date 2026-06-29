@@ -1,13 +1,13 @@
 - type: EIVA_NoIMU
   name: EIVA_plane_nose
   args:
-    root: D:\Datasets\EIVA\plane_nose
+    root: D:\Datasets\EIVA\vobster_quay\plane_nose
     # Controls optional data sources
     gtDepth: false
     gtFlow: false
     gtPose: true
     is_stereo: false
-    window_length: 1
+    window_length: 2
     step_size: 1
     navigation_names: [plane_nose]
     sequence_camera_names: [left, right]
@@ -16,7 +16,7 @@
 - type: EIVA_NoIMU
   name: EIVA_plane_mid
   args:
-    root: D:\Datasets\EIVA\plane_mid
+    root: D:\Datasets\EIVA\vobster_quay\plane_mid
     # Controls optional data sources
     gtDepth: false
     gtFlow: false
@@ -30,7 +30,7 @@
 - type: EIVA_NoIMU
   name: EIVA_plane_tail1
   args:
-    root: D:\Datasets\EIVA\plane_tail1
+    root: D:\Datasets\EIVA\vobster_quay\plane_tail1
     # Controls optional data sources
     gtDepth: false
     gtFlow: false
@@ -42,7 +42,7 @@
 - type: EIVA_NoIMU
   name: EIVA_plane_tail2
   args:
-    root: D:\Datasets\EIVA\plane_tail2
+    root: D:\Datasets\EIVA\vobster_quay\plane_tail2
     # Controls optional data sources
     gtDepth: false
     gtFlow: false
@@ -79,7 +79,7 @@
 - type: EIVA_NoIMU
   name: EIVA_Welland_test_first_dive
   args:
-    root: D:\Datasets\EIVA\Welland_test_first_dive
+    root: D:\Datasets\EIVA\welland\Welland_test_first_dive
     # Controls optional data sources
     gtDepth: false
     gtFlow: false

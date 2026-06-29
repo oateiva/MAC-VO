@@ -1,0 +1,135 @@
+#
+# This configuration is **not** used to report numbers in the paper.
+#
+# MAC-VO with DepthCrafter as the monocular depth source.
+#   DepthCrafter (https://github.com/Tencent/DepthCrafter) is a video-diffusion depth
+#   model producing temporally-consistent *relative* (affine-invariant) depth. MAC-VO
+#   asks for depth one frame at a time, so the wrapper keeps a sliding window of recent
+#   frames and returns depth for the newest frame (see Module/Network/Depth/DepthCrafter).
+#
+#   NOTE: DepthCrafter output is relative and per-window min-max normalized, so it is
+#   not metric and the scale can drift between windows. `scale_factor`/`invert` map it
+#   to a usable depth (same idea as DepthAnythingV2's `scale_factor / idepth`). Tune for
+#   accuracy; defaults here are for exercising the pipeline.
+#
+#   First run downloads weights from HuggingFace:
+#     - unet:     tencent/DepthCrafter
+#     - backbone: stabilityai/stable-video-diffusion-img2vid-xt  (gated: accept license + set HF_TOKEN)
+#
+
+Common:
+  # Some configurations are shared across multiple modules in Odometry, so I write them here.
+  device: &device cuda
+
+Odometry:
+  name: MACVO-DepthCrafter
+  args:
+    # Device directive to the VO system
+    # NOTE: the system may not follow this device config strictly since some module
+    # e.g. those rely on PWC-Net, only support running on cuda device.
+    device: *device
+    edgewidth: 32
+    num_point: 200 # Upper bound of KPs in each frame
+
+    # Match covariance for keypoint on first observation (sub-pixel uncertainty
+    # caused by the quantized pixel)
+    match_cov_default: 0.25
+
+    # Profiling the system using torch, generate chrome json trace file.
+    profile: false
+
+    # Mapping mode provides the dense mapping
+    mapping: true
+
+  cov:
+    obs:
+      type: MatchCovariance
+      args:
+        device: *device
+        kernel_size: 31
+        match_cov_default: 0.25
+        min_depth_cov: 0.05
+        min_flow_cov: 0.25
+
+  keypoint:
+    type: CovAwareSelector_NoDepth
+    args:
+      device: *device
+      kernel_size: 7
+      mask_width: 32
+      max_match_cov: 1.
+      max_depth: 7.0
+      max_depth_cov: 1.
+
+  mappoint:
+    # Mapping feature can be conveniently turn off by using
+    # "type: NoKeypointSelector" instead of the config below.
+    type: MappingPointSelector
+    args:
+      device: *device
+      max_depth: 5.0
+      max_depth_cov: .4
+      mask_width: 32
+
+  frontend:
+    type: MonocularFrontend
+    args:
+      device: *device
+      parallel: true
+      # Multi-GPU: set device_depth to a second GPU to run depth and flow on separate devices.
+      # Requires parallel: true for concurrent execution. Omit to use a single GPU.
+      device_depth: cuda:1
+      match:
+        type: FlowFormerCovMatcher
+        args:
+          weight: ./Model/MACVO_FrontendCov.pth
+          device: *device
+          enc_dtype: fp32
+          dec_dtype: fp32
+          decoder_depth: 12
+      monodepth:
+        type: DepthCrafter
+        args:
+          device: *device
+          unet_path: tencent/DepthCrafter
+          pretrain_path: stabilityai/stable-video-diffusion-img2vid-xt
+          window_size: 5          # sliding-window length fed to the diffusion pipeline
+          overlap: 2              # window overlap (used once #frames > window_size)
+          num_inference_steps: 5  # low for fast verification; raise (e.g. 25) for quality
+          guidance_scale: 1.0
+          max_res: 512            # long-side cap; frames resized to multiple of 64
+          # DepthCrafter gives relative depth in [0,1]; remap linearly into this metric window.
+          near_depth: 0.5         # metric depth assigned to the nearest relative value
+          far_depth: 7.0          # metric depth assigned to the farthest (<= keypoint max_depth)
+          invert: true            # DepthCrafter convention: high normalized value = near
+          cov_scale: 0.1          # covariance = depth * cov_scale
+          # cpu_offload: model    # uncomment ("model"/"sequential") to trade speed for VRAM
+
+
+  motion:
+    type: StaticMotionModel
+    args:
+
+  outlier:
+    type: CovarianceSanityFilter
+    args:
+
+  postprocess:
+    type: MotionInterpolate
+    args:
+
+  keyframe:
+    type: AllKeyframe
+    args:
+
+  optimizer:
+    type: GTSAM_Graph
+    args:
+      device: cpu
+      vectorize: true
+      parallel: true
+      graph_type: pose2point
+      parallel_timeout_s: 1.0 # timeout for waiting for parallel optimization result, in seconds. Set to None to wait indefinitely.
+
+Datas: !include ../Common/DeepODO_mono_experiments.yaml
+Preprocess: !include ../Common/Preprocess.yaml
