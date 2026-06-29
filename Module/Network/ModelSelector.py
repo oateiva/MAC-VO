@@ -6,6 +6,7 @@ from Module.Network.Depth.DepthAnythingV2.dpt import DepthAnythingV2
 from Module.Network.Depth.DepthAnythingV2.metric.dpt import DepthAnythingV2 as metric_DAV2
 from Module.Network.Depth.DepthAnythingV3.api import DepthAnything3
 from Module.Network.Depth.DepthCompletion import DepthCompletion
+from Module.Network.Depth.DepthCrafter import DepthCrafter
 
 
 DEPTH_MODELS: dict[str, Callable[..., DepthModelProtocol]] = {
@@ -13,6 +14,7 @@ DEPTH_MODELS: dict[str, Callable[..., DepthModelProtocol]] = {
     "MetricDepthAnythingV2": metric_DAV2,
     "DepthAnythingV3": DepthAnything3,
     "DepthCompletion": DepthCompletion,
+    "DepthCrafter": DepthCrafter,
 }
 
 

@@ -181,8 +181,46 @@ class DepthAnythingV2(nn.Module):
         self.scale_factor = scale_factor
         # Load checkpoint
         if weight is not None:
-            ckpt = torch.load(weight, weights_only=True)
-            self.load_state_dict(ckpt)
+            self._load_weight(weight)
+
+    def _load_weight(self, weight: str) -> None:
+        """Load weights from either the original release format or a fine-tuned ckpt.
+
+        Accepts:
+        - the original DepthAnythingV2 release (a flat ``{param: tensor}`` state_dict);
+        - a PyTorch Lightning training checkpoint, where the weights live under
+          ``"state_dict"`` and keys carry the LightningModule attribute prefix
+          (e.g. ``"model.pretrained..."`` when the net was wrapped as ``self.model``).
+
+        ``weights_only=False`` because Lightning ckpts pickle non-tensor objects
+        (callbacks, optimizer states, hyper_parameters) that the restricted unpickler
+        would reject. These checkpoints are trusted local files.
+        """
+        ckpt = torch.load(weight, map_location="cpu", weights_only=False)
+
+        # Unwrap the weights from a training-checkpoint container if present.
+        if isinstance(ckpt, dict) and "state_dict" in ckpt:
+            state_dict = ckpt["state_dict"]
+        elif isinstance(ckpt, dict) and "model" in ckpt and isinstance(ckpt["model"], dict):
+            state_dict = ckpt["model"]
+        else:
+            state_dict = ckpt
+
+        # Strip a leading wrapper prefix (e.g. "model.") if the keys don't line up
+        # with this module's own keys. Tries each first-segment prefix and keeps the
+        # one that produces an overlap.
+        own_keys = set(self.state_dict().keys())
+        if state_dict and not (set(state_dict.keys()) & own_keys):
+            for prefix in {k.split(".", 1)[0] + "." for k in state_dict if "." in k}:
+                stripped = {k[len(prefix):]: v for k, v in state_dict.items() if k.startswith(prefix)}
+                if set(stripped.keys()) & own_keys:
+                    state_dict = stripped
+                    break
+
+        missing, unexpected = self.load_state_dict(state_dict, strict=False)
+        if missing or unexpected:
+            print(f"[DepthAnythingV2] Loaded '{weight}' with "
+                  f"{len(missing)} missing / {len(unexpected)} unexpected key(s).")
 
     @property
     def provide_cov(self) -> bool: return True
