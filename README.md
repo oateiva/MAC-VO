@@ -160,6 +160,50 @@ Every run will produce a `Sandbox` (or `Space`). A `Sandbox` is a storage unit t
   $ python MACVO.py --odom ./Config/Experiment/MACVO/MACVO_MappingMode.yaml --data ./Config/Sequence/TartanAir_abandonfac_001.yaml
   ```
 
+### 🎯 Selecting Depth Models from the Comet Model Registry
+
+MAC-VO chooses its monocular depth model purely through config (`monodepth.type` + `monodepth.args.weight`). If you fine-tune **Depth Anything V2 / V3** and register the checkpoints in the [Comet](https://www.comet.com) **Model Registry**, `Scripts/select_depth_model.py` lets you switch a run between the **original** pretrained weights and the **best fine-tuned** version (ranked by validation loss) without editing configs by hand.
+
+The resolver runs entirely offline of the VO loop: it lists the registered model's versions, picks the best by following each version to its **source experiment** and reading the validation-loss metric, downloads and normalizes that version into `Model/finetuned/<arch>/<registry>-<version>/`, writes a `selection.json` manifest, and emits a ready-to-run `_FT` experiment config. `comet_ml` is only used by this script — it is never imported on the inference path.
+
+**Setup** — install the dependency and provide Comet credentials via environment (or `~/.comet.config`); never pass the key on the CLI:
+
+```bash
+$ pip install comet_ml          # already listed in requirements.txt
+$ export COMET_API_KEY=<your-key>
+```
+
+**Run the best fine-tuned model** — resolve, then run MAC-VO with the generated `_FT` config (`--registry-name` is the model's name in the registry):
+
+```bash
+# Depth Anything V2 (checkpoint is a .pth state_dict)
+$ python Scripts/select_depth_model.py --arch dav2 \
+    --workspace <ws> --registry-name <model> --metric validation_loss
+$ python MACVO.py --odom Config/Experiment/MACVO/MACVO_MonoDAv2_FT.yaml --data <seq>
+
+# Depth Anything V3 (checkpoint is an HF dir; converted automatically if a state_dict)
+$ python Scripts/select_depth_model.py --arch dav3 \
+    --workspace <ws> --registry-name <model> --metric validation_loss
+$ python MACVO.py --odom Config/Experiment/MACVO/MACVO_MonoDAv3_FT.yaml --data <seq>
+```
+
+**Pin an explicit version** instead of ranking by metric:
+
+```bash
+$ python Scripts/select_depth_model.py --arch dav3 --workspace <ws> --registry-name <model> --version 1.2.0
+```
+
+**Run the original (current) model** — no Comet needed; the unchanged base config *is* the original:
+
+```bash
+$ python Scripts/select_depth_model.py --arch dav2 --original   # prints the base config to use
+$ python MACVO.py --odom Config/Experiment/MACVO/MACVO_MonoDAv2.yaml --data <seq>
+```
+
+> [!NOTE]
+>
+> Match the `--metric` to the validation-loss metric name logged on the version's source experiment. Ranking by metric requires each registry version to be linked to a source experiment; if some versions aren't, they're skipped (or use `--version` to pull one directly). See `python Scripts/select_depth_model.py --help` for all flags.
+
 ### 📊 Plotting and Visualization
 
 We used [the Rerun](https://rerun.io) visualizer to visualize 3D space including camera pose, point cloud and trajectory.

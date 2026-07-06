@@ -8,7 +8,7 @@ rich
 cupy-cuda12x
 einops
 timm==0.9.12
-rerun-sdk==0.21.0
+rerun-sdk>=0.25  # Utility/Visualize/Rerun_Visualize.py disables itself for <= 0.24.0
 yacs
 # torch
 numpy<2.0.0
@@ -22,3 +22,10 @@ h5py
 xformers==0.0.27.post2
 # tensorrt
 onnx
+# DepthCrafter monocular depth source (Module/Network/Depth/DepthCrafter)
+diffusers
+transformers
+accelerate
+# comet_ml: used only by Scripts/select_depth_model.py to resolve fine-tuned depth
+# checkpoints from Comet experiment tracking. Never imported on the inference path.
+comet_ml
