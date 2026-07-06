@@ -33,8 +33,15 @@ PosePixelMap = Dict[int, Dict[Tuple[float, float], int]]
 
 
 class GTSAM_Pose2Point(FactorGraph):
-    def __init__(self):
+    def __init__(self, huber_delta: float = 0.1, huber_delta_prev: float = 1.0,
+                 prior_sigma: float = 1e-4, max_iterations: int = 20):
         super().__init__()
+        # Optimizer hyperparameters (config: Odometry.optimizer.args; defaults
+        # reproduce the historical hardcoded values).
+        self.huber_delta = huber_delta            # robust kernel on pose->point factors
+        self.huber_delta_prev = huber_delta_prev  # robust kernel on prev-frame reobservation factor
+        self.prior_sigma = prior_sigma            # gauge prior noise on anchor poses
+        self.max_iterations = max_iterations      # LM iteration cap
 
 
     def parse_graph_data(self, graph_data: GTSAM_GraphInput):
@@ -90,7 +97,7 @@ class GTSAM_Pose2Point(FactorGraph):
 
         # Initial estimate: pose 1 at identity, pose 2 at init_motion
         initial_estimate = gtsam.Values()
-        ini_estimate_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([1e-4]*6, dtype=np.float64))
+        ini_estimate_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([self.prior_sigma]*6, dtype=np.float64))
         # Pose 1
         P1 = self.init_pose
         P2 = self.init_pose
@@ -119,6 +126,11 @@ class GTSAM_Pose2Point(FactorGraph):
                     ini_estimate_noise
                 ))
 
+        # First-wins map: current-frame landmark index -> previous-frame obs index
+        curr_to_prev: Dict[int, int] = {}
+        for p, c in self.indexes_prev_curr:
+            curr_to_prev.setdefault(c, p)
+
         landmark_keys = []
         landmark_idx = []
         for i in range(len(self.obs_Tc_1)):
@@ -128,8 +140,8 @@ class GTSAM_Pose2Point(FactorGraph):
             landmark_keys.append(landmark_key)
             landmark_idx.append(i)
 
-            if any(i == idx_pair[1] for idx_pair in self.indexes_prev_curr) and p0_index >= 0:
-                pi = [index_prev_curr[0] for index_prev_curr in self.indexes_prev_curr if index_prev_curr[1] == i][0]
+            if i in curr_to_prev and p0_index >= 0:
+                pi = curr_to_prev[i]
 
                 # Add BetweenFactor between pose_0_key and pose_2_key
                 # between_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([0.5]*6))
@@ -144,7 +156,7 @@ class GTSAM_Pose2Point(FactorGraph):
                 obs_Tc_0_i = self.obs_Tc_0[pi]
                 cov_Tc_0_i = self.previous_graph_data.observations.data["obs1_covTc"][pi].detach().cpu().numpy()
                 noise_model_0 = gtsam.noiseModel.Gaussian.Covariance(cov_Tc_0_i)
-                m_huber_0 = gtsam.noiseModel.mEstimator.Huber.Create(1.)
+                m_huber_0 = gtsam.noiseModel.mEstimator.Huber.Create(self.huber_delta_prev)
                 noise_model_0 = gtsam.noiseModel.Robust.Create(m_huber_0, noise_model_0)
                 factor0 = make_pose_to_point_factor(pose_0_key, landmark_key, obs_Tc_0_i, noise_model_0)
                 graph.add(factor0)
@@ -159,7 +171,7 @@ class GTSAM_Pose2Point(FactorGraph):
             # Create noise model
             noise_model_1 = gtsam.noiseModel.Gaussian.Covariance(cov_Tc_1_i)
             noise_model_2 = gtsam.noiseModel.Gaussian.Covariance(cov_Tc_2_i)
-            m_huber = gtsam.noiseModel.mEstimator.Huber.Create(0.1)
+            m_huber = gtsam.noiseModel.mEstimator.Huber.Create(self.huber_delta)
             noise_model_1 = gtsam.noiseModel.Robust.Create(
                 m_huber,
                 noise_model_1
@@ -183,7 +195,7 @@ class GTSAM_Pose2Point(FactorGraph):
         # Optimize the graph
         params = gtsam.LevenbergMarquardtParams()
         # params.setVerbosityLM("SUMMARY")
-        params.setMaxIterations(20)
+        params.setMaxIterations(self.max_iterations)
 
         optimizer = gtsam.LevenbergMarquardtOptimizer(graph, initial_estimate, params)
         result = optimizer.optimize()

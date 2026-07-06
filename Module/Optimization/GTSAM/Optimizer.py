@@ -29,18 +29,23 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
         matches_prev = previous_graph_data.observations
         matches_curr = current_graph_data.observations
 
-        matches_prev_persistent = []
-        matches_curr_persistent = []
+        match_atol = float(getattr(self.config, "match_atol", 1.0))
+        # Vectorized all-pairs association (same semantics as the original
+        # per-keypoint loop: for each current pixel1_uv, the FIRST index in
+        # matches_prev whose pixel2_uv is within atol on both axes).
         indexes_prev_curr = []
-        for i in range(matches_curr.data["pixel1_uv"].shape[0]):
-            matches_curr_i = matches_curr.data["pixel1_uv"][i]
-            # Find indices in matches_prev where pixel2_uv matches matches_curr_i
-            mask = torch.isclose(matches_prev.data["pixel2_uv"], matches_curr_i, atol=1.).all(dim=-1)
-            if mask.any():
-                # Append corresponding values to persistent lists
-                matches_prev_persistent.append(matches_prev.data["pixel2_uv"][mask])
-                matches_curr_persistent.append(matches_curr.data["pixel1_uv"][i].unsqueeze(0))
-                indexes_prev_curr.append((torch.where(mask)[0][0].item(), i))
+        prev_uv = matches_prev.data["pixel2_uv"]   # (Np, 2)
+        curr_uv = matches_curr.data["pixel1_uv"]   # (Nc, 2)
+        if prev_uv.shape[0] > 0 and curr_uv.shape[0] > 0:
+            close = torch.isclose(
+                prev_uv.unsqueeze(0), curr_uv.unsqueeze(1), atol=match_atol
+            ).all(dim=-1)                          # (Nc, Np)
+            has_match = close.any(dim=1)
+            first_prev = torch.argmax(close.to(torch.uint8), dim=1)
+            indexes_prev_curr = [
+                (int(p), int(c)) for c, p in
+                zip(torch.nonzero(has_match, as_tuple=True)[0], first_prev[has_match])
+            ]
 
         return GTSAM_GraphInput(previous_graph_data,
             current_graph_data,
@@ -107,19 +112,37 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
 
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
-        cls._enforce_config_spec(config, {
+        spec: dict = {
             "graph_type": lambda s: s in {"pose2point", "isam"},
             "device": lambda v: isinstance(v, str) and (v == "cpu" or "cuda" in v),
             "vectorize": lambda b: isinstance(b, bool),
             "parallel": lambda b: isinstance(b, bool),
             "autodiff": lambda b: isinstance(b, bool)
-        })
+        }
+        # Optional pose2point hyperparameters (defaults in GTSAM_Pose2Point /
+        # connect_graphs reproduce the historical hardcoded values).
+        optional_spec = {
+            "huber_delta"     : lambda v: isinstance(v, (int, float)) and v > 0.,
+            "huber_delta_prev": lambda v: isinstance(v, (int, float)) and v > 0.,
+            "prior_sigma"     : lambda v: isinstance(v, (int, float)) and v > 0.,
+            "max_iterations"  : lambda n: isinstance(n, int) and n > 0,
+            "match_atol"      : lambda v: isinstance(v, (int, float)) and v > 0.,
+        }
+        for key, check in optional_spec.items():
+            if config is not None and hasattr(config, key):
+                spec[key] = check
+        cls._enforce_config_spec(config, spec)
 
     @staticmethod
     def init_context(config) -> dict:
         match (config.graph_type):
             case ("pose2point"):
-                PoseGraphClass = GTSAM_Pose2Point
+                PoseGraphClass = lambda: GTSAM_Pose2Point(
+                    huber_delta=float(getattr(config, "huber_delta", 0.1)),
+                    huber_delta_prev=float(getattr(config, "huber_delta_prev", 1.0)),
+                    prior_sigma=float(getattr(config, "prior_sigma", 1e-4)),
+                    max_iterations=int(getattr(config, "max_iterations", 20)),
+                )
             case ("isam"):
                 PoseGraphClass = ISAM
             case _:
