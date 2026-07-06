@@ -1,0 +1,116 @@
+#
+# MAC-VO with the G-EDF scan-to-map backend (GEDF_PGO).
+#
+# Builds a Gaussian Euclidean Distance Field map online from MAC-VO's own
+# landmarks and registers each frame's keypoints against it (in the style of
+# G-EDF-Loc), fused with the covariance-weighted ICP factor (graph_type
+# "gedf+icp"). Set graph_type to "gedf" for pure field registration, or
+# map.source to "prebuilt" (+ map.path to a GDF1 .bin) to localize against a
+# pre-built map.
+#
+# Everything except the optimizer block matches MACVO_Performant.yaml.
+#
+
+Common:
+  device: &device cuda
+
+Odometry:
+  name: MACVO-GEDF
+  args:
+    device: *device
+    edgewidth: 32
+    num_point: 200
+    match_cov_default: 0.25
+    profile: false
+    mapping: true
+
+  cov:
+    obs:
+      type: MatchCovariance
+      args:
+        device: *device
+        kernel_size: 31
+        match_cov_default: 0.25
+        min_depth_cov: 0.05
+        min_flow_cov: 0.25
+
+  keypoint:
+    type: CovAwareSelector
+    args:
+      device: *device
+      kernel_size: 7
+      mask_width: 32
+      max_match_cov: 100.0
+      max_depth: 5.0
+      max_depth_cov: 0.005
+
+  mappoint:
+    type: MappingPointSelector
+    args:
+      device: *device
+      max_depth: 5.0
+      max_depth_cov: 0.005
+      mask_width: 32
+
+  frontend:
+    type: CUDAGraph_FlowFormerCovFrontend
+    args:
+      device: *device
+      weight: ./Model/MACVO_FrontendCov.pth
+      enc_dtype: fp32
+      dec_dtype: fp32
+      decoder_depth: 12
+      enforce_positive_disparity: false
+
+  motion:
+    type: StaticMotionModel
+    args:
+
+  outlier:
+    type: CovarianceSanityFilter
+    args:
+
+  postprocess:
+    type: MotionInterpolate
+    args:
+
+  keyframe:
+    type: AllKeyframe
+    args:
+
+  optimizer:
+    type: GEDF_PGO
+    args:
+      device: cpu           # solver device; the mapper has its own (map.online.device)
+      vectorize: true
+      parallel: true
+      autodiff: false       # analytic Jacobians (LM_analytic)
+      graph_type: gedf+icp  # "gedf" = pure field registration
+      map:
+        source: online      # "prebuilt" localizes against map.path instead
+        path: ""            # GDF1 .bin path; only used when source is "prebuilt"
+        insert_keypoints: true
+        insert_dense: false
+        min_gaussians: 800  # field factor stays inert until the map has this many
+        online:
+          device: *device
+          cube_size: 1.0
+          num_gaussians: 8
+          sample_points: 1000
+          budget_cubes_per_frame: 8
+          mae_target: 0.03
+      field:
+        weighting: mahalanobis
+        sigma: 0.30         # field-error floor (m); keeps the young online map from
+                            # outweighing the ICP factor (0.10 is fine for prebuilt maps)
+        oob_value_threshold: 19.0
+        oob_residual: 5.0
+        max_grad_norm: 10.0
+      solver:
+        coarse_kernel_delta: 3.0
+        coarse_steps: 10
+        fine_kernel_delta: 0.5
+        fine_steps: 10
+
+Datas: !include ../Common/DeepODO_stereo_experiments.yaml
+Preprocess: !include ../Common/Preprocess.yaml
