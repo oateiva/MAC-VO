@@ -54,10 +54,10 @@ def VisualizeRerunCallback(frame: Frame, system: MACVO, pb: ColoredTqdm, gt: Lis
     rr_plt.log_keypoints("/world/macvo/cam_left/kpts", match_obs)
 
     map_points = system.graph.get_frame2map(system.graph.frames[-1:])
-    rr_plt.log_points("/world/point_cloud_incremental", map_points.data["pos_Tw"].detach(), map_points.data["color"].detach(), map_points.data["cov_Tw"].detach(), "sphere")
+    # rr_plt.log_points("/world/point_cloud_incremental", map_points.data["pos_Tw"].detach(), map_points.data["color"].detach(), map_points.data["cov_Tw"].detach(), "sphere")
 
-    map_points = system.graph.get_frame2map(system.graph.frames[:])
-    rr_plt.log_points("/world/point_cloud_all", map_points.data["pos_Tw"].detach(), map_points.data["color"].detach(), map_points.data["cov_Tw"].detach(), "sphere")
+    # map_points = system.graph.get_frame2map(system.graph.frames[:])
+    # rr_plt.log_points("/world/point_cloud_all", map_points.data["pos_Tw"].detach(), map_points.data["color"].detach(), map_points.data["cov_Tw"].detach(), "sphere")
 
     vo_points  = system.graph.get_match2point(system.graph.get_frame2match(system.graph.frames[-1:]))
     rr_plt.log_points("/world/vo_tracking", vo_points.data["pos_Tw"].detach(), vo_points.data["color"].detach(), vo_points.data["cov_Tw"].detach(), "sphere")

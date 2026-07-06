@@ -21,6 +21,7 @@ inference, and export capabilities. It supports both single and nested model arc
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Optional, Sequence
 import numpy as np
 import torch
@@ -116,19 +117,63 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         weight_path = getattr(config, "weight", None)
         if weight_path is None:
             raise ValueError("`config.weight` must be set for DepthAnything3")
-        # Load a *temporary* pretrained instance
-        #    (this calls __init__ + loads weights)
-        pretrained = type(self).from_pretrained(weight_path)
-        # Copy weights into *this* instance
-        missing, unexpected = self.load_state_dict(
-            pretrained.state_dict(),
-            strict=False,
-        )
+        self._load_weight(weight_path)
+        self.to(self.device)
+        return
+
+    def _load_weight(self, weight: str) -> None:
+        """Load weights from either a Hugging Face source or a local checkpoint file.
+
+        Accepts:
+        - a Hugging Face Hub repo id (e.g. ``"depth-anything/DA3NESTED-GIANT-LARGE-1.1"``)
+          or a local directory holding ``model.safetensors`` + ``config.json`` -- both
+          handled by ``from_pretrained`` (``PyTorchModelHubMixin``);
+        - a local checkpoint *file* (e.g. a PyTorch Lightning training ``.ckpt``), which
+          ``from_pretrained`` cannot read. These are loaded directly via ``torch.load``.
+        """
+        # A directory or a Hub repo id goes through the standard pretrained loader.
+        if not Path(weight).is_file():
+            pretrained = type(self).from_pretrained(weight)
+            missing, unexpected = self.load_state_dict(pretrained.state_dict(), strict=False)
+            if missing or unexpected:
+                print(
+                    f"[DepthAnything3] Loaded pretrained '{weight}' with "
+                    f"{len(missing)} missing / {len(unexpected)} unexpected key(s)."
+                )
+            return
+
+        # Otherwise it is a local checkpoint file.
+        #
+        # ``weights_only=False`` because Lightning ckpts pickle non-tensor objects
+        # (callbacks, optimizer states, hyper_parameters) that the restricted unpickler
+        # would reject. These checkpoints are trusted local files.
+        ckpt = torch.load(weight, map_location="cpu", weights_only=False)
+
+        # Unwrap the weights from a training-checkpoint container if present.
+        if isinstance(ckpt, dict) and "state_dict" in ckpt:
+            state_dict = ckpt["state_dict"]
+        elif isinstance(ckpt, dict) and "model" in ckpt and isinstance(ckpt["model"], dict):
+            state_dict = ckpt["model"]
+        else:
+            state_dict = ckpt
+
+        # Strip a leading wrapper prefix (e.g. the LightningModule attribute name) if the
+        # keys don't line up with this module's own keys. Tries each first-segment prefix
+        # and keeps the one that produces an overlap.
+        own_keys = set(self.state_dict().keys())
+        if state_dict and not (set(state_dict.keys()) & own_keys):
+            for prefix in {k.split(".", 1)[0] + "." for k in state_dict if "." in k}:
+                stripped = {k[len(prefix):]: v for k, v in state_dict.items() if k.startswith(prefix)}
+                if set(stripped.keys()) & own_keys:
+                    state_dict = stripped
+                    break
+
+        missing, unexpected = self.load_state_dict(state_dict, strict=False)
         if missing or unexpected:
             print(
-                f"While loading pretrained weights: missing={missing}, unexpected={unexpected}"
+                f"[DepthAnything3] Loaded checkpoint '{weight}' with "
+                f"{len(missing)} missing / {len(unexpected)} unexpected key(s)."
             )
-        self.to(self.device)
         return
 
     @torch.inference_mode()
