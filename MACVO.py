@@ -142,11 +142,24 @@ def get_args():
         default=-1,
         help="Number of poses used for trajectory alignment during evaluation (-1 = all)."
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed torch/numpy/random for reproducible runs (e.g. keypoint selection uses randperm)."
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = get_args()
+
+    if args.seed is not None:
+        import random
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
 
     # Metadata setup & visualizer setup
     cfg, cfg_dict = load_config(Path(args.odom))

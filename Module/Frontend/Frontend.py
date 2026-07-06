@@ -183,10 +183,18 @@ class ParallelEstimateMixin:
     def __init__(self, config: SimpleNamespace):
         super().__init__(config)
         self._thread_pool = ThreadPoolExecutor(max_workers=2)
+        # One long-lived stream per slot. The CUDA caching allocator keeps a
+        # separate block pool per stream, so creating a fresh Stream on every
+        # frame strands that frame's inference transients in a pool no later
+        # frame can reuse — reserved VRAM then grows by the full inference
+        # footprint every frame (on Windows/WDDM it silently spills into
+        # shared memory and slows ~30x instead of raising OOM).
+        self._streams: tuple | None = (
+            (torch.cuda.Stream(), torch.cuda.Stream()) if torch.cuda.is_available() else None
+        )
 
     @staticmethod
-    def _run_on_stream(fn: Callable[[], object]) -> object:
-        s = torch.cuda.Stream()
+    def _run_on_stream(s, fn: Callable[[], object]) -> object:
         s.wait_stream(torch.cuda.current_stream())  # type: ignore
         with torch.cuda.stream(s):                  # type: ignore
             result = fn()
@@ -195,15 +203,16 @@ class ParallelEstimateMixin:
 
     def _parallel(self, fn_a: Callable[[], _A], fn_b: Callable[[], _B]) -> tuple[_A, _B]:
         """
-        Run fn_a and fn_b concurrently on two threads, each on its own CUDA stream.
-        Blocks until both complete. Re-raises any exception from either thread.
-        Safe for inference-only model calls sharing weights (no gradient state mutated).
-        Falls back to sequential execution when CUDA is unavailable.
+        Run fn_a and fn_b concurrently on two threads, each on its own (reused)
+        CUDA stream. Blocks until both complete. Re-raises any exception from
+        either thread. Safe for inference-only model calls sharing weights (no
+        gradient state mutated). Falls back to sequential execution when CUDA
+        is unavailable.
         """
-        if not torch.cuda.is_available():
+        if self._streams is None:
             return fn_a(), fn_b()
-        fut_a = self._thread_pool.submit(self._run_on_stream, fn_a)
-        fut_b = self._thread_pool.submit(self._run_on_stream, fn_b)
+        fut_a = self._thread_pool.submit(self._run_on_stream, self._streams[0], fn_a)
+        fut_b = self._thread_pool.submit(self._run_on_stream, self._streams[1], fn_b)
         return fut_a.result(), fut_b.result()  # type: ignore[return-value]
 
 
