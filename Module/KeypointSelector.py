@@ -78,20 +78,37 @@ class SelectorCompose(IKeypointSelector):
 class MappingPointSelector(IKeypointSelector):
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
-        return cls._enforce_config_spec(config, {
+        spec: dict = {
             "max_depth": lambda v: isinstance(v, float),
             "max_depth_cov": lambda v: isinstance(v, float),
             "mask_width": lambda v: isinstance(v, int)
-        })
+        }
+        # Optional median-relative depth-cov filter (see select_point).
+        if config is not None and hasattr(config, "depth_cov_rel"):
+            spec["depth_cov_rel"] = lambda v: isinstance(v, (int, float)) and v > 0.
+        return cls._enforce_config_spec(config, spec)
 
     def select_point(self, frame: CameraData, numPoint: int, depth0_est: IDepth.Output, depth1_est: IDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
         assert depth0_est.cov is not None
         depth_mask     = depth0_est.depth < self.config.max_depth
-        depth_cov_mask = depth0_est.cov   < self.config.max_depth_cov
         border_mask = torch.zeros_like(depth_mask, dtype=torch.bool)
         border_mask[
             ..., self.config.mask_width : -self.config.mask_width, self.config.mask_width : -self.config.mask_width
         ] = True
+
+        # Depth-cov threshold: absolute cap, optionally tightened to a
+        # median-relative cut (same pattern as CovAwareSelector). The relative
+        # cut adapts to the depth source's covariance scale, so unreliable
+        # pixels are rejected even when all absolute covariances are large
+        # (e.g. monocular depth).
+        depth_cov_thresh = float(self.config.max_depth_cov)
+        depth_cov_rel: float | None = getattr(self.config, "depth_cov_rel", None)
+        if depth_cov_rel is not None:
+            candidate_cov = depth0_est.cov[depth_mask & border_mask]
+            if candidate_cov.numel() > 0:
+                depth_cov_thresh = min(depth_cov_thresh,
+                                       candidate_cov.nanmedian().item() * depth_cov_rel)
+        depth_cov_mask = depth0_est.cov < depth_cov_thresh
 
         candidates     = depth_mask & depth_cov_mask & border_mask
         selected_points = torch.nonzero(candidates, as_tuple=False)
@@ -397,6 +414,21 @@ class CovAwareSelector_NoDepth(IKeypointSelector):
         point_mask = torch.logical_and(quality_nms, border_mask)
         point_mask = torch.logical_and(point_mask, flow_cov_mask)
 
+        # Optional median-RELATIVE depth-cov filter: no absolute depth-cov
+        # threshold (that is the point of the NoDepth variant - absolute scales
+        # are unusable for monocular depth), but the relative ordering of the
+        # depth covariance still identifies the reliable scene elements.
+        depth_cov_rel: float | None = getattr(self.config, "depth_cov_rel", None)
+        if depth_cov_rel is not None and depth0_est.cov is not None:
+            depth_cov_map = depth0_est.cov.to(self.config.device)
+            # quality_nms is batched with the matcher output (B=2 for paired
+            # windows) while the depth cov has B=1; expand for mask indexing.
+            cand_mask = quality_nms & border_mask
+            candidate_cov = depth_cov_map.expand_as(cand_mask)[cand_mask]
+            if candidate_cov.numel() > 0:
+                depth_cov_thresh = candidate_cov.nanmedian().item() * depth_cov_rel
+                point_mask = torch.logical_and(point_mask, depth_cov_map < depth_cov_thresh)
+
         if match_est is not None and match_est.mask is not None:
             point_mask = torch.logical_and(point_mask, match_est.mask.to(point_mask.device))
 
@@ -414,9 +446,13 @@ class CovAwareSelector_NoDepth(IKeypointSelector):
 
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
-        cls._enforce_config_spec(config, {
+        spec: dict = {
             "device"        : lambda dev: isinstance(dev, str) and (("cuda" in dev) or (dev == "cpu")),
             "mask_width"    : lambda m: isinstance(m, int) and m >= 0,
             "kernel_size"   : lambda k: isinstance(k, int) and k > 0 and (k % 2 == 1),
             "max_match_cov" : lambda c: isinstance(c, (int, float)) and c > 0.
-        })
+        }
+        # Optional median-relative depth-cov filter (see select_point).
+        if config is not None and hasattr(config, "depth_cov_rel"):
+            spec["depth_cov_rel"] = lambda v: isinstance(v, (int, float)) and v > 0.
+        cls._enforce_config_spec(config, spec)

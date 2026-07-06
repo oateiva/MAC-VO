@@ -7,6 +7,8 @@
 # covariance insert gate is disabled (cov_trace_gate: 0.0) because monocular
 # depth covariances are much larger than stereo (max_depth_cov is 1.0 here vs
 # 0.005 in the stereo config) and the default gate would starve the map.
+# Selecting RELIABLE points for the map is the job of the keypoint /
+# mappoint selectors upstream.
 #
 
 Common:
@@ -39,8 +41,10 @@ Odometry:
       kernel_size: 7
       mask_width: 32
       max_match_cov: 10.
-      max_depth: 7.0
-      max_depth_cov: 1.
+      # Median-relative depth-cov filter: keep pixels below median x 1.0, i.e.
+      # the more reliable half of DAv3's depth. Absolute depth-cov thresholds
+      # stay out of this selector (monocular scales are uninformative).
+      depth_cov_rel: 1.0
 
   mappoint:
     type: MappingPointSelector
@@ -49,6 +53,7 @@ Odometry:
       max_depth: 7.0
       max_depth_cov: 1.0
       mask_width: 32
+      depth_cov_rel: 1.0  # tighten to median-relative: map from reliable pixels only
 
   frontend:
     type: MonocularFrontend
@@ -62,7 +67,6 @@ Odometry:
           device: *device
           enc_dtype: fp32
           dec_dtype: fp32
-          decoder_depth: 12
       monodepth:
         type: DepthAnythingV3
         args:
@@ -100,7 +104,7 @@ Odometry:
         path: ""            # GDF1 .bin path; only used when source is "prebuilt"
         insert_keypoints: true
         insert_dense: false
-        min_gaussians: 800  # field factor stays inert until the map has this many
+        min_gaussians: 100  # field factor stays inert until the map has this many
         online:
           device: *device
           cube_size: 1.0
@@ -121,6 +125,11 @@ Odometry:
         coarse_steps: 10
         fine_kernel_delta: 0.5
         fine_steps: 10
+      viz:                  # Rerun map visualization (active only with --useRR)
+        every: 3           # log a map snapshot every N keyframes; 0 = disabled
+        iso: 0.10           # keep sampled points with field value < iso (m)
+        resolution: 0.10    # sampling grid resolution (m)
+        max_points: 100000
 
 Datas: !include ../Common/DeepODO_mono_experiments.yaml
 Preprocess: !include ../Common/Preprocess.yaml
