@@ -1,0 +1,126 @@
+#
+# MAC-VO with monocular Depth Anything V3 frontend + the G-EDF scan-to-map
+# backend (GEDF_PGO, graph_type "gedf+icp").
+#
+# Frontend / keypoint blocks match MACVO_MonoDAv3.yaml; the optimizer block
+# matches MACVO_GEDF.yaml, with one mono-specific change: the mapper's
+# covariance insert gate is disabled (cov_trace_gate: 0.0) because monocular
+# depth covariances are much larger than stereo (max_depth_cov is 1.0 here vs
+# 0.005 in the stereo config) and the default gate would starve the map.
+#
+
+Common:
+  device: &device cuda
+
+Odometry:
+  name: MACVO-GEDF-DAv3
+  args:
+    device: *device
+    edgewidth: 32
+    num_point: 1000
+    match_cov_default: 0.25
+    profile: false
+    mapping: true
+
+  cov:
+    obs:
+      type: MatchCovariance
+      args:
+        device: *device
+        kernel_size: 31
+        match_cov_default: 0.25
+        min_depth_cov: 0.01
+        min_flow_cov: 0.25
+
+  keypoint:
+    type: CovAwareSelector_NoDepth
+    args:
+      device: *device
+      kernel_size: 7
+      mask_width: 32
+      max_match_cov: 10.
+      max_depth: 7.0
+      max_depth_cov: 1.
+
+  mappoint:
+    type: MappingPointSelector
+    args:
+      device: *device
+      max_depth: 7.0
+      max_depth_cov: 1.0
+      mask_width: 32
+
+  frontend:
+    type: MonocularFrontend
+    args:
+      device: *device
+      parallel: true
+      match:
+        type: FlowFormerCovMatcher
+        args:
+          weight: ./Model/MACVO_FrontendCov.pth
+          device: *device
+          enc_dtype: fp32
+          dec_dtype: fp32
+          decoder_depth: 12
+      monodepth:
+        type: DepthAnythingV3
+        args:
+          model_name: da3nested-giant-large
+          weight: depth-anything/DA3NESTED-GIANT-LARGE-1.1
+          device: *device
+          q90: 1.
+
+  motion:
+    type: StaticMotionModel
+    args:
+
+  outlier:
+    type: CovarianceSanityFilter
+    args:
+
+  postprocess:
+    type: MotionInterpolate
+    args:
+
+  keyframe:
+    type: AllKeyframe
+    args:
+
+  optimizer:
+    type: GEDF_PGO
+    args:
+      device: cpu           # solver device; the mapper has its own (map.online.device)
+      vectorize: true
+      parallel: true
+      autodiff: false       # analytic Jacobians (LM_analytic)
+      graph_type: gedf+icp  # "gedf" = pure field registration
+      map:
+        source: online      # "prebuilt" localizes against map.path instead
+        path: ""            # GDF1 .bin path; only used when source is "prebuilt"
+        insert_keypoints: true
+        insert_dense: false
+        min_gaussians: 800  # field factor stays inert until the map has this many
+        online:
+          device: *device
+          cube_size: 1.0
+          num_gaussians: 8
+          sample_points: 1000
+          budget_cubes_per_frame: 8
+          mae_target: 0.03
+          cov_trace_gate: 0.0   # disabled for monocular depth (see header)
+      field:
+        weighting: mahalanobis
+        sigma: 0.30         # field-error floor (m); keeps the young online map from
+                            # outweighing the ICP factor (0.10 is fine for prebuilt maps)
+        oob_value_threshold: 19.0
+        oob_residual: 5.0
+        max_grad_norm: 10.0
+      solver:
+        coarse_kernel_delta: 3.0
+        coarse_steps: 10
+        fine_kernel_delta: 0.5
+        fine_steps: 10
+
+Datas: !include ../Common/DeepODO_mono_experiments.yaml
+Preprocess: !include ../Common/Preprocess.yaml

@@ -1,6 +1,7 @@
 from .Interface import IOptimizer
 from .TwoFramePGO import TwoFrame_PGO
 from .PyposeOptimizers import AnalyticModule
+from .GEDF import GEDF_PGO  # registers "GEDF_PGO" in the SubclassRegistry
 
 try:
     from .GTSAM import GTSAM_Graph  # registers "GTSAM_Graph" in the SubclassRegistry

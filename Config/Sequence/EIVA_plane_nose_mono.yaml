@@ -1,0 +1,14 @@
+type: EIVA_NoIMU
+name: plane_nose_mono
+args:
+  root: D:\Datasets\EIVA\vobster_quay\plane_nose
+  # Controls optional data sources
+  gtDepth: false
+  gtFlow: false
+  gtPose: true
+  is_stereo: false
+  window_length: 2
+  step_size: 1
+  navigation_names: [plane_nose]
+  sequence_camera_names: [left, right]
+  compressed: true
