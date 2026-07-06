@@ -29,19 +29,21 @@ from pypose.optim.strategy import TrustRegion
 
 from Module.Map import VisualMap
 from Utility.Timer import Timer
+# NOTE: Utility.Visualize imports Module.Map, which imports Module.Optimization;
+# importing rr_plt at module level here would close an import cycle. It is
+# imported lazily in the (parent-side) methods that need it instead.
 
 from ..Interface import IOptimizer
 from ..PyposeOptimizers import AnalyticModule, FactorGraph, LM_analytic
-from ..TwoFramePGO.Graphs import GraphOutput
 from .Config import GEDFConfig
 from .Graphs import (
     Analytic_GEDF_ICP, Analytic_GEDF_Registration,
-    GEDF_GraphInput, GEDF_ICP, GEDF_Registration,
+    GEDF_GraphInput, GEDF_GraphOutput, GEDF_ICP, GEDF_Registration,
 )
 from .Mapper import GEDFMapper
 
 
-class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GraphOutput]):
+class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
     @torch.no_grad()
     def get_graph_data(self, global_map: VisualMap, frame_idx: torch.Tensor,
                        observations: torch.Tensor | None = None,
@@ -68,10 +70,18 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GraphOutput]):
                 dense_pos = dense.data["pos_Tw"]
                 dense_cov = dense.data["cov_Tw"]
 
+        # Rerun map snapshot cadence (parent side knows whether --useRR is on;
+        # keeps the child free of any snapshot cost when visualization is off).
+        from Utility.Visualize import rr_plt
+        viz_every = self.config.viz.every
+        want_snapshot = (rr_plt.default_mode == "rerun" and viz_every > 0
+                         and int(frame_idx.flatten()[0]) % viz_every == 0)
+
         return GEDF_GraphInput(
             frame_idx, frame_idx - 1, pp.SE3(P1_last), init_motion, baseline, obs, pts,
             im_intrinsics, edges_idx, "cpu",
             map_insert_pos_Tw=dense_pos, map_insert_cov_Tw=dense_cov,
+            want_map_snapshot=want_snapshot,
         )
 
     @classmethod
@@ -108,6 +118,12 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GraphOutput]):
                 "coarse_steps": lambda n: isinstance(n, int) and n > 0,
                 "fine_kernel_delta": lambda v: isinstance(v, (int, float)) and v > 0,
                 "fine_steps": lambda n: isinstance(n, int) and n > 0,
+            },
+            "viz": {
+                "every": lambda n: isinstance(n, int) and n >= 0,   # 0 = disabled
+                "iso": lambda v: isinstance(v, (int, float)) and v > 0,
+                "resolution": lambda v: isinstance(v, (int, float)) and v > 0,
+                "max_points": lambda n: isinstance(n, int) and n > 0,
             },
         })
 
@@ -157,6 +173,7 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GraphOutput]):
             "pose_graph_class": PoseGraphClass,
             "graph_type": config.graph_type,
             "field_cfg": config.field,
+            "viz_cfg": config.viz,
             "map": gedf_map,
             "insert_keypoints": config.map.insert_keypoints,
             "insert_dense": config.map.insert_dense,
@@ -167,7 +184,7 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GraphOutput]):
         }
 
     @staticmethod
-    def _optimize(context: dict, graph_data: GEDF_GraphInput) -> tuple[dict, GraphOutput]:
+    def _optimize(context: dict, graph_data: GEDF_GraphInput) -> tuple[dict, GEDF_GraphOutput]:
         gpu_ctx = Timer.GPUTimingContext("GEDF_PGO", torch.cuda.current_stream()) \
             if context["device"] != "cpu" else contextlib.nullcontext()
         with Timer.CPUTimingContext("GEDF_PGO"), gpu_ctx:
@@ -186,12 +203,21 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GraphOutput]):
                 cam_pos = pp.SE3(graph_data.init_motion).tensor().reshape(-1)[:3]
                 gedf_map.refit(camera_pos=cam_pos)
 
+            # Rerun visualization snapshot (requested by the parent process)
+            snap_pts: torch.Tensor | None = None
+            snap_dist: torch.Tensor | None = None
+            if graph_data.want_map_snapshot and gedf_map.is_ready:
+                viz = context["viz_cfg"]
+                snap_pts, snap_dist = gedf_map.sample_surface(
+                    resolution=viz.resolution, iso=viz.iso, max_points=viz.max_points)
+
             # 3. Cold start / degenerate input guards.
             no_obs = len(graph_data.observations) == 0
             if no_obs or (context["graph_type"] == "gedf" and not gedf_map.is_ready):
-                return context, GraphOutput(motion=pp.SE3(graph_data.init_motion),
-                                            frame_idx=graph_data.frame_idx,
-                                            from_idx=graph_data.from_idx)
+                return context, GEDF_GraphOutput(motion=pp.SE3(graph_data.init_motion),
+                                                 frame_idx=graph_data.frame_idx,
+                                                 from_idx=graph_data.from_idx,
+                                                 map_points=snap_pts, map_dist=snap_dist)
 
             # 4. Two-stage robust LM over the same graph module.
             graph: FactorGraph = context["pose_graph_class"](
@@ -219,10 +245,21 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GraphOutput]):
                     loss = optimizer.step(input=(), weight=weight)
                     scheduler.step(loss)
 
-        return context, graph.write_back()
+        out = graph.write_back()
+        return context, GEDF_GraphOutput(motion=out.motion, frame_idx=out.frame_idx,
+                                         from_idx=out.from_idx,
+                                         map_points=snap_pts, map_dist=snap_dist)
 
-    def write_graph_data(self, result: GraphOutput | None, global_map: VisualMap) -> None:
+    def write_graph_data(self, result: GEDF_GraphOutput | None, global_map: VisualMap) -> None:
         if result is None:
             return
         to_pose = pp.SE3(result.motion[0].data.double().cpu())
         global_map.frames.data["pose"][result.frame_idx] = to_pose.float()
+
+        # Rerun map visualization (parent process owns the recording; no-op
+        # unless --useRR switched rr_plt into rerun mode).
+        from Utility.Visualize import rr_plt
+        if result.map_points is not None and rr_plt.default_mode == "rerun":
+            import rerun as rr
+            rr.set_time("frame_idx", sequence=int(result.frame_idx.flatten()[0]))
+            rr_plt.log_gedf_map("/world/gedf_map", result.map_points, result.map_dist)

@@ -15,7 +15,6 @@ from Utility.PrettyPrint import ColoredTqdm, Logger, print_as_table
 from Utility.Sandbox import Sandbox
 
 # Visualization tools
-import rerun as rr
 from typing import List
 from Utility.Visualize import fig_plt, rr_plt
 from MACVO import VisualizeRerunCallback, VisualizeVRAMUsage
@@ -30,7 +29,7 @@ def onFrameFinished(frame: Frame, system: MACVO, pb: ColoredTqdm, gt: List[torch
     VisualizeVRAMUsage(frame, system, pb)
 
 
-def execute_experiment(name, cfg, cfg_dict, root_box: Sandbox) -> str:
+def execute_experiment(name, cfg, cfg_dict, root_box: Sandbox, exp_space: Sandbox | None = None) -> str:
     """
     Execute a single experiment run.
     Args:
@@ -38,10 +37,13 @@ def execute_experiment(name, cfg, cfg_dict, root_box: Sandbox) -> str:
         cfg: Configuration object for the run.
         cfg_dict: Dictionary version of the config.
         root_box (Sandbox): Root sandbox for results.
+        exp_space (Sandbox, optional): Pre-created result sandbox (needed when the
+            Rerun recording path must be known before logging starts).
     Returns:
         str: Path to the result folder for this experiment.
     """
-    exp_space = root_box.new_child(name)
+    if exp_space is None:
+        exp_space = root_box.new_child(name)
     exp_space.config = cfg_dict
 
 
@@ -112,10 +114,16 @@ if __name__ == "__main__":
                     "info",
                     f"Starting experiment: {run_cfg_template['Project']} (Run {run_idx + 1}/{args.n_runs})",
                 )
+                # Create the result sandbox up front so the Rerun recording can
+                # be attached at init time (a trailing rr.save after streaming
+                # yields an empty file).
+                exp_space = root_box.new_child(run_cfg_template["Project"])
                 # Setup visualization if requested
                 if args.useRR:
                     rr_plt.default_mode = "rerun"
-                    rr_plt.init_connect(run_cfg_template["Project"])
+                    rr_plt.init_connect(
+                        run_cfg_template["Project"],
+                        save_rrd=str(exp_space.path(f"{run_cfg_template['Project']}.rrd")))
                     vslam_path = run_cfg_template["Data"]["args"].get("vslam")
                     if vslam_path:
                         load_vslam_track(vslam_path, entity_name=run_cfg_template["Project"])
@@ -126,9 +134,7 @@ if __name__ == "__main__":
                 cfg, cfg_dict = build_dynamic_config(run_cfg_template)
                 Logger.write("info", cfg_dict)
                 # Execute experiment and collect result folder
-                spaces.append(execute_experiment(cfg.Project, cfg, cfg_dict, root_box))
-                if args.useRR:
-                    rr.save(str(Path(spaces[-1]) / f"{run_cfg_template['Project']}.rrd"))
+                spaces.append(execute_experiment(cfg.Project, cfg, cfg_dict, root_box, exp_space=exp_space))
 
     # Log summary and save run directories
     Logger.write(

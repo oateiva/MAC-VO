@@ -29,15 +29,27 @@ class Rerun_Visualizer:
     default_mode: T.ClassVar[T_Mode] = "none"
 
     @staticmethod
-    def init_connect(application_id: str):
+    def init_connect(application_id: str, save_rrd: str | None = None):
+        """
+        Spawn a live viewer; when `save_rrd` is given, ALSO record the stream to
+        that file from the very first log call. NOTE: a trailing `rr.save(...)`
+        after streaming does NOT work - the file sink only records data logged
+        after it is attached, so late saves produce empty recordings.
+        """
         assert rr is not None, "Can't initialize rerun since rerun is not installed or have incorrect version."
-        rr.init(application_id, spawn=True)
+        rr.init(application_id)
+        if save_rrd is None:
+            rr.spawn()
+        else:
+            rr.spawn(connect=False)
+            rr.set_sinks(rr.GrpcSink(), rr.FileSink(save_rrd))
         rr.log("/", rr.ViewCoordinates(xyz=rr.ViewCoordinates.FRD), static=True)
 
     @staticmethod
     def init_save(application_id: str, save_rrd: str):
+        """Record to an .rrd file only (no viewer)."""
         assert rr is not None, "Can't initialize rerun since rerun is not installed or have incorrect version."
-        rr.init(application_id, spawn=True)
+        rr.init(application_id)
         rr.save(save_rrd)
         rr.log("/", rr.ViewCoordinates(xyz=rr.ViewCoordinates.FRD), static=True)
 
@@ -151,6 +163,28 @@ class Rerun_Visualizer:
                 colormap = plt.cm.plasma    #type: ignore
                 c = colormap(cov_det_normalized)[..., :3]
                 rr.log(rerun_path + "/cov", rr.Points3D(position, colors=c))
+
+    @register
+    @staticmethod
+    def log_gedf_map(rerun_path: str, points: torch.Tensor, dist: torch.Tensor | None,
+                     radius: float = 0.02):
+        """
+        Log a G-EDF near-surface sample cloud (see GEDFMapper.sample_surface):
+        points (M,3) colored by their field value (viridis, near-surface = dark).
+        """
+        assert rr is not None
+        if points.numel() == 0:
+            return
+        colors = None
+        if dist is not None and dist.numel() > 0:
+            import matplotlib.pyplot as plt
+            from matplotlib.colors import Normalize
+            d = dist.detach().cpu().numpy()
+            normalized = Normalize(vmin=0.0, vmax=max(float(d.max()), 1e-6))(d)
+            colormap = plt.cm.viridis   # type: ignore
+            colors = colormap(normalized)[..., :3]
+        rr.log(rerun_path, rr.Points3D(points.detach().cpu().numpy(),
+                                       colors=colors, radii=[radius]))
 
     @register
     @staticmethod

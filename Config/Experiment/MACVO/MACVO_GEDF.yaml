@@ -111,6 +111,11 @@ Odometry:
         coarse_steps: 10
         fine_kernel_delta: 0.5
         fine_steps: 10
+      viz:                  # Rerun map visualization (active only with --useRR)
+        every: 10           # log a map snapshot every N keyframes; 0 = disabled
+        iso: 0.10           # keep sampled points with field value < iso (m)
+        resolution: 0.10    # sampling grid resolution (m)
+        max_points: 100000
 
 Datas: !include ../Common/DeepODO_stereo_experiments.yaml
 Preprocess: !include ../Common/Preprocess.yaml

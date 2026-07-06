@@ -282,6 +282,28 @@ def test_export_roundtrip_online(tmp_path):
     torch.testing.assert_close(d_frozen, d_live, atol=1e-4, rtol=1e-4)
 
 
+def test_sample_surface():
+    mapper = make_mapper()
+    mapper.insert(sample_plane(n=5000, extent=2.0, z=0.5).float())
+    mapper.flush()
+
+    points, dist = mapper.sample_surface(resolution=0.1, iso=0.1, max_points=5000)
+    assert points.shape[0] > 0 and points.shape[0] <= 5000
+    assert points.dtype == torch.float32 and dist.dtype == torch.float32
+    assert not points.is_cuda and not dist.is_cuda
+    assert bool((dist < 0.1).all())
+    # sampled points must hug the true surface (iso + fit error tolerance)
+    assert float((points[:, 2] - 0.5).abs().max()) < 0.1 + 0.06
+
+    # cap is enforced
+    pts_capped, _ = mapper.sample_surface(resolution=0.05, iso=0.1, max_points=100)
+    assert pts_capped.shape[0] == 100
+
+    # empty map returns empty tensors
+    empty_pts, empty_dist = make_mapper().sample_surface()
+    assert empty_pts.shape == (0, 3) and empty_dist.shape == (0,)
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
 def test_cpu_cuda_parity():
     """Same seed on both devices must give equivalent map QUALITY. Bitwise

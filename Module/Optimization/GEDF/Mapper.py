@@ -384,6 +384,46 @@ class GEDFMapper:
         dsq = (d * d * inv_lam).sum(-1)                                  # (M, 8, K)
         return (w * torch.exp(-0.5 * dsq)).sum(-1)
 
+    @torch.no_grad()
+    def sample_surface(self, resolution: float = 0.10, iso: float = 0.10,
+                       max_points: int = 100_000) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Sample the near-surface region of the field: grid-sample every valid cube
+        at `resolution` and keep points whose field value is below `iso`.
+
+        Returns (points (M,3), dist (M,)) as float32 CPU tensors, M <= max_points
+        (evenly-spaced subsample beyond). Empty map -> empty tensors. Used by the
+        Rerun visualization (live snapshots and the offline viewer script).
+        """
+        empty = (torch.zeros((0, 3), dtype=torch.float32),
+                 torch.zeros((0,), dtype=torch.float32))
+        if self.num_valid_cubes == 0:
+            return empty
+
+        cs = self.cube_size
+        G = max(1, int(round(cs / resolution)))
+        ax = (torch.arange(G, device=self._device, dtype=self._dtype) + 0.5) * (cs / G)
+        gz, gy, gx = torch.meshgrid(ax, ax, ax, indexing="ij")
+        template = torch.stack([gx, gy, gz], dim=-1).reshape(-1, 3)      # (G^3, 3)
+
+        origins = self._origin_i[self._valid].to(self._dtype) * cs      # (V, 3)
+        pts_all: list[torch.Tensor] = []
+        dist_all: list[torch.Tensor] = []
+        chunk = max(1, (2 ** 21) // template.shape[0])                   # ~2M points per query
+        for i in range(0, origins.shape[0], chunk):
+            pts = (origins[i:i + chunk].unsqueeze(1) + template.unsqueeze(0)).reshape(-1, 3)
+            dist = self.query(pts)
+            keep = dist < iso
+            pts_all.append(pts[keep])
+            dist_all.append(dist[keep])
+
+        points = torch.cat(pts_all).float().cpu()
+        dist = torch.cat(dist_all).float().cpu()
+        if points.shape[0] > max_points:
+            sel = torch.linspace(0, points.shape[0] - 1, max_points).long()
+            points, dist = points[sel], dist[sel]
+        return points, dist
+
     # ------------------------------------------------------------------ #
     # Incremental mapping
     # ------------------------------------------------------------------ #

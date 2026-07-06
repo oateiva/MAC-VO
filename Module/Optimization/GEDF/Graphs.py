@@ -38,6 +38,18 @@ class GEDF_GraphInput(GraphInput):
     # points); the sparse landmarks travel in `points` as usual.
     map_insert_pos_Tw: torch.Tensor | None = None    # (M, 3)
     map_insert_cov_Tw: torch.Tensor | None = None    # (M, 3, 3)
+    # Set by get_graph_data (parent side) when a Rerun map snapshot is wanted
+    # for this frame; the child attaches it to GEDF_GraphOutput.
+    want_map_snapshot: bool = False
+
+
+@dataclass
+class GEDF_GraphOutput(GraphOutput):
+    # Near-surface sample of the online map (GEDFMapper.sample_surface), CPU
+    # float32 so it pickles cheaply across the parallel-worker result queue.
+    # None unless the corresponding GEDF_GraphInput requested a snapshot.
+    map_points: torch.Tensor | None = None           # (M, 3)
+    map_dist: torch.Tensor | None = None             # (M,)
 
 
 class GEDF_Registration(FactorGraph):

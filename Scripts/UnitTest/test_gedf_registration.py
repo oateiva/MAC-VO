@@ -134,6 +134,7 @@ def make_optimizer_config(graph_type: str, autodiff: bool, map_path: str | None,
         field=FIELD_NS,
         solver=SimpleNamespace(coarse_kernel_delta=3.0, coarse_steps=10,
                                fine_kernel_delta=0.5, fine_steps=10),
+        viz=SimpleNamespace(every=10, iso=0.10, resolution=0.10, max_points=100000),
     )
 
 
@@ -255,6 +256,31 @@ def test_cold_start_returns_init_motion(tmp_path):
     _, out = GEDF_PGO._optimize(context, gd)
     assert torch.allclose(out.motion.detach().double().reshape(-1),
                           init.tensor().reshape(-1))
+
+
+def test_map_snapshot_plumbing(scene_map_bin):
+    """want_map_snapshot must produce a picklable GEDF_GraphOutput snapshot
+    (cpu float32); without the request the fields stay None."""
+    from Module.Optimization.GEDF import GEDF_GraphOutput
+
+    cfg = make_optimizer_config("gedf+icp", False, scene_map_bin)
+    context = GEDF_PGO.init_context(cfg)
+
+    gd = make_graph_input(T_GT, perturbed_pose(T_GT, 2.0, 0.05), scene_registration_points())
+    gd.want_map_snapshot = True
+    _, out = GEDF_PGO._optimize(context, gd)
+    assert isinstance(out, GEDF_GraphOutput)
+    assert out.map_points is not None and out.map_dist is not None
+    assert out.map_points.shape[0] > 0
+    assert out.map_points.dtype == torch.float32 and not out.map_points.is_cuda
+    assert bool((out.map_dist < cfg.viz.iso).all())
+
+    out2 = pickle.loads(pickle.dumps(out))
+    assert torch.equal(out2.map_points, out.map_points)
+
+    gd.want_map_snapshot = False
+    _, out3 = GEDF_PGO._optimize(context, gd)
+    assert out3.map_points is None and out3.map_dist is None
 
 
 def test_registry_and_sequential_optimize(scene_map_bin):

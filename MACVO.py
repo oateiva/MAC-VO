@@ -162,10 +162,11 @@ if __name__ == "__main__":
         "Data": {"args": datacfg_dict, "end_idx": args.seq_to, "start_idx": args.seq_from},
     }
 
-    # Setup logging and visualization
+    # Setup logging and visualization. The .rrd file sink must be attached at
+    # init time (a trailing rr.save after streaming yields an empty file).
     if args.useRR:
         rr_plt.default_mode = "rerun"
-        rr_plt.init_connect(project_name)
+        rr_plt.init_connect(project_name, save_rrd=str(exp_space.path(f"{project_name}.rrd")))
 
     if hasattr(datacfg.args, "vslam") and datacfg.args.vslam:
         vslam_track = load_vslam_track(datacfg.args.vslam, entity_name=project_name)
@@ -218,9 +219,6 @@ if __name__ == "__main__":
 
     Timer.report()
     Timer.save_elapsed(exp_space.path("elapsed_time.json"))
-
-    if args.useRR:
-        rr.save(exp_space.path(f"{project_name}.rrd"))
 
     if not args.noeval:
         header, result = EvaluateSequences([str(exp_space.folder)], align=True, correct_scale=True ,align_origin=False, n_to_align=args.n_to_align)

@@ -7,6 +7,7 @@ from .Mapper import (
 )
 from .Graphs import (
     GEDF_GraphInput as GEDF_GraphInput,
+    GEDF_GraphOutput as GEDF_GraphOutput,
     GEDF_Registration as GEDF_Registration,
     Analytic_GEDF_Registration as Analytic_GEDF_Registration,
     GEDF_ICP as GEDF_ICP,
