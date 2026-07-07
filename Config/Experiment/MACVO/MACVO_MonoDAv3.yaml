@@ -115,6 +115,11 @@ Odometry:
       vectorize: true
       parallel: false
       graph_type: pose2point
+      # A hyperparameter sweep on EIVA plane_nose[40:200] found the defaults
+      # (huber_delta 0.1, huber_delta_prev 1.0, match_atol 1.0, prior_sigma
+      # 1e-4, max_iterations 20) optimal for this frontend — the tuned
+      # DAv2 combo (see MACVO_MonoDAv2.yaml) does NOT transfer (ATE RMSE
+      # 1.702 baseline vs 1.757 with the DAv2 combo).
 
 
 Datas: !include ../Common/DeepODO_mono_experiments.yaml

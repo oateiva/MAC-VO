@@ -121,6 +121,15 @@ Odometry:
       parallel: true
       graph_type: pose2point
       parallel_timeout_s: 1.0 # timeout for waiting for parallel optimization result, in seconds. Set to None to wait indefinitely.
+      # Hyperparameters below from a sweep on EIVA plane_nose[40:200] (Sim3
+      # scaled+aligned ATE RMSE 0.563 -> 0.512 on seed 0, 0.566 -> 0.496 on
+      # seed 1; sequential optimizer). Defaults were huber_delta 0.1,
+      # huber_delta_prev 1.0, match_atol 1.0, prior_sigma 1e-4.
+      huber_delta: 0.05       # robust kernel on pose->point factors
+      huber_delta_prev: 3.0   # robust kernel on prev-frame reobservation factor
+      match_atol: 2.0         # px tolerance for cross-frame keypoint association
+      prior_sigma: 0.001      # gauge prior noise on anchor poses
+      max_iterations: 20      # LM iteration cap
 
 Datas: !include ../Common/DeepODO_mono_experiments.yaml
 Preprocess: !include ../Common/Preprocess.yaml

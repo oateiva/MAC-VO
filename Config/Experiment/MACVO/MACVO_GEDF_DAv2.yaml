@@ -111,8 +111,10 @@ Odometry:
           cov_trace_gate: 0.0   # disabled for monocular depth (see DAv3 config header)
       field:
         weighting: mahalanobis
-        sigma: 0.30         # field-error floor (m); keeps the young online map from
-                            # outweighing the ICP factor (0.10 is fine for prebuilt maps)
+        sigma: 0.20         # field-error floor (m); keeps the young online map from
+                            # outweighing the ICP factor (0.10 is fine for prebuilt maps).
+                            # 0.20 from a sweep on EIVA plane_nose[40:200]: ATE RMSE
+                            # 1.247 -> 0.910 (seed 0), 1.125 -> 1.025 (seed 1) vs 0.30.
         oob_value_threshold: 19.0
         oob_residual: 5.0
         max_grad_norm: 10.0
