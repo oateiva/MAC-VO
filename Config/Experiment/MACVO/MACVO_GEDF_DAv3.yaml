@@ -60,6 +60,10 @@ Odometry:
     args:
       device: *device
       parallel: true
+      # DA3NESTED-giant is large; running depth, FlowFormer and the GEDF map all
+      # on one GPU OOMs a 24 GB card. Offload the depth model to a second GPU.
+      # Remove/comment this if you only have one GPU (and expect an OOM).
+      device_depth: cuda:1
       match:
         type: FlowFormerCovMatcher
         args:
