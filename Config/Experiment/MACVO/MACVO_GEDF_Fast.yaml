@@ -1,0 +1,124 @@
+#
+# MAC-VO Fast Mode (stereo, fp16/bf16 CUDAGraph frontend) with a backend that
+# relies purely on G-EDF scan-to-map registration (GEDF_PGO, graph_type
+# "gedf": point-to-distance-field residuals only, no ICP factor).
+#
+# Everything except the optimizer block matches MACVO_Fast.yaml. The mapper
+# block matches MACVO_GEDF.yaml (stereo), with cov_trace_gate written out
+# explicitly (it defaults to 0.0675 m^2 when omitted).
+#
+
+Common:
+  device: &device cuda
+
+Odometry:
+  name: MACVO-GEDF-Fast
+  args:
+    device: *device
+    edgewidth: 32
+    num_point: 200 # Upper bound of KPs in each frame
+    match_cov_default: 0.25
+    profile: false
+    mapping: true
+
+  cov:
+    obs:
+      type: MatchCovariance
+      args:
+        device: *device
+        kernel_size: 31
+        match_cov_default: 0.25
+        min_depth_cov: 0.05
+        min_flow_cov: 0.25
+
+  keypoint:
+    type: CovAwareSelector
+    args:
+      device: *device
+      kernel_size: 7
+      mask_width: 32
+      max_match_cov: 100.0
+      max_depth: 25.0
+      max_depth_cov: 0.005
+
+  mappoint:
+    type: MappingPointSelector
+    args:
+      device: *device
+      max_depth: 25.0
+      max_depth_cov: 0.005
+      mask_width: 32
+
+  frontend:
+    type: CUDAGraph_FlowFormerCovFrontend
+    args:
+      device: *device
+      weight: ./Model/MACVO_FrontendCov.pth
+      enc_dtype: fp16
+      dec_dtype: bf16
+      decoder_depth: 12
+      enforce_positive_disparity: false
+
+  motion:
+    type: StaticMotionModel
+    args:
+
+  outlier:
+    type: CovarianceSanityFilter
+    args:
+
+  postprocess:
+    type: MotionInterpolate
+    args:
+
+  keyframe:
+    type: AllKeyframe
+    args:
+
+  optimizer:
+    type: GEDF_PGO
+    args:
+      device: cpu           # solver device; the mapper has its own (map.online.device)
+      vectorize: true
+      parallel: true
+      autodiff: false       # analytic Jacobians (LM_analytic)
+      graph_type: gedf      # pure field registration (no ICP factor)
+      map:
+        source: online      # "prebuilt" localizes against map.path instead
+        path: ""            # GDF1 .bin path; only used when source is "prebuilt"
+        insert_keypoints: true
+        insert_dense: false
+        min_gaussians: 100  # field factor stays inert until the map has this many
+        online:
+          # Mapper values sweep-checked on plane_nose[80:160] (see
+          # Results/sweeps/REPORT_pure_gedf.md): no change beat these defaults
+          # on both seeds. cov_trace_gate 0 won on one seed (1.76 -> 1.01) but
+          # flipped on the other (1.37 -> 2.22) - not robust. Keep cube_size
+          # 1.0 and min_gaussians <= 100: larger values degenerate (map never
+          # becomes ready for the pure field factor).
+          device: *device
+          cube_size: 1.0
+          num_gaussians: 8
+          sample_points: 1000
+          budget_cubes_per_frame: 8
+          mae_target: 0.03
+          cov_trace_gate: 0.0675  # m^2 (= 3 * 0.15^2); 0 disables gating
+      field:
+        weighting: mahalanobis
+        sigma: 0.30         # field-error floor (m)
+        oob_value_threshold: 19.0
+        oob_residual: 5.0
+        max_grad_norm: 10.0
+      solver:
+        coarse_kernel_delta: 3.0
+        coarse_steps: 10
+        fine_kernel_delta: 0.5
+        fine_steps: 10
+      viz:                  # Rerun map visualization (active only with --useRR)
+        every: 10           # log a map snapshot every N keyframes; 0 = disabled
+        iso: 0.10           # keep sampled points with field value < iso (m)
+        resolution: 0.10    # sampling grid resolution (m)
+        max_points: 100000
+
+Datas: !include ../Common/DeepODO_stereo_experiments.yaml
+Preprocess: !include ../Common/Preprocess.yaml

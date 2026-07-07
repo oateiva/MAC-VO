@@ -106,7 +106,9 @@ Odometry:
           cube_size: 1.0
           num_gaussians: 8
           sample_points: 1000
-          budget_cubes_per_frame: 8
+          budget_cubes_per_frame: 8   # pure-gedf (graph_type "gedf") prefers 16:
+                                      # ATE 1.108->0.671 (s0), 0.968->0.698 (s1)
+                                      # on plane_nose[80:160]; untested for gedf+icp
           mae_target: 0.03
           cov_trace_gate: 0.0   # disabled for monocular depth (see DAv3 config header)
       field:
