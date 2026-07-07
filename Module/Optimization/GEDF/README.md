@@ -135,6 +135,42 @@ Residual weighting (`field.weighting`):
   putting the scalar field residual on the same m² footing as the ICP rows;
 * `fixed` — constant `field.sigma²`.
 
+### Alignment axis (`se3 | sim3 | sl4`)
+
+The camera-to-world mapping in both graphs is `SE3 ∘ Warp` (see `Alignment.py`),
+selected by the optional `alignment:` config block:
+
+* **`se3`** (default) — identity warp; bit-identical to the original behavior.
+  Right for stereo / metric depth.
+* **`sim3`** — uniform scale warp `exp(log_s)·p` on the camera points, absorbing
+  per-frame **monocular depth-scale bias**. A depth over-estimate by factor k is
+  recovered as `scale = 1/k`. Covariance pushforward picks up `s²·R Σ Rᵀ`.
+* **`sl4`** (experimental) — projective warp `dehomog(matrix_exp(Σ xᵢEᵢ)·homog(p))`
+  over a **9-dim complement basis of sl(4) disjoint from se(3)** (3 shears, 2
+  anisotropic scalings, 1 isotropic scale, 3 projective elations — the full
+  15-dim basis would duplicate the SE(3) DoF and need a gauge prior that fights
+  rigid updates). Absorbs affine/projective mono-depth distortion. Covariance
+  rotation uses the SE(3) rotation only (documented `I + O(|x|)` approximation).
+
+Semantics are **estimate + report**: the warp parameters are estimated jointly
+with the pose (with quadratic prior rows pulling them to identity;
+`prior_weight` = information, 1/σ²) and returned in `GEDF_GraphOutput`
+(`alignment_type`, `alignment_state`, `scale`) — with Rerun active the scale is
+logged at `/world/gedf_alignment/scale`. **Only the SE(3) component is written
+to the map** (the pose schema is a 7-float SE3 everywhere downstream).
+
+Constraints and honest notes:
+* sim3/sl4 require `autodiff: true` (the `Analytic_*` Jacobians are SE3-only;
+  `is_valid_config` enforces this).
+* The prior rows pass through the Huber kernel but sit in its quadratic region
+  (|x| ≪ the coarse delta), so the prior is effectively un-robustified.
+* On real monocular data the ICP target points inherit the map's scale, so sim3
+  corrects the frame's scale bias *relative to the map*; the field factor is the
+  cross-frame anchor. It does not recover global metric scale from nothing.
+* GTSAM and TwoFramePGO backends remain SE(3)-only (gtsam ships `Similarity3`
+  but no factors for it, and no SL(4); extending them means porting `Alignment`
+  into their graphs).
+
 ### `GEDF_PGO` (Optimizer.py)
 
 Implements the four `IOptimizer` methods. Per `_optimize` call (runs in the
@@ -205,6 +241,10 @@ optimizer:
       iso: 0.10                 # keep sampled points with field value < iso (m)
       resolution: 0.10          # sampling grid (m)
       max_points: 100000
+
+    alignment:                  # OPTIONAL (absent = se3; see "Alignment axis" above)
+      type: sim3                # se3 | sim3 | sl4 (sim3/sl4 require autodiff: true)
+      prior_weight: 100.0       # information (1/sigma^2) pulling the extra DoF to identity
 ```
 
 Ready-made configs:

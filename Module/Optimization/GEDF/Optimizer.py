@@ -15,6 +15,7 @@ Runs in the WORLD frame only (the map is world-anchored) - do not wrap this
 optimizer in a `Local_`-style frame transform.
 """
 import contextlib
+import typing as typ
 from types import SimpleNamespace
 
 import torch
@@ -86,7 +87,7 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
 
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
-        cls._enforce_config_spec(config, {
+        spec: dict = {
             "graph_type": lambda s: s in {"gedf", "gedf+icp"},
             "device": lambda v: isinstance(v, str) and (v == "cpu" or "cuda" in v),
             "vectorize": lambda b: isinstance(b, bool),
@@ -125,7 +126,20 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
                 "resolution": lambda v: isinstance(v, (int, float)) and v > 0,
                 "max_points": lambda n: isinstance(n, int) and n > 0,
             },
-        })
+        }
+        # Optional alignment block (default se3; existing configs stay valid).
+        if config is not None and hasattr(config, "alignment"):
+            align_spec: dict = {"type": lambda s: s in {"se3", "sim3", "sl4"}}
+            if hasattr(config.alignment, "prior_weight"):
+                align_spec["prior_weight"] = lambda v: isinstance(v, (int, float)) and v > 0
+            spec["alignment"] = align_spec
+        cls._enforce_config_spec(config, spec)
+
+        a_type = getattr(getattr(config, "alignment", None), "type", "se3") \
+            if config is not None else "se3"
+        if a_type != "se3" and config is not None and not config.autodiff:
+            raise ValueError(f"GEDF_PGO alignment '{a_type}' requires autodiff: true "
+                             "(analytic Jacobians are SE3-only)")
 
     @staticmethod
     def init_context(config) -> dict:
@@ -168,11 +182,22 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
                 "steps": steps,
             }
 
+        align_ns = getattr(config, "alignment", None)
+        alignment_cfg = SimpleNamespace(
+            type=getattr(align_ns, "type", "se3") if align_ns is not None else "se3",
+            prior_weight=float(getattr(align_ns, "prior_weight", 100.0))
+            if align_ns is not None else 100.0)
+        if alignment_cfg.type != "se3" and not config.autodiff:
+            # defense in depth for programmatically-built configs
+            raise ValueError(f"GEDF_PGO alignment '{alignment_cfg.type}' requires autodiff: true "
+                             "(analytic Jacobians are SE3-only)")
+
         return {
             "device": config.device,
             "pose_graph_class": PoseGraphClass,
             "graph_type": config.graph_type,
             "field_cfg": config.field,
+            "alignment_cfg": alignment_cfg,
             "viz_cfg": config.viz,
             "map": gedf_map,
             "insert_keypoints": config.map.insert_keypoints,
@@ -217,11 +242,13 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
                 return context, GEDF_GraphOutput(motion=pp.SE3(graph_data.init_motion),
                                                  frame_idx=graph_data.frame_idx,
                                                  from_idx=graph_data.from_idx,
-                                                 map_points=snap_pts, map_dist=snap_dist)
+                                                 map_points=snap_pts, map_dist=snap_dist,
+                                                 alignment_type=context["alignment_cfg"].type)
 
             # 4. Two-stage robust LM over the same graph module.
             graph: FactorGraph = context["pose_graph_class"](
-                graph_data, field=gedf_map, field_cfg=context["field_cfg"]) \
+                graph_data, field=gedf_map, field_cfg=context["field_cfg"],
+                alignment_cfg=context["alignment_cfg"]) \
                 .to(device=torch.device(context["device"]), dtype=torch.double)
             assert isinstance(graph, FactorGraph)
 
@@ -246,9 +273,13 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
                     scheduler.step(loss)
 
         out = graph.write_back()
+        align = typ.cast("GEDF_Registration", graph).alignment
         return context, GEDF_GraphOutput(motion=out.motion, frame_idx=out.frame_idx,
                                          from_idx=out.from_idx,
-                                         map_points=snap_pts, map_dist=snap_dist)
+                                         map_points=snap_pts, map_dist=snap_dist,
+                                         alignment_type=context["alignment_cfg"].type,
+                                         alignment_state=align.extra_state(),
+                                         scale=align.scale())
 
     def write_graph_data(self, result: GEDF_GraphOutput | None, global_map: VisualMap) -> None:
         if result is None:
@@ -256,10 +287,14 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
         to_pose = pp.SE3(result.motion[0].data.double().cpu())
         global_map.frames.data["pose"][result.frame_idx] = to_pose.float()
 
-        # Rerun map visualization (parent process owns the recording; no-op
-        # unless --useRR switched rr_plt into rerun mode).
+        # Rerun visualization (parent process owns the recording; no-op unless
+        # --useRR switched rr_plt into rerun mode).
         from Utility.Visualize import rr_plt
-        if result.map_points is not None and rr_plt.default_mode == "rerun":
+        if rr_plt.default_mode == "rerun" and \
+                (result.map_points is not None or result.scale is not None):
             import rerun as rr
             rr.set_time("frame_idx", sequence=int(result.frame_idx.flatten()[0]))
-            rr_plt.log_gedf_map("/world/gedf_map", result.map_points, result.map_dist)
+            if result.map_points is not None:
+                rr_plt.log_gedf_map("/world/gedf_map", result.map_points, result.map_dist)
+            if result.scale is not None:
+                rr.log("/world/gedf_alignment/scale", rr.Scalars(result.scale))

@@ -1,3 +1,9 @@
+from .Alignment import (
+    SE3Alignment as SE3Alignment,
+    Sim3Alignment as Sim3Alignment,
+    SL4Alignment as SL4Alignment,
+    make_alignment as make_alignment,
+)
 from .Config import GEDFConfig as GEDFConfig
 from .Export import read_gdf1 as read_gdf1, write_gdf1 as write_gdf1
 from .Mapper import (

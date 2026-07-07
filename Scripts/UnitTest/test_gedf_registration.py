@@ -88,11 +88,18 @@ def perturbed_pose(pose: pp.LieTensor, rot_deg: float, trans_m: float,
 
 def make_graph_input(pose_gt: pp.LieTensor, init_motion: pp.LieTensor,
                      points_w: torch.Tensor, obs_sigma: float = 1e-2,
-                     pts_sigma: float = 1e-2) -> GEDF_GraphInput:
-    """Fabricate observations consistent with `pose_gt` viewing `points_w`."""
+                     pts_sigma: float = 1e-2,
+                     warp_cam: typ.Callable[[torch.Tensor], torch.Tensor] | None = None
+                     ) -> GEDF_GraphInput:
+    """Fabricate observations consistent with `pose_gt` viewing `points_w`.
+
+    `warp_cam` distorts the MEASURED camera points (simulating biased monocular
+    depth) while `pos_Tw` keeps the true world points."""
     N = points_w.shape[0]
     p_c = pp.SE3(pose_gt).Inv().Act(points_w)
     assert bool((p_c[:, 0] > 0.1).all()), "all points must be in front of the camera"
+    if warp_cam is not None:
+        p_c = warp_cam(p_c)
 
     pixel2_uv = point2pixel_NED(p_c, K_INTRINSIC)
     pixel2_d = p_c[:, 0:1].clone()
@@ -125,8 +132,9 @@ def pose_error(est: torch.Tensor, gt: pp.LieTensor) -> tuple[float, float]:
 
 
 def make_optimizer_config(graph_type: str, autodiff: bool, map_path: str | None,
-                          source: str = "prebuilt") -> SimpleNamespace:
-    return SimpleNamespace(
+                          source: str = "prebuilt",
+                          alignment: SimpleNamespace | None = None) -> SimpleNamespace:
+    ns = SimpleNamespace(
         graph_type=graph_type, device="cpu", vectorize=True, parallel=False,
         autodiff=autodiff,
         map=SimpleNamespace(source=source, path=map_path, insert_keypoints=False,
@@ -136,6 +144,9 @@ def make_optimizer_config(graph_type: str, autodiff: bool, map_path: str | None,
                                fine_kernel_delta=0.5, fine_steps=10),
         viz=SimpleNamespace(every=10, iso=0.10, resolution=0.10, max_points=100000),
     )
+    if alignment is not None:   # attached only when given: default path tests true key absence
+        ns.alignment = alignment
+    return ns
 
 
 # --------------------------------------------------------------------------- #
@@ -281,6 +292,177 @@ def test_map_snapshot_plumbing(scene_map_bin):
     gd.want_map_snapshot = False
     _, out3 = GEDF_PGO._optimize(context, gd)
     assert out3.map_points is None and out3.map_dist is None
+
+
+# --------------------------------------------------------------------------- #
+# Alignment axis (se3 | sim3 | sl4)
+# --------------------------------------------------------------------------- #
+from Module.Optimization.GEDF import (             # noqa: E402
+    SE3Alignment, SL4Alignment, Sim3Alignment,
+)
+from Module.Optimization.GEDF.Alignment import _sl4_complement_basis  # noqa: E402
+
+
+def align_ns(a_type: str, prior_weight: float = 100.0) -> SimpleNamespace:
+    return SimpleNamespace(type=a_type, prior_weight=prior_weight)
+
+
+def test_alignment_basis_sanity():
+    E = _sl4_complement_basis()
+    assert E.shape == (9, 4, 4)
+    assert torch.allclose(E.diagonal(dim1=-2, dim2=-1).sum(-1),
+                          torch.zeros(9, dtype=E.dtype))
+
+    # se(3) generators as 4x4 (3 skew + 3 translation columns)
+    se3_gen = torch.zeros((6, 4, 4), dtype=torch.float64)
+    se3_gen[0, 1, 2], se3_gen[0, 2, 1] = -1.0, 1.0
+    se3_gen[1, 0, 2], se3_gen[1, 2, 0] = 1.0, -1.0
+    se3_gen[2, 0, 1], se3_gen[2, 1, 0] = -1.0, 1.0
+    for k in range(3):
+        se3_gen[3 + k, k, 3] = 1.0
+    stacked = torch.cat([se3_gen, E]).reshape(15, 16)
+    assert torch.linalg.matrix_rank(stacked) == 15   # disjoint + independent
+
+    # det(exp(sum x_i E_i)) == 1 for random coefficients
+    gen = torch.Generator().manual_seed(0)
+    x = torch.randn(9, dtype=torch.float64, generator=gen) * 0.1
+    W = torch.matrix_exp((x.view(9, 1, 1) * E).sum(0))
+    assert float(torch.det(W)) == pytest.approx(1.0, abs=1e-10)
+
+    # zero extras reproduce the identity warp exactly
+    pts = torch.randn((50, 3), dtype=torch.float64, generator=gen)
+    edges = torch.zeros(50, dtype=torch.long)
+    ref = SE3Alignment(pp.SE3(T_GT)).act(pts, edges)
+    for cls in (Sim3Alignment, SL4Alignment):
+        a = cls(pp.SE3(T_GT)).double()
+        torch.testing.assert_close(a.act(pts, edges), ref, atol=1e-12, rtol=0)
+
+
+def test_sim3_recovery_scaled_depth(scene_map_bin):
+    """Monocular depth over-estimated by 1.2x: sim3 recovers the pose AND the
+    scale correction; se3 on the same input stays biased."""
+    init = perturbed_pose(T_GT, 3.0, 0.1)
+    scaled = lambda p: 1.2 * p
+
+    cfg = make_optimizer_config("gedf+icp", True, scene_map_bin, alignment=align_ns("sim3"))
+    GEDF_PGO.is_valid_config(cfg)
+    ctx = GEDF_PGO.init_context(cfg)
+    gd = make_graph_input(T_GT, init, scene_registration_points(), warp_cam=scaled)
+    _, out = GEDF_PGO._optimize(ctx, gd)
+    rot, trans = pose_error(out.motion.detach(), T_GT)
+    assert rot < 0.5 and trans < 0.03, f"sim3: {rot:.3f} deg {trans:.4f} m"
+    assert out.alignment_type == "sim3"
+    assert out.alignment_state is not None
+    assert float(out.alignment_state.item()) == pytest.approx(-math.log(1.2), abs=0.03)
+    assert out.scale == pytest.approx(1 / 1.2, rel=0.03)
+
+    # the motivating contrast: rigid-only alignment cannot absorb the scale bias
+    cfg_se3 = make_optimizer_config("gedf+icp", True, scene_map_bin)
+    ctx_se3 = GEDF_PGO.init_context(cfg_se3)
+    gd2 = make_graph_input(T_GT, init, scene_registration_points(), warp_cam=scaled)
+    _, out_se3 = GEDF_PGO._optimize(ctx_se3, gd2)
+    _, trans_se3 = pose_error(out_se3.motion.detach(), T_GT)
+    assert trans_se3 > 0.05, f"se3 unexpectedly absorbed the scale bias ({trans_se3:.4f} m)"
+
+
+def test_sl4_recovery_sheared_depth(scene_map_bin):
+    """Mild shear distortion of the measured camera points: sl4 beats se3."""
+    S = torch.eye(3, dtype=torch.float64)
+    S[0, 1] = S[1, 0] = 0.05
+    shear = lambda p: p @ S.T
+    init = perturbed_pose(T_GT, 3.0, 0.1)
+
+    results = {}
+    for a_type in ("se3", "sl4"):
+        cfg = make_optimizer_config("gedf+icp", True, scene_map_bin,
+                                    alignment=align_ns(a_type) if a_type != "se3" else None)
+        ctx = GEDF_PGO.init_context(cfg)
+        gd = make_graph_input(T_GT, init, scene_registration_points(), warp_cam=shear)
+        _, out = GEDF_PGO._optimize(ctx, gd)
+        results[a_type] = (pose_error(out.motion.detach(), T_GT), out)
+
+    (_, trans_se3), _ = results["se3"]
+    (_, trans_sl4), out_sl4 = results["sl4"]
+    assert trans_sl4 < trans_se3, f"sl4 {trans_sl4:.4f} !< se3 {trans_se3:.4f}"
+    assert trans_sl4 < 0.05
+    assert out_sl4.alignment_state is not None
+    assert out_sl4.alignment_state.shape == (9,)
+    assert bool(torch.isfinite(out_sl4.alignment_state).all())
+
+
+def test_alignment_prior_holds_scale_on_clean_data(scene_map_bin):
+    """On unwarped data the prior must keep sim3 at s ~= 1 without hurting the pose."""
+    cfg = make_optimizer_config("gedf+icp", True, scene_map_bin, alignment=align_ns("sim3"))
+    ctx = GEDF_PGO.init_context(cfg)
+    gd = make_graph_input(T_GT, perturbed_pose(T_GT, 3.0, 0.1), scene_registration_points())
+    _, out = GEDF_PGO._optimize(ctx, gd)
+    rot, trans = pose_error(out.motion.detach(), T_GT)
+    assert rot < 0.5 and trans < 0.02
+    assert out.alignment_state is not None
+    assert abs(float(out.alignment_state.item())) < 0.02
+
+
+def test_alignment_config_validation(scene_map_bin):
+    # absent key: valid + defaults to se3 (back-compat)
+    cfg = make_optimizer_config("gedf+icp", False, scene_map_bin)
+    GEDF_PGO.is_valid_config(cfg)
+    assert GEDF_PGO.init_context(cfg)["alignment_cfg"].type == "se3"
+
+    # non-se3 alignment requires autodiff
+    with pytest.raises(ValueError, match="autodiff"):
+        GEDF_PGO.is_valid_config(
+            make_optimizer_config("gedf+icp", False, scene_map_bin, alignment=align_ns("sim3")))
+    # se3 alignment + analytic is fine
+    GEDF_PGO.is_valid_config(
+        make_optimizer_config("gedf+icp", False, scene_map_bin, alignment=align_ns("se3")))
+    # unknown type / bad prior weight rejected
+    with pytest.raises((ValueError, KeyError)):
+        GEDF_PGO.is_valid_config(
+            make_optimizer_config("gedf+icp", True, scene_map_bin, alignment=align_ns("sim4")))
+    with pytest.raises((ValueError, KeyError)):
+        GEDF_PGO.is_valid_config(
+            make_optimizer_config("gedf+icp", True, scene_map_bin,
+                                  alignment=align_ns("sim3", prior_weight=-1.0)))
+
+
+def test_alignment_output_plumbing(scene_map_bin):
+    cfg = make_optimizer_config("gedf+icp", True, scene_map_bin, alignment=align_ns("sim3"))
+    ctx = GEDF_PGO.init_context(cfg)
+    gd = make_graph_input(T_GT, perturbed_pose(T_GT, 2.0, 0.05), scene_registration_points())
+    _, out = GEDF_PGO._optimize(ctx, gd)
+
+    assert out.alignment_state is not None
+    assert out.alignment_state.dtype == torch.float32 and not out.alignment_state.is_cuda
+    out2 = pickle.loads(pickle.dumps(out))
+    torch.testing.assert_close(out2.alignment_state, out.alignment_state)
+    pp.SE3(out.motion[0].detach().double())        # write-back stays a valid 7-float SE3
+
+    cfg_se3 = make_optimizer_config("gedf+icp", True, scene_map_bin)
+    _, out_se3 = GEDF_PGO._optimize(GEDF_PGO.init_context(cfg_se3), gd)
+    assert out_se3.alignment_state is None and out_se3.scale is None
+    assert out_se3.alignment_type == "se3"
+
+
+def test_alignment_residual_shapes(scene_mapper):
+    """Locks the (N+P) residual/covariance bookkeeping for both graph types."""
+    gd = make_graph_input(T_GT, T_GT, scene_registration_points())
+    N = gd.observations.data["pixel2_uv"].shape[0]
+    w = 100.0
+
+    reg = GEDF_Registration(gd, field=scene_mapper, field_cfg=FIELD_NS,
+                            alignment_cfg=align_ns("sim3", w)).to(dtype=torch.double)
+    assert reg().shape == (N + 1, 1)
+    cov = reg.covariance_array()
+    assert cov.shape == (N + 1, 1, 1)
+    assert float(cov[-1, 0, 0]) == pytest.approx(1.0 / w)
+
+    hyb = GEDF_ICP(gd, field=scene_mapper, field_cfg=FIELD_NS,
+                   alignment_cfg=align_ns("sim3", w)).to(dtype=torch.double)
+    assert hyb().shape == (N + 1, 4)
+    cov4 = hyb.covariance_array()
+    assert cov4.shape == (N + 1, 4, 4)
+    expected = torch.diag(torch.tensor([1.0 / w, 1.0, 1.0, 1.0], dtype=cov4.dtype))
+    torch.testing.assert_close(cov4[-1], expected)
 
 
 def test_registry_and_sequential_optimize(scene_map_bin):
