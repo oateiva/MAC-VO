@@ -58,6 +58,12 @@ class GEDF_GraphOutput(GraphOutput):
     # None unless the corresponding GEDF_GraphInput requested a snapshot.
     map_points: torch.Tensor | None = None           # (M, 3)
     map_dist: torch.Tensor | None = None             # (M,)
+    # GMM components of the map (GEDFMapper.gaussians), CPU float32; None
+    # unless a snapshot was requested AND viz.gaussians is enabled.
+    map_gauss_means: torch.Tensor | None = None      # (N, 3)
+    map_gauss_sigmas: torch.Tensor | None = None     # (N, 3) 1-sigma per-axis extents
+    map_gauss_weights: torch.Tensor | None = None    # (N,)  signed amplitudes
+    map_gauss_mae: torch.Tensor | None = None        # (N,)  per-cube fit MAE, broadcast
     # Alignment diagnostics ("estimate + report"): the warp parameters
     # estimated jointly with the pose. The pose in `motion` is always the pure
     # SE(3) component.

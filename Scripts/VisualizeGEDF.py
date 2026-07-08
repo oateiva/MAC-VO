@@ -1,11 +1,14 @@
 """
-Visualize a G-EDF map (GDF1 .bin) in Rerun as a near-surface point cloud.
+Visualize a G-EDF map (GDF1 .bin) in Rerun as a near-surface point cloud,
+optionally overlaid with the GMM components as confidence-encoded ellipsoids
+(hue = cube fit MAE, alpha = |weight|, magenta = negative/carving components).
 
 Works on maps produced by the G-EDF C++ trainer (e.g. plane_nose_model.bin) and
 on maps exported from a MAC-VO run via GEDFMapper.export_gdf1.
 
 Usage:
     python Scripts/VisualizeGEDF.py --map D:/path/to/map.bin
+    python Scripts/VisualizeGEDF.py --map map.bin --gaussians --n_sigma 1.5
     python Scripts/VisualizeGEDF.py --map map.bin --iso 0.05 --resolution 0.05 --save map.rrd
 """
 import argparse
@@ -26,6 +29,13 @@ def main() -> None:
     parser.add_argument("--resolution", type=float, default=0.05,
                         help="Sampling grid resolution (m)")
     parser.add_argument("--max_points", type=int, default=2_000_000)
+    parser.add_argument("--gaussians", action="store_true",
+                        help="Also render GMM components as ellipsoids "
+                             "(hue = cube MAE, alpha = |weight|, magenta = negative)")
+    parser.add_argument("--n_sigma", type=float, default=1.0,
+                        help="Ellipsoid half-size = n_sigma * per-axis sigma")
+    parser.add_argument("--max_gaussians", type=int, default=200_000,
+                        help="Cap on rendered gaussians (top-|weight| kept)")
     parser.add_argument("--save", type=str, default=None,
                         help="Write an .rrd file instead of spawning the viewer")
     parser.add_argument("--device", type=str,
@@ -50,6 +60,12 @@ def main() -> None:
 
     rr_plt.default_mode = "rerun"
     rr_plt.log_gedf_map("/world/gedf_map", points, dist, radius=args.resolution / 3)
+    if args.gaussians:
+        means, sigmas, weights, mae = mapper.gaussians(max_gaussians=args.max_gaussians)
+        print(f"[GEDF] rendering {means.shape[0]} gaussians "
+              f"({int((weights < 0).sum())} negative) at {args.n_sigma:.1f} sigma")
+        rr_plt.log_gedf_gaussians("/world/gedf_map/gaussians", means, sigmas, weights,
+                                  mae, n_sigma=args.n_sigma)
     if args.save is not None:
         print(f"[GEDF] wrote {args.save}")
 

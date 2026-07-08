@@ -116,6 +116,9 @@ Odometry:
         iso: 0.10           # keep sampled points with field value < iso (m)
         resolution: 0.10    # sampling grid resolution (m)
         max_points: 100000
+        gaussians: false    # also snapshot GMM components as confidence ellipsoids
+        n_sigma: 1.0        # ellipsoid half-size = n_sigma * per-axis sigma
+        max_gaussians: 20000  # per-snapshot cap (top-|weight| kept)
 
 Datas: !include ../Common/DeepODO_stereo_experiments.yaml
 Preprocess: !include ../Common/Preprocess.yaml

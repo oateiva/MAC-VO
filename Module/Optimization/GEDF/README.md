@@ -87,6 +87,10 @@ key tensor + `searchsorted` serves fully batched queries.
 * `sample_surface(resolution, iso, max_points)` — near-surface point cloud of
   the field (grid-sample valid cubes, keep `d̂ < iso`); shared by the Rerun
   live visualization and `Scripts/VisualizeGEDF.py`.
+* `gaussians(max_gaussians)` — all valid GMM components as flat CPU tensors
+  `(means, sigmas, weights, cube_mae)`; `sigmas` are the per-axis 1-sigma
+  extents (`p²`, axis-aligned — the model has no rotation), `weights` are the
+  signed amplitudes. Feeds the ellipsoid visualization.
 * `from_gdf1(path)` / `export_gdf1(path)` — load a pre-built map (frozen) /
   write the current map, byte-compatible with G-EDF's visualization tools
   (`visualize_slice.py`, `visualize_3d.py`, `gaussian_to_ply`).
@@ -167,9 +171,10 @@ Constraints and honest notes:
 * On real monocular data the ICP target points inherit the map's scale, so sim3
   corrects the frame's scale bias *relative to the map*; the field factor is the
   cross-frame anchor. It does not recover global metric scale from nothing.
-* GTSAM and TwoFramePGO backends remain SE(3)-only (gtsam ships `Similarity3`
-  but no factors for it, and no SL(4); extending them means porting `Alignment`
-  into their graphs).
+* The GTSAM backend's `pose2point` graph supports the same alignment axis via
+  custom warped pose-to-point factors (`Utility/GTSAM_Utils.py`, analytic
+  Jacobians incl. the matrix-exponential Frechet derivative for sl4); the GTSAM
+  `isam` graph and TwoFramePGO remain SE(3)-only.
 
 ### `GEDF_PGO` (Optimizer.py)
 
@@ -241,6 +246,9 @@ optimizer:
       iso: 0.10                 # keep sampled points with field value < iso (m)
       resolution: 0.10          # sampling grid (m)
       max_points: 100000
+      gaussians: false          # OPTIONAL: also snapshot GMM components as ellipsoids
+      n_sigma: 1.0              # OPTIONAL: ellipsoid half-size = n_sigma * sigma_axis
+      max_gaussians: 20000      # OPTIONAL: per-snapshot cap (top-|weight| kept)
 
     alignment:                  # OPTIONAL (absent = se3; see "Alignment axis" above)
       type: sim3                # se3 | sim3 | sl4 (sim3/sl4 require autodiff: true)
@@ -263,10 +271,19 @@ map appears as a near-surface point cloud at `/world/gedf_map`, refreshed every
 in the worker and shipped over the result queue; there is zero overhead when
 Rerun is off.
 
+With `viz.gaussians: true` the GMM components themselves are additionally
+logged as axis-aligned wireframe ellipsoids under
+`/world/gedf_map/gaussians/{pos,neg}` (separate entities so each population
+can be toggled). Confidence encoding: **hue** = the cube's fit MAE (cividis,
+dark = trustworthy), **alpha** = normalized |weight| (faint = low-amplitude
+component), **magenta** = negative ("carving") components. Half-sizes are
+`n_sigma ×` the per-axis 1-sigma extents.
+
 **Offline** (any GDF1 map — from the C++ trainer or `export_gdf1`):
 
 ```bash
-python Scripts/VisualizeGEDF.py --map path/to/map.bin [--iso 0.05] [--resolution 0.05] [--save out.rrd]
+python Scripts/VisualizeGEDF.py --map path/to/map.bin [--iso 0.05] [--resolution 0.05] \
+    [--gaussians] [--n_sigma 1.0] [--max_gaussians 200000] [--save out.rrd]
 ```
 
 ## 5. Results

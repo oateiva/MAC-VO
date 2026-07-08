@@ -188,6 +188,52 @@ class Rerun_Visualizer:
 
     @register
     @staticmethod
+    def log_gedf_gaussians(rerun_path: str, means: torch.Tensor, sigmas: torch.Tensor,
+                           weights: torch.Tensor, cube_mae: torch.Tensor,
+                           n_sigma: float = 1.0):
+        """
+        Log G-EDF GMM components (see GEDFMapper.gaussians) as axis-aligned
+        wireframe ellipsoids with half-sizes = n_sigma * sigmas.
+
+        Confidence encoding:
+        - hue  = per-cube fit MAE via cividis (dark = low MAE = trustworthy;
+          deliberately not viridis, which log_gedf_map uses for distance),
+        - alpha = normalized |weight| (faint = low-amplitude component),
+        - sign  = entity split: positive components at `{path}/pos`, negative
+          ("carving") components at `{path}/neg` in fixed magenta — separate
+          entities so each population can be toggled in the viewer.
+        Empty populations are logged as empty so stale instances clear.
+        """
+        assert rr is not None
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import Normalize
+
+        mu = means.detach().cpu().numpy()
+        half = n_sigma * sigmas.detach().cpu().numpy()
+        w = weights.detach().cpu().numpy()
+        mae = cube_mae.detach().cpu().numpy()
+
+        if mu.shape[0] == 0:
+            for sub in ("/pos", "/neg"):
+                rr.log(rerun_path + sub, rr.Ellipsoids3D(half_sizes=np.zeros((0, 3))))
+            return
+
+        w_abs = np.abs(w)
+        alpha = 0.3 + 0.7 * np.clip(w_abs / max(float(np.quantile(w_abs, 0.95)), 1e-9), 0., 1.)
+        norm = Normalize(vmin=0.0, vmax=max(float(np.quantile(mae, 0.95)), 1e-6), clip=True)
+        rgba = plt.cm.cividis(norm(mae))    # type: ignore
+        rgba[..., 3] = alpha
+        neg = w < 0
+        rgba[neg, :3] = np.array([200, 30, 200]) / 255.0
+        rgba_u8 = (rgba * 255).round().astype(np.uint8)
+
+        for sub, mask in (("/pos", ~neg), ("/neg", neg)):
+            rr.log(rerun_path + sub, rr.Ellipsoids3D(
+                centers=mu[mask], half_sizes=half[mask], colors=rgba_u8[mask],
+                fill_mode=rr.components.FillMode.MajorWireframe))
+
+    @register
+    @staticmethod
     def log_image(rerun_path: str, image: torch.Tensor | np.ndarray):
         assert rr is not None
         if isinstance(image, torch.Tensor): np_image = image.cpu().numpy()

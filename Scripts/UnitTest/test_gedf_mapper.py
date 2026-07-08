@@ -304,6 +304,59 @@ def test_sample_surface():
     assert empty_pts.shape == (0, 3) and empty_dist.shape == (0,)
 
 
+def test_gaussians_accessor():
+    """gaussians() must expose exactly the valid, non-padding components as CPU
+    float32 (means, sigmas=p**2, signed weights, broadcast cube MAE)."""
+    # Fitted map: counts, dtypes, MAE broadcast.
+    mapper = make_mapper()
+    mapper.insert(sample_plane(n=5000, extent=2.0, z=0.5).float())
+    mapper.flush()
+
+    means, sigmas, weights, mae = mapper.gaussians()
+    n = mapper.num_valid_gaussians
+    assert means.shape == (n, 3) and sigmas.shape == (n, 3)
+    assert weights.shape == (n,) and mae.shape == (n,)
+    for t in (means, sigmas, weights, mae):
+        assert t.dtype == torch.float32 and not t.is_cuda
+    assert bool((sigmas > 0).all())
+    # every component's MAE is one of the valid cubes' MAE values
+    cube_maes = mapper._mae[mapper._valid].float()
+    assert bool(torch.isin(mae, cube_maes).all())
+
+    # cap keeps the top-|weight| components
+    _, _, w_cap, _ = mapper.gaussians(max_gaussians=2)
+    assert w_cap.shape == (2,)
+    assert bool((w_cap.abs() >= weights.abs().sort(descending=True).values[1] - 1e-6).all())
+
+    # padding + invalid-cube filtering on a hand-built map
+    hand = make_mapper()
+    K = hand.cfg.num_gaussians
+    h_means = torch.zeros((2, K, 3))
+    h_means[0, :3] = torch.tensor([[.1, .2, .3], [.4, .5, .6], [.7, .8, .9]])
+    h_p = torch.zeros((2, K, 3))
+    h_p[0, :3] = 0.3
+    h_w = torch.zeros((2, K))
+    h_w[0, :3] = torch.tensor([1.0, -0.5, 0.25])
+    hand._append_cubes(
+        origin_i=torch.tensor([[0, 0, 0], [1, 0, 0]], dtype=torch.int64),
+        means=h_means, p_sigma=h_p, weights=h_w,
+        n_gauss=torch.tensor([3, K], dtype=torch.int64),
+        mae=torch.tensor([0.01, 0.02]), std=torch.tensor([0.005, 0.005]),
+        valid=torch.tensor([True, False]),
+    )
+    m2, s2, w2, mae2 = hand.gaussians()
+    assert m2.shape == (3, 3)                                    # invalid cube + padding excluded
+    torch.testing.assert_close(m2, h_means[0, :3])
+    torch.testing.assert_close(s2, torch.full((3, 3), 0.3 ** 2))  # sigma = p**2
+    torch.testing.assert_close(w2, h_w[0, :3])                   # sign preserved
+    assert bool((mae2 == 0.01).all())
+
+    # empty map returns empty tensors
+    e_m, e_s, e_w, e_mae = make_mapper().gaussians()
+    assert e_m.shape == (0, 3) and e_s.shape == (0, 3)
+    assert e_w.shape == (0,) and e_mae.shape == (0,)
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
 def test_cpu_cuda_parity():
     """Same seed on both devices must give equivalent map QUALITY. Bitwise

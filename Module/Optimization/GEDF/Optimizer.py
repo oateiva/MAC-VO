@@ -6,7 +6,13 @@ from a GDF1 .bin for validation).
 Per `_optimize` call (runs in the spawned worker when `parallel: true`):
   1. insert the frame pair's new landmarks into the map (they are anchored at
      the PREVIOUS, already-optimized keyframe pose, so inserting before the
-     solve is safe and never double-inserts),
+     solve is safe and never double-inserts). With `alignment: sim3` the scale
+     estimated by the PREVIOUS solve is applied first (about the previous
+     camera center) - those landmarks come from the previous frame's depth,
+     whose scale correction is exactly what that solve estimated. This keeps
+     the map (and the ICP rows, which share the same tensors) scale-consistent
+     with the poses being written back; without it, monocular depth-scale
+     drift accumulates in the map as double surfaces.
   2. refit a budgeted number of dirty map cubes,
   3. solve the pose with a two-stage (coarse -> fine robust kernel) LM over the
      selected factor graph, mirroring G-EDF-Loc's two-stage Ceres solve.
@@ -15,6 +21,7 @@ Runs in the WORLD frame only (the map is world-anchored) - do not wrap this
 optimizer in a `Local_`-style frame transform.
 """
 import contextlib
+import math
 import typing as typ
 from types import SimpleNamespace
 
@@ -42,6 +49,37 @@ from .Graphs import (
     GEDF_GraphInput, GEDF_GraphOutput, GEDF_ICP, GEDF_Registration,
 )
 from .Mapper import GEDFMapper
+
+
+# Sim(3) feed-forward controller (step 0 of `_optimize`): the scale applied to
+# incoming landmarks is a gated, damped state - never a single solve's raw
+# estimate. Feeding raw estimates forward is unstable: one diverged solve (or a
+# genuine depth-scale transient, e.g. plane_nose[128:140]) shrinks the next
+# insertion about the camera center, the shrunken ICP targets pull the next
+# estimate lower, and within ~10 frames the map and warp collapse to a point
+# (scale -> 1e-3, frozen trajectory).
+_ALIGN_FF_ACCEPT = (0.5, 2.0)   # reject solve estimates outside this range
+_ALIGN_FF_ALPHA = 0.3           # log-space EMA step for accepted estimates
+
+
+def _update_align_scale_state(state: float | None, estimate: float | None) -> float | None:
+    """Advance the feed-forward scale state with one solve's estimate.
+
+    Non-finite or out-of-accept-range estimates leave the state untouched
+    (death-spiral guard); accepted ones move it by a log-space EMA step, so the
+    applied correction tracks sustained depth-scale drift but a short transient
+    only nudges it."""
+    if estimate is None or not math.isfinite(estimate):
+        return state
+    lo, hi = _ALIGN_FF_ACCEPT
+    if not (lo <= estimate <= hi):
+        from Utility.PrettyPrint import Logger
+        Logger.write("warn", f"GEDF_PGO: sim3 scale estimate {estimate:.4f} outside "
+                             f"accept range [{lo}, {hi}]; feed-forward state kept")
+        return state
+    prev = 1.0 if state is None else state
+    return math.exp((1.0 - _ALIGN_FF_ALPHA) * math.log(prev)
+                    + _ALIGN_FF_ALPHA * math.log(estimate))
 
 
 class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
@@ -127,6 +165,17 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
                 "max_points": lambda n: isinstance(n, int) and n > 0,
             },
         }
+        # Optional ellipsoid-layer keys (absent = points-only, current behavior).
+        viz_ns = getattr(config, "viz", None) if config is not None else None
+        if viz_ns is not None:
+            optional_viz = {
+                "gaussians": lambda b: isinstance(b, bool),
+                "n_sigma": lambda v: isinstance(v, (int, float)) and v > 0,
+                "max_gaussians": lambda n: isinstance(n, int) and n > 0,
+            }
+            for key, check in optional_viz.items():
+                if hasattr(viz_ns, key):
+                    spec["viz"][key] = check
         # Optional alignment block (default se3; existing configs stay valid).
         if config is not None and hasattr(config, "alignment"):
             align_spec: dict = {"type": lambda s: s in {"se3", "sim3", "sl4"}}
@@ -198,7 +247,18 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
             "graph_type": config.graph_type,
             "field_cfg": config.field,
             "alignment_cfg": alignment_cfg,
-            "viz_cfg": config.viz,
+            # Gated + damped sim3 feed-forward state (_update_align_scale_state);
+            # applied to each call's landmarks before they reach the map / ICP
+            # rows (step 1 of the module docstring). None until the first
+            # accepted sim3 estimate.
+            "align_scale_prev": None,
+            # Normalized so the worker never needs getattr defaults.
+            "viz_cfg": SimpleNamespace(
+                every=config.viz.every, iso=config.viz.iso,
+                resolution=config.viz.resolution, max_points=config.viz.max_points,
+                gaussians=bool(getattr(config.viz, "gaussians", False)),
+                n_sigma=float(getattr(config.viz, "n_sigma", 1.0)),
+                max_gaussians=int(getattr(config.viz, "max_gaussians", 20_000))),
             "map": gedf_map,
             "insert_keypoints": config.map.insert_keypoints,
             "insert_dense": config.map.insert_dense,
@@ -215,6 +275,29 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
         with Timer.CPUTimingContext("GEDF_PGO"), gpu_ctx:
             gedf_map: GEDFMapper = context["map"]
 
+            # 0. Apply the previous solve's sim3 scale to this call's landmarks
+            #    (module docstring, step 1). They were back-projected from the
+            #    previous frame's depth at its optimized pose, so the correction
+            #    is a uniform scaling about that camera center. Rebinding the
+            #    dict entries is local: `points` comes out of fancy indexing in
+            #    VisualMap.get_match2point, never a view of the global map.
+            s_prev: float | None = context.get("align_scale_prev")
+            if s_prev is not None and context["alignment_cfg"].type == "sim3":
+                anchor = pp.SE3(graph_data.from_pose).translation()      # (1, 3)
+                if len(graph_data.points) > 0:
+                    pos = graph_data.points.data["pos_Tw"]
+                    graph_data.points.data["pos_Tw"] = \
+                        anchor.to(pos.dtype) + s_prev * (pos - anchor.to(pos.dtype))
+                    graph_data.points.data["cov_Tw"] = \
+                        (s_prev * s_prev) * graph_data.points.data["cov_Tw"]
+                if graph_data.map_insert_pos_Tw is not None:
+                    pos = graph_data.map_insert_pos_Tw
+                    graph_data.map_insert_pos_Tw = \
+                        anchor.to(pos.dtype) + s_prev * (pos - anchor.to(pos.dtype))
+                    if graph_data.map_insert_cov_Tw is not None:
+                        graph_data.map_insert_cov_Tw = \
+                            (s_prev * s_prev) * graph_data.map_insert_cov_Tw
+
             # 1. Feed the map (landmarks are anchored at the previous, already
             #    optimized pose - see module docstring).
             if not gedf_map.frozen:
@@ -229,12 +312,17 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
                 gedf_map.refit(camera_pos=cam_pos)
 
             # Rerun visualization snapshot (requested by the parent process)
+            viz = context["viz_cfg"]
             snap_pts: torch.Tensor | None = None
             snap_dist: torch.Tensor | None = None
+            gauss_kw: dict = {}
             if graph_data.want_map_snapshot and gedf_map.is_ready:
-                viz = context["viz_cfg"]
                 snap_pts, snap_dist = gedf_map.sample_surface(
                     resolution=viz.resolution, iso=viz.iso, max_points=viz.max_points)
+                if viz.gaussians:
+                    g_mu, g_sig, g_w, g_mae = gedf_map.gaussians(max_gaussians=viz.max_gaussians)
+                    gauss_kw = dict(map_gauss_means=g_mu, map_gauss_sigmas=g_sig,
+                                    map_gauss_weights=g_w, map_gauss_mae=g_mae)
 
             # 3. Cold start / degenerate input guards.
             no_obs = len(graph_data.observations) == 0
@@ -243,7 +331,8 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
                                                  frame_idx=graph_data.frame_idx,
                                                  from_idx=graph_data.from_idx,
                                                  map_points=snap_pts, map_dist=snap_dist,
-                                                 alignment_type=context["alignment_cfg"].type)
+                                                 alignment_type=context["alignment_cfg"].type,
+                                                 **gauss_kw)
 
             # 4. Two-stage robust LM over the same graph module.
             graph: FactorGraph = context["pose_graph_class"](
@@ -274,12 +363,19 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
 
         out = graph.write_back()
         align = typ.cast("GEDF_Registration", graph).alignment
+        if context["alignment_cfg"].type == "sim3":
+            # feed-forward for the next call's landmark insertion (step 0),
+            # gated + damped by _update_align_scale_state; sl4's scale() is a
+            # diagnostic, not a uniform warp - never stored.
+            context["align_scale_prev"] = _update_align_scale_state(
+                context.get("align_scale_prev"), align.scale())
         return context, GEDF_GraphOutput(motion=out.motion, frame_idx=out.frame_idx,
                                          from_idx=out.from_idx,
                                          map_points=snap_pts, map_dist=snap_dist,
                                          alignment_type=context["alignment_cfg"].type,
                                          alignment_state=align.extra_state(),
-                                         scale=align.scale())
+                                         scale=align.scale(),
+                                         **gauss_kw)
 
     def write_graph_data(self, result: GEDF_GraphOutput | None, global_map: VisualMap) -> None:
         if result is None:
@@ -291,10 +387,17 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
         # --useRR switched rr_plt into rerun mode).
         from Utility.Visualize import rr_plt
         if rr_plt.default_mode == "rerun" and \
-                (result.map_points is not None or result.scale is not None):
+                (result.map_points is not None or result.map_gauss_means is not None
+                 or result.scale is not None):
             import rerun as rr
             rr.set_time("frame_idx", sequence=int(result.frame_idx.flatten()[0]))
             if result.map_points is not None:
                 rr_plt.log_gedf_map("/world/gedf_map", result.map_points, result.map_dist)
+            if result.map_gauss_means is not None:
+                rr_plt.log_gedf_gaussians(
+                    "/world/gedf_map/gaussians",
+                    result.map_gauss_means, result.map_gauss_sigmas,
+                    result.map_gauss_weights, result.map_gauss_mae,
+                    n_sigma=float(getattr(self.config.viz, "n_sigma", 1.0)))
             if result.scale is not None:
                 rr.log("/world/gedf_alignment/scale", rr.Scalars(result.scale))

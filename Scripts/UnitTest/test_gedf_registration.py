@@ -294,6 +294,56 @@ def test_map_snapshot_plumbing(scene_map_bin):
     assert out3.map_points is None and out3.map_dist is None
 
 
+def test_gaussian_snapshot_plumbing(scene_map_bin):
+    """map_gauss_* fields must be populated iff viz.gaussians is enabled AND a
+    snapshot was requested; defaults (no key) keep the current points-only
+    behavior; the validator rejects bad values for the optional keys."""
+    cfg = make_optimizer_config("gedf+icp", False, scene_map_bin)
+    cfg.viz.gaussians = True
+    cfg.viz.n_sigma = 2.0
+    cfg.viz.max_gaussians = 500
+    GEDF_PGO.is_valid_config(cfg)
+    context = GEDF_PGO.init_context(cfg)
+
+    gd = make_graph_input(T_GT, perturbed_pose(T_GT, 2.0, 0.05), scene_registration_points())
+    gd.want_map_snapshot = True
+    _, out = GEDF_PGO._optimize(context, gd)
+    assert out.map_gauss_means is not None and out.map_gauss_sigmas is not None
+    assert out.map_gauss_weights is not None and out.map_gauss_mae is not None
+    n = out.map_gauss_means.shape[0]
+    assert 0 < n <= 500
+    assert out.map_gauss_sigmas.shape == (n, 3)
+    assert out.map_gauss_weights.shape == (n,) and out.map_gauss_mae.shape == (n,)
+    for t in (out.map_gauss_means, out.map_gauss_sigmas,
+              out.map_gauss_weights, out.map_gauss_mae):
+        assert t.dtype == torch.float32 and not t.is_cuda
+    out2 = pickle.loads(pickle.dumps(out))
+    assert torch.equal(out2.map_gauss_means, out.map_gauss_means)
+
+    # no snapshot request -> gaussian fields stay None
+    gd.want_map_snapshot = False
+    _, out3 = GEDF_PGO._optimize(context, gd)
+    assert out3.map_gauss_means is None and out3.map_gauss_weights is None
+
+    # back-compat: config without the optional keys -> points only
+    cfg_plain = make_optimizer_config("gedf+icp", False, scene_map_bin)
+    GEDF_PGO.is_valid_config(cfg_plain)
+    ctx_plain = GEDF_PGO.init_context(cfg_plain)
+    gd.want_map_snapshot = True
+    _, out4 = GEDF_PGO._optimize(ctx_plain, gd)
+    assert out4.map_points is not None and out4.map_gauss_means is None
+
+    # validator rejects bad optional values
+    cfg_bad = make_optimizer_config("gedf+icp", False, scene_map_bin)
+    cfg_bad.viz.n_sigma = -1.0
+    with pytest.raises((ValueError, KeyError)):
+        GEDF_PGO.is_valid_config(cfg_bad)
+    cfg_bad2 = make_optimizer_config("gedf+icp", False, scene_map_bin)
+    cfg_bad2.viz.gaussians = "yes"
+    with pytest.raises((ValueError, KeyError)):
+        GEDF_PGO.is_valid_config(cfg_bad2)
+
+
 # --------------------------------------------------------------------------- #
 # Alignment axis (se3 | sim3 | sl4)
 # --------------------------------------------------------------------------- #
@@ -388,6 +438,79 @@ def test_sl4_recovery_sheared_depth(scene_map_bin):
     assert out_sl4.alignment_state is not None
     assert out_sl4.alignment_state.shape == (9,)
     assert bool(torch.isfinite(out_sl4.alignment_state).all())
+
+
+def test_sim3_scale_feedforward_at_insertion(scene_map_bin):
+    """The damped scale state from one solve must be applied to the NEXT
+    call's landmarks (scaled about the previous camera center, covariance
+    x s^2) before they reach the map / ICP rows; se3 must leave them
+    untouched."""
+    from Module.Optimization.GEDF.Optimizer import _ALIGN_FF_ALPHA
+
+    cfg = make_optimizer_config("gedf+icp", True, scene_map_bin,
+                                alignment=align_ns("sim3"))
+    ctx = GEDF_PGO.init_context(cfg)
+    assert ctx["align_scale_prev"] is None
+
+    # solve 1: depth over-estimated by 1.2x -> estimate ~= 1/1.2 enters the
+    # state through one log-space EMA step from 1.0
+    gd = make_graph_input(T_GT, perturbed_pose(T_GT, 3.0, 0.1),
+                          scene_registration_points(), warp_cam=lambda p: 1.2 * p)
+    ctx, out = GEDF_PGO._optimize(ctx, gd)
+    assert out.scale == pytest.approx(1 / 1.2, rel=0.05)
+    s = ctx["align_scale_prev"]
+    assert s == pytest.approx((1 / 1.2) ** _ALIGN_FF_ALPHA, rel=0.05)
+
+    # solve 2: landmarks must arrive scaled about the previous camera center.
+    # Snapshot the anchor BEFORE the solve: pose2opt shares storage with
+    # init_motion (= T_GT here), so the LM update mutates T_GT in place.
+    pts_raw = scene_registration_points(seed=2)
+    gd2 = make_graph_input(T_GT, T_GT, pts_raw)
+    cov_raw = gd2.points.data["cov_Tw"].clone()
+    anchor = T_GT.translation().to(pts_raw.dtype).clone()
+    ctx, _ = GEDF_PGO._optimize(ctx, gd2)
+    torch.testing.assert_close(gd2.points.data["pos_Tw"],
+                               anchor + s * (pts_raw - anchor))
+    torch.testing.assert_close(gd2.points.data["cov_Tw"], s * s * cov_raw)
+
+    # se3 config: no scale channel, landmarks stay bit-identical
+    ctx_se3 = GEDF_PGO.init_context(
+        make_optimizer_config("gedf+icp", True, scene_map_bin))
+    gd3 = make_graph_input(T_GT, T_GT, pts_raw)
+    ctx_se3, _ = GEDF_PGO._optimize(ctx_se3, gd3)
+    assert ctx_se3["align_scale_prev"] is None
+    assert torch.equal(gd3.points.data["pos_Tw"], pts_raw)
+
+
+def test_sim3_feedforward_state_gating():
+    """The feed-forward state must survive diverged solves and track sustained
+    drift without collapsing (regression: plane_nose scale death spiral, where
+    raw feed-forward of a transient drove the map and warp to scale ~1e-3)."""
+    from Module.Optimization.GEDF.Optimizer import (
+        _ALIGN_FF_ALPHA, _update_align_scale_state,
+    )
+
+    # first accepted estimate: one EMA step away from identity
+    s = _update_align_scale_state(None, 0.8)
+    assert s == pytest.approx(0.8 ** _ALIGN_FF_ALPHA)
+
+    # out-of-range / non-finite estimates leave the state untouched
+    for bad in (0.01, 50.0, float("nan"), float("inf"), None):
+        assert _update_align_scale_state(s, bad) == s
+    assert _update_align_scale_state(None, 0.01) is None
+
+    # sustained plausible drift: converges to the estimate, never below it
+    st = None
+    for _ in range(200):
+        st = _update_align_scale_state(st, 0.6)
+    assert st == pytest.approx(0.6, rel=0.01)
+
+    # a short transient of the lowest accepted value cannot collapse the state:
+    # 10 frames at 0.5 from identity stays above 0.5 (EMA lag bounds the dip)
+    st = 1.0
+    for _ in range(10):
+        st = _update_align_scale_state(st, 0.5)
+    assert st is not None and st > 0.5
 
 
 def test_alignment_prior_holds_scale_on_clean_data(scene_map_bin):

@@ -409,7 +409,11 @@ class GEDFMapper:
         origins = self._origin_i[self._valid].to(self._dtype) * cs      # (V, 3)
         pts_all: list[torch.Tensor] = []
         dist_all: list[torch.Tensor] = []
-        chunk = max(1, (2 ** 21) // template.shape[0])                   # ~2M points per query
+        # Chunk by QUERY-INTERNAL memory, not point count: query() expands each
+        # point to (8 candidates x K gaussians x 3), so 2^17 points ~= 400 MB
+        # f32 peak. Larger chunks strand multi-GB allocator blocks per snapshot
+        # (observed: 68 GB reserved on a 24 GB card -> WDDM thrash, ~10x slowdown).
+        chunk = max(1, (2 ** 17) // template.shape[0])
         for i in range(0, origins.shape[0], chunk):
             pts = (origins[i:i + chunk].unsqueeze(1) + template.unsqueeze(0)).reshape(-1, 3)
             dist = self.query(pts)
@@ -423,6 +427,46 @@ class GEDFMapper:
             sel = torch.linspace(0, points.shape[0] - 1, max_points).long()
             points, dist = points[sel], dist[sel]
         return points, dist
+
+    @torch.no_grad()
+    def gaussians(self, max_gaussians: int | None = None
+                  ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        All valid gaussian components as flat CPU float32 tensors:
+        (means (N,3), sigmas (N,3), weights (N,), cube_mae (N,)).
+
+        `sigmas` are the effective per-axis 1-sigma extents (p_sigma**2, since
+        lambda = p^4); components are axis-aligned — the field model has no
+        rotation. `weights` are the SIGNED amplitudes (negative gaussians carve
+        the field). `cube_mae` broadcasts each cube's fit MAE to its components.
+        Padding slots (k >= n_gauss) and invalid cubes are excluded. When N
+        exceeds `max_gaussians`, the top-|weight| components are kept. Used by
+        the Rerun ellipsoid visualization (live snapshots and the offline
+        viewer script).
+        """
+        empty = (torch.zeros((0, 3), dtype=torch.float32),
+                 torch.zeros((0, 3), dtype=torch.float32),
+                 torch.zeros((0,), dtype=torch.float32),
+                 torch.zeros((0,), dtype=torch.float32))
+        if self.num_valid_cubes == 0:
+            return empty
+
+        K = self._means.shape[1]
+        slot = torch.arange(K, device=self._device)
+        sel = self._valid.unsqueeze(-1) & (slot < self._n_gauss.unsqueeze(-1))  # (C, K)
+
+        means = self._means[sel]
+        sigmas = self._p_sigma[sel] ** 2
+        weights = self._weights[sel]
+        cube_mae = self._mae.unsqueeze(-1).expand(-1, K)[sel]
+
+        if max_gaussians is not None and means.shape[0] > max_gaussians:
+            keep = weights.abs().topk(max_gaussians).indices
+            means, sigmas = means[keep], sigmas[keep]
+            weights, cube_mae = weights[keep], cube_mae[keep]
+
+        return (means.float().cpu(), sigmas.float().cpu(),
+                weights.float().cpu(), cube_mae.float().cpu())
 
     # ------------------------------------------------------------------ #
     # Incremental mapping
