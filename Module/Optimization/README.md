@@ -98,11 +98,11 @@ Three backends implement `IOptimizer`. All are selected purely through the
 sequential / parallel-worker execution modes described above, and all write a
 7-float SE(3) pose into `frames.data["pose"]`.
 
-| Backend (`type:`) | Library | Graph types | Extra state written back | Notes |
-|---|---|---|---|---|
-| `TwoFrame_PGO` | PyPose (LM, autodiff or analytic Jacobians) | `icp`, `reproj`, `disp` | pose only | The MAC-VO default; frame-to-frame, covariance-weighted |
-| `GTSAM_Graph` | GTSAM (`LevenbergMarquardtOptimizer`, `ISAM2`) | `pose2point`, `isam` | pose **and landmark positions** | Optional dependency (guarded import); multi-frame / incremental |
-| `GEDF_PGO` | PyPose + custom G-EDF mapper | `gedf`, `gedf+icp` | pose only (+ diagnostics) | Builds a distance-field map online and registers scan-to-map; see [`GEDF/README.md`](GEDF/README.md) |
+| Backend (`type:`) | Library | Graph types | Alignment axis | Extra state written back | Notes |
+|---|---|---|---|---|---|
+| `TwoFrame_PGO` | PyPose (LM, autodiff or analytic Jacobians) | `icp`, `reproj`, `disp` | se3 only | pose only | The MAC-VO default; frame-to-frame, covariance-weighted |
+| `GTSAM_Graph` | GTSAM (`LevenbergMarquardtOptimizer`, `ISAM2`) | `pose2point`, `isam` | se3 / sim3 / sl4 (`pose2point` only) | pose **and landmark positions** | Optional dependency (guarded import); multi-frame / incremental |
+| `GEDF_PGO` | PyPose + custom G-EDF mapper | `gedf`, `gedf+icp` | se3 / sim3 / sl4 (autodiff mode) | pose only (+ diagnostics) | Builds a distance-field map online and registers scan-to-map; see [`GEDF/README.md`](GEDF/README.md) |
 
 ## `TwoFrame_PGO` (PyPose two-frame pose graph)
 
@@ -138,19 +138,34 @@ optimizer:
     vectorize: true
     parallel: false
     autodiff: true          # required by the config spec (not used for graph selection)
-    graph_type: pose2point  # pose2point | isam
+    graph_type: pose2point  # pose2point | isam | pose2point+gedf
     # Optional pose2point hyperparameters (defaults shown):
     # huber_delta: 0.1
     # huber_delta_prev: 1.0
     # prior_sigma: 1.0e-4
     # max_iterations: 20
     # match_atol: <pixel tolerance for cross-frame landmark association>
+    # Optional alignment axis (pose2point only; isam and pose2point+gedf stay SE3):
+    # alignment:
+    #   type: sim3          # se3 (default) | sim3 | sl4
+    #   prior_weight: 100.0
+    # Required for pose2point+gedf — the G-EDF map/field/viz sub-configs
+    # (same keys as GEDF_PGO minus insert_dense; see Optimal/MACVO_Fast_GEDF.yaml):
+    # gedf: { map: {...}, field: {...}, viz: {...} }
 ```
 
 * `pose2point` — batch LM over two frames with pose-to-point custom factors and
   cross-frame landmark association by pixel proximity.
 * `isam` — incremental `ISAM2` with a sliding pose window, between-factors, and
   pixel-keyed landmark reuse.
+* `pose2point+gedf` — `pose2point` plus **one batched G-EDF field factor** on
+  the current pose (`make_gedf_field_factor`): residual `d̂(T·pᵢ)` per current
+  keypoint against the online (or prebuilt) G-EDF map, inside the same joint
+  solve that re-estimates the landmarks — "GTSAM's ICP" fused with whole-map
+  registration. The map is fed and refit per call exactly like `GEDF_PGO`
+  (landmark refinements are not retro-fitted into the map); the field factor
+  is inert until the map is ready and acts on the raw camera points (hence
+  SE(3)-only). Map snapshots log to the same `/world/gedf_map` Rerun entities.
 
 ## `GEDF_PGO` (scan-to-map against an online distance-field map)
 
@@ -167,7 +182,8 @@ optimizer:
     vectorize: true
     parallel: true
     autodiff: false           # analytic (se3 alignment only); true enables sim3/sl4
-    graph_type: gedf+icp      # gedf (field-only) | gedf+icp (hybrid, recommended)
+    graph_type: gedf+icp      # gedf (field-only) | gedf+icp (joint hybrid, recommended)
+                              # | icp->gedf (sequential: ICP init, whole-map field final)
     map:    { source: online, ... }      # online mapping or prebuilt .bin
     field:  { weighting: mahalanobis, sigma: 0.30, ... }
     solver: { coarse/fine two-stage robust LM ... }
@@ -177,18 +193,42 @@ optimizer:
 
 ### Alignment axis (monocular depth-bias correction)
 
-`GEDF_PGO` additionally supports a per-frame **alignment manifold** estimated
-jointly with the pose (`alignment.type`, requires `autodiff: true` for non-se3):
+`GEDF_PGO` (any graph type, requires `autodiff: true` for non-se3) and
+`GTSAM_Graph` (`pose2point` only, via custom Sim3/SL4-warped pose-to-point
+factors with analytic Jacobians) support a per-frame **alignment manifold**
+estimated jointly with the pose (`alignment.type`):
 
 | `alignment.type` | Extra DoF | Absorbs | Reported as |
 |---|---|---|---|
 | `se3` (default) | — | — | — |
-| `sim3` | 1 (log-scale) | monocular depth-scale bias | `scale`, `/world/gedf_alignment/scale` in Rerun |
+| `sim3` | 1 (log-scale) | monocular depth-scale bias | `scale` on the graph output; `/world/gedf_alignment/scale` / `/world/gtsam_alignment/scale` in Rerun |
 | `sl4` (experimental) | 9 (projective) | affine/projective depth bias | `alignment_state` (9,) |
 
 Semantics are *estimate + report*: the warp corrects the residuals during the
-solve, only the SE(3) component reaches the map. GTSAM and TwoFramePGO remain
-SE(3)-only.
+solve, only the SE(3) component reaches the map. In GTSAM the warp applies to
+the CURRENT frame's observations only (previous-frame factors anchor landmark
+scale) and is reported at `/world/gtsam_alignment/scale`. TwoFramePGO and the
+GTSAM `isam` graph remain SE(3)-only.
+
+**`GEDF_PGO` + `sim3` additionally feeds the scale forward at map insertion**:
+the landmarks inserted at the start of each `_optimize` call come from the
+*previous* frame's depth, so a scale correction is applied to them (uniform
+scaling about the previous camera center; covariances pick up s²) before they
+reach the online map and the ICP rows. Without this the map accumulates
+geometry at raw (drifting) monocular depth scale while the poses follow the
+corrected scale — visible as double surfaces / map-vs-estimate misalignment on
+long sequences. `sl4` is *not* fed forward (its warp is not a uniform scale);
+`se3` has no scale channel.
+
+The applied correction is a **gated, damped state**, not the raw per-solve
+estimate (`_update_align_scale_state` in `GEDF/Optimizer.py`): estimates
+outside `[0.5, 2.0]` are rejected (with a warning) and accepted ones advance a
+log-space EMA (α = 0.3). Feeding raw estimates forward is a positive-feedback
+loop — one diverged solve or a genuine depth-scale transient shrinks the next
+insertion, the shrunken ICP targets pull the next estimate lower, and within
+~10 frames the map and warp collapse to a point (observed on
+`plane_nose[128:150]`: scale 1.0 → 1e-3, frozen trajectory). The Rerun channel
+`/world/gedf_alignment/scale` still shows the raw per-solve estimate.
 
 ## Shipped experiment configs (`Config/Experiment/MACVO/`)
 
@@ -196,13 +236,13 @@ SE(3)-only.
 |---|---|---|---|
 | `MACVO_Performant.yaml` | `TwoFrame_PGO` icp, autodiff, parallel | stereo FlowFormer | Stereo default (best accuracy) |
 | `MACVO_Fast.yaml` | `TwoFrame_PGO` icp, autodiff, parallel | stereo, mixed precision | ~2x speed, ~5% RTE/ROE cost |
-| `MACVO_gtsam.yaml` | `GTSAM_Graph` pose2point, sequential | stereo FlowFormer | GTSAM baseline / landmark refinement |
-| `MACVO_MonoDAv3.yaml` | `GTSAM_Graph` pose2point, sequential | mono DepthAnythingV3 | Monocular baseline |
+| `MACVO_gtsam.yaml` | `GTSAM_Graph` pose2point, sequential | stereo FlowFormer | GTSAM baseline / landmark refinement; commented `alignment:` example |
+| `MACVO_MonoDAv3.yaml` | `GTSAM_Graph` pose2point, sequential | mono DepthAnythingV3 | Monocular GTSAM baseline; uncomment `alignment: sim3` for per-frame scale correction |
 | `MACVO_GEDF.yaml` | `GEDF_PGO` gedf+icp, analytic, parallel, online map | stereo FlowFormer | Stereo + scan-to-map drift resistance |
 | `MACVO_GEDF_DAv3.yaml` | `GEDF_PGO` gedf+icp, analytic, parallel, online map, relative depth-cov selectors | mono DepthAnythingV3 | Monocular + scan-to-map; uncomment `alignment: sim3` (+ `autodiff: true`) for per-frame scale correction |
 
 Choosing:
 * **Stereo, short sequences** — `MACVO_Performant` (frame-to-frame ICP is hard to beat when depth is metric and drift is small).
 * **Stereo, long sequences / revisits** — `MACVO_GEDF` (the map factor anchors the trajectory to previously seen structure).
-* **Monocular** — `MACVO_GEDF_DAv3`; enable `alignment: sim3` when the depth model's scale wanders per frame.
+* **Monocular** — `MACVO_GEDF_DAv3` (scan-to-map) or `MACVO_MonoDAv3` (GTSAM); on either, enable `alignment: sim3` when the depth model's scale wanders per frame (GEDF additionally needs `autodiff: true`; GTSAM's factors are analytic and need no mode switch).
 * **Landmark refinement / incremental smoothing** — `GTSAM_Graph` (`isam` for a sliding window).

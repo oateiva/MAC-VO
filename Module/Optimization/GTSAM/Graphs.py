@@ -9,9 +9,38 @@ import rerun as rr
 
 from Utility.PrettyPrint import Logger
 from Utility.Point import pixel2point_NED
-from Utility.GTSAM_Utils import pypose_to_pose3, pose3_to_pypose, make_pose_to_point_factor
+from Utility.GTSAM_Utils import (
+    pypose_to_pose3, pose3_to_pypose, make_pose_to_point_factor,
+    make_aligned_pose_to_point_factor, make_alignment_warp,
+    make_gedf_field_factor,
+)
 from ..PyposeOptimizers import FactorGraph
 from ..TwoFramePGO.Graphs import GraphInput
+
+if typ.TYPE_CHECKING:
+    from types import SimpleNamespace
+    from ..GEDF.Mapper import GEDFMapProtocol
+
+
+def make_field_eval(field: "GEDFMapProtocol", field_cfg: "SimpleNamespace"):
+    """
+    numpy adapter around the G-EDF field for `make_gedf_field_factor`:
+    `(N,3) world points -> (residual (N,), gradient (N,3))` with the same
+    semantics as the pypose GEDF graphs — OOB points (d_hat >=
+    oob_value_threshold) get the constant `oob_residual` and a zero gradient,
+    and the per-point gradient norm is clamped to `max_grad_norm`.
+    """
+    def field_eval(q_np: np.ndarray):
+        q = torch.from_numpy(np.ascontiguousarray(q_np, dtype=np.float64))
+        dist, grad = field.query_with_grad(q)
+        oob = dist >= field_cfg.oob_value_threshold
+        r = torch.where(oob, torch.full_like(dist, field_cfg.oob_residual), dist)
+        norm = grad.norm(dim=-1, keepdim=True)
+        grad = torch.where(norm > field_cfg.max_grad_norm,
+                           grad * (field_cfg.max_grad_norm / norm), grad)
+        grad = torch.where(oob.unsqueeze(-1), torch.zeros_like(grad), grad)
+        return (r.detach().cpu().numpy(), grad.detach().cpu().numpy())
+    return field_eval
 
 
 @dataclass
@@ -19,6 +48,9 @@ class GTSAM_GraphInput:
     previous_graph_data: GraphInput
     current_graph_data : GraphInput
     indexes_prev_curr : typ.List[typ.Tuple[int, int]]
+    # Set by get_graph_data (parent side) when a Rerun G-EDF map snapshot is
+    # wanted for this frame (graph_type "pose2point+gedf" only).
+    want_map_snapshot : bool = False
 
 
 @dataclass
@@ -28,20 +60,61 @@ class GTSAM_GraphOutput:
     landmark_indexes: Optional[list[int] | None] = None
     map_points: Optional[torch.Tensor] = None
     need_interp: Optional[bool] = None
+    # Alignment diagnostics ("estimate + report", mirrors GEDF_GraphOutput):
+    # the per-frame warp parameters estimated for the CURRENT frame's
+    # observations. Poses in `pose_estimates` are always pure SE(3).
+    alignment_type: str = "se3"
+    alignment_state: Optional[torch.Tensor] = None   # (1,) log_s | (9,) sl4, CPU f32
+    scale: Optional[float] = None                    # exp(log_s) / exp(4*x5)
+    # G-EDF map snapshot for Rerun (graph_type "pose2point+gedf" only; same
+    # payloads and semantics as GEDF_GraphOutput, CPU tensors, pickle-cheap).
+    gedf_points: Optional[torch.Tensor] = None       # (M, 3) near-surface sample
+    gedf_dist: Optional[torch.Tensor] = None         # (M,)
+    gedf_gauss_means: Optional[torch.Tensor] = None  # (N, 3)
+    gedf_gauss_sigmas: Optional[torch.Tensor] = None # (N, 3)
+    gedf_gauss_weights: Optional[torch.Tensor] = None  # (N,)
+    gedf_gauss_mae: Optional[torch.Tensor] = None    # (N,)
+    gedf_cube_centers: Optional[torch.Tensor] = None # (C, 3)
+    gedf_cube_valid: Optional[torch.Tensor] = None   # (C,) bool
+    gedf_cube_mae: Optional[torch.Tensor] = None     # (C,)
+    gedf_cube_size: Optional[float] = None
 
 PosePixelMap = Dict[int, Dict[Tuple[float, float], int]]
 
 
 class GTSAM_Pose2Point(FactorGraph):
+    # extras dimensionality per alignment type
+    _ALIGN_DIMS = {"se3": 0, "sim3": 1, "sl4": 9}
+
     def __init__(self, huber_delta: float = 0.1, huber_delta_prev: float = 1.0,
-                 prior_sigma: float = 1e-4, max_iterations: int = 20):
+                 prior_sigma: float = 1e-4, max_iterations: int = 20,
+                 alignment_type: str = "se3", alignment_prior_weight: float = 100.0,
+                 field: "GEDFMapProtocol | None" = None,
+                 field_cfg: "SimpleNamespace | None" = None):
         super().__init__()
+        # Optional G-EDF scan-to-map factor (graph_type "pose2point+gedf"):
+        # one batched unary factor on the CURRENT pose, residual d_hat(T . p_i)
+        # per keypoint, joining the pose->point ("GTSAM ICP") solve. Inert
+        # while the map is not ready. The field factor acts on the RAW camera
+        # points (no alignment warp) — the Optimizer enforces se3-only.
+        self.field = field
+        self.field_cfg = field_cfg
         # Optimizer hyperparameters (config: Odometry.optimizer.args; defaults
         # reproduce the historical hardcoded values).
         self.huber_delta = huber_delta            # robust kernel on pose->point factors
         self.huber_delta_prev = huber_delta_prev  # robust kernel on prev-frame reobservation factor
         self.prior_sigma = prior_sigma            # gauge prior noise on anchor poses
         self.max_iterations = max_iterations      # LM iteration cap
+        # Alignment axis (mirrors the GEDF backend): a per-frame warp variable
+        # applied to the CURRENT frame's camera observations, correcting
+        # monocular depth-scale (sim3) or projective (sl4) bias. Only the SE(3)
+        # poses are written back; the warp is reported for diagnostics.
+        # Previous-frame observations stay un-warped so they anchor the
+        # landmark scale.
+        assert alignment_type in self._ALIGN_DIMS, f"Unknown alignment '{alignment_type}'"
+        self.alignment_type = alignment_type
+        self.alignment_prior_weight = float(alignment_prior_weight)
+        self._warp = make_alignment_warp(alignment_type) if alignment_type != "se3" else None
 
 
     def parse_graph_data(self, graph_data: GTSAM_GraphInput):
@@ -126,6 +199,17 @@ class GTSAM_Pose2Point(FactorGraph):
                     ini_estimate_noise
                 ))
 
+        # Alignment extras for the CURRENT frame's observations (see __init__).
+        extras_key = None
+        if self.alignment_type != "se3":
+            E = self._ALIGN_DIMS[self.alignment_type]
+            extras_key = gtsam.symbol('a', int(self.frame_idx.cpu().item()))
+            initial_estimate.insert(extras_key, np.zeros(E, dtype=np.float64))
+            align_sigma = 1.0 / np.sqrt(self.alignment_prior_weight)
+            graph.add(gtsam.PriorFactorVector(
+                extras_key, np.zeros(E, dtype=np.float64),
+                gtsam.noiseModel.Diagonal.Sigmas(np.full(E, align_sigma, dtype=np.float64))))
+
         # First-wins map: current-frame landmark index -> previous-frame obs index
         curr_to_prev: Dict[int, int] = {}
         for p, c in self.indexes_prev_curr:
@@ -180,9 +264,14 @@ class GTSAM_Pose2Point(FactorGraph):
                 m_huber,
                 noise_model_2
             )
-            # Create factors
+            # Create factors. Frame-1 observations anchor the landmarks
+            # un-warped; the current frame's factor carries the alignment warp.
             factor1 = make_pose_to_point_factor(pose_1_key, landmark_key, obs_Tc_1_i, noise_model_1)
-            factor2 = make_pose_to_point_factor(pose_2_key, landmark_key, obs_Tc_2_i, noise_model_2)
+            if extras_key is not None:
+                factor2 = make_aligned_pose_to_point_factor(
+                    pose_2_key, extras_key, landmark_key, obs_Tc_2_i, noise_model_2, self._warp)
+            else:
+                factor2 = make_pose_to_point_factor(pose_2_key, landmark_key, obs_Tc_2_i, noise_model_2)
 
             # Add factors to graph
             graph.add(factor1)
@@ -191,6 +280,30 @@ class GTSAM_Pose2Point(FactorGraph):
             # Add initial estimate for landmark
             Pt_landmark = P1.transformFrom(obs_Tc_1_i)
             initial_estimate.insert(landmark_key, Pt_landmark)
+
+        # G-EDF field factor on the current pose (see __init__): registers the
+        # frame against the whole accumulated map inside the same joint solve
+        # that re-estimates the landmarks.
+        if self.field is not None and self.field_cfg is not None and self.field.is_ready:
+            import math
+            field_eval = make_field_eval(self.field, self.field_cfg)
+            map_sigma = self.field.sigma
+            floor = max(map_sigma if math.isfinite(map_sigma) else 0.0,
+                        float(self.field_cfg.sigma))
+            if getattr(self.field_cfg, "weighting", "fixed") == "mahalanobis":
+                # Per-point variance via the field gradient at the initial
+                # pose (linearization-point approximation of the pypose
+                # backend's per-iteration reweighting).
+                R0 = self.init_pose.rotation().matrix()
+                t0 = np.asarray(self.init_pose.translation(), dtype=np.float64).reshape(3)
+                _, g0 = field_eval(self.obs_Tc_2 @ R0.T + t0)
+                cov_w = np.einsum("ij,njk,lk->nil", R0, self.obs2_covTc, R0)
+                var = np.einsum("ni,nij,nj->n", g0, cov_w, g0) + floor ** 2
+                field_noise = gtsam.noiseModel.Diagonal.Sigmas(np.sqrt(var))
+            else:
+                field_noise = gtsam.noiseModel.Isotropic.Sigma(len(self.obs_Tc_2), floor)
+            graph.add(make_gedf_field_factor(
+                pose_2_key, self.obs_Tc_2, field_eval, field_noise))
 
         # Optimize the graph
         params = gtsam.LevenbergMarquardtParams()
@@ -216,12 +329,23 @@ class GTSAM_Pose2Point(FactorGraph):
             pose_2 = self.init_pypose
             need_interp = True
 
+        align_state: Optional[torch.Tensor] = None
+        align_scale: Optional[float] = None
+        if extras_key is not None:
+            x = np.asarray(result.atVector(extras_key), dtype=np.float64)
+            align_state = torch.from_numpy(x).float()
+            align_scale = float(np.exp(x[0])) if self.alignment_type == "sim3" \
+                else float(np.exp(4.0 * x[5]))
+
         self.graph_output = GTSAM_GraphOutput(
             frame_idexes=[int(self.from_idx.cpu().item()), int(self.frame_idx.cpu().item())],
             pose_estimates=[pose_1, pose_2],
             landmark_indexes=landmark_idx,
             map_points=landmark_positions,
-            need_interp=need_interp
+            need_interp=need_interp,
+            alignment_type=self.alignment_type,
+            alignment_state=align_state,
+            scale=align_scale,
             )
 
     def write_back(self):

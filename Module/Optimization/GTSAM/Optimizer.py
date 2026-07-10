@@ -107,18 +107,67 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
             "cpu"
             )
 
-        return self.connect_graphs(GI_prev, GI_last)
+        gi = self.connect_graphs(GI_prev, GI_last)
+        if self.config.graph_type == "pose2point+gedf":
+            # Rerun map snapshot cadence (parent side; mirrors GEDF_PGO)
+            from Utility.Visualize import rr_plt
+            viz_every = int(getattr(getattr(self.config.gedf, "viz", None), "every", 0))
+            gi.want_map_snapshot = (rr_plt.default_mode == "rerun" and viz_every > 0
+                                    and int(frame_idx.flatten()[0]) % viz_every == 0)
+        return gi
 
 
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
         spec: dict = {
-            "graph_type": lambda s: s in {"pose2point", "isam"},
+            "graph_type": lambda s: s in {"pose2point", "isam", "pose2point+gedf"},
             "device": lambda v: isinstance(v, str) and (v == "cpu" or "cuda" in v),
             "vectorize": lambda b: isinstance(b, bool),
             "parallel": lambda b: isinstance(b, bool),
             "autodiff": lambda b: isinstance(b, bool)
         }
+        # G-EDF hybrid: the "gedf" block configures the online map and the
+        # field factor (mirrors GEDF_PGO's map/field/viz sub-configs, minus
+        # insert_dense — the GTSAM input carries no dense payload).
+        if config is not None and hasattr(config, "gedf"):
+            gedf_spec: dict = {
+                "map": {
+                    "source": lambda s: s in {"prebuilt", "online"},
+                    "path": lambda p: p is None or isinstance(p, str),
+                    "insert_keypoints": lambda b: isinstance(b, bool),
+                    "min_gaussians": lambda n: isinstance(n, int) and n >= 0,
+                    "online": lambda ns: ns is None or isinstance(ns, SimpleNamespace),
+                },
+                "field": {
+                    "weighting": lambda s: s in {"fixed", "mahalanobis"},
+                    "sigma": lambda v: isinstance(v, (int, float)) and v > 0,
+                    "oob_value_threshold": lambda v: isinstance(v, (int, float)),
+                    "oob_residual": lambda v: isinstance(v, (int, float)),
+                    "max_grad_norm": lambda v: isinstance(v, (int, float)) and v > 0,
+                },
+            }
+            if hasattr(config.gedf, "viz"):
+                viz_spec: dict = {
+                    "every": lambda n: isinstance(n, int) and n >= 0,
+                    "iso": lambda v: isinstance(v, (int, float)) and v > 0,
+                    "resolution": lambda v: isinstance(v, (int, float)) and v > 0,
+                    "max_points": lambda n: isinstance(n, int) and n > 0,
+                }
+                optional_viz = {
+                    "gaussians": lambda b: isinstance(b, bool),
+                    "n_sigma": lambda v: isinstance(v, (int, float)) and v > 0,
+                    "max_gaussians": lambda n: isinstance(n, int) and n > 0,
+                    "max_sigma": lambda v: isinstance(v, (int, float)),
+                    "cubes": lambda b: isinstance(b, bool),
+                }
+                for key, check in optional_viz.items():
+                    if hasattr(config.gedf.viz, key):
+                        viz_spec[key] = check
+                gedf_spec["viz"] = viz_spec
+            spec["gedf"] = gedf_spec
+        if config is not None and config.graph_type == "pose2point+gedf" \
+                and not hasattr(config, "gedf"):
+            raise ValueError("graph_type pose2point+gedf requires a 'gedf' config block")
         # Optional pose2point hyperparameters (defaults in GTSAM_Pose2Point /
         # connect_graphs reproduce the historical hardcoded values).
         optional_spec = {
@@ -131,17 +180,66 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
         for key, check in optional_spec.items():
             if config is not None and hasattr(config, key):
                 spec[key] = check
+        # Optional alignment block (default se3; mirrors GEDF_PGO's axis).
+        if config is not None and hasattr(config, "alignment"):
+            align_spec: dict = {"type": lambda s: s in {"se3", "sim3", "sl4"}}
+            if hasattr(config.alignment, "prior_weight"):
+                align_spec["prior_weight"] = lambda v: isinstance(v, (int, float)) and v > 0
+            spec["alignment"] = align_spec
         cls._enforce_config_spec(config, spec)
+
+        a_type = getattr(getattr(config, "alignment", None), "type", "se3") \
+            if config is not None else "se3"
+        if a_type != "se3" and config is not None and config.graph_type != "pose2point":
+            # pose2point+gedf included: the field factor acts on the RAW camera
+            # points, so a warp would desynchronize the two factor families.
+            raise ValueError(f"GTSAM_Graph alignment '{a_type}' is only supported by "
+                             "graph_type: pose2point (isam and pose2point+gedf stay SE3-only)")
 
     @staticmethod
     def init_context(config) -> dict:
+        align_ns = getattr(config, "alignment", None)
+        alignment_type = getattr(align_ns, "type", "se3") if align_ns is not None else "se3"
+        alignment_prior_weight = float(getattr(align_ns, "prior_weight", 100.0)) \
+            if align_ns is not None else 100.0
+        if alignment_type != "se3" and config.graph_type != "pose2point":
+            # defense in depth for programmatically-built configs
+            raise ValueError(f"GTSAM_Graph alignment '{alignment_type}' is only supported by "
+                             "graph_type: pose2point (isam stays SE3-only)")
+
+        # G-EDF map + field config for the hybrid (mirrors GEDF_PGO.init_context)
+        gedf_map = None
+        gedf_cfg = None
+        if config.graph_type == "pose2point+gedf":
+            from ..GEDF.Config import GEDFConfig
+            from ..GEDF.Mapper import GEDFMapper
+            gedf_cfg = config.gedf
+            match gedf_cfg.map.source:
+                case "prebuilt":
+                    if not gedf_cfg.map.path:
+                        raise ValueError("pose2point+gedf with map.source=prebuilt requires map.path")
+                    gedf_map = GEDFMapper.from_gdf1(
+                        gedf_cfg.map.path,
+                        GEDFConfig.from_namespace(getattr(gedf_cfg.map, "online", None)),
+                        dtype=torch.float64)
+                case "online":
+                    gedf_map = GEDFMapper(
+                        GEDFConfig.from_namespace(getattr(gedf_cfg.map, "online", None)))
+                case _:
+                    raise ValueError(f"Unknown map source {gedf_cfg.map.source}")
+            gedf_map.ready_min_gaussians = max(1, gedf_cfg.map.min_gaussians)
+
         match (config.graph_type):
-            case ("pose2point"):
+            case "pose2point" | "pose2point+gedf":
                 PoseGraphClass = lambda: GTSAM_Pose2Point(
                     huber_delta=float(getattr(config, "huber_delta", 0.1)),
                     huber_delta_prev=float(getattr(config, "huber_delta_prev", 1.0)),
                     prior_sigma=float(getattr(config, "prior_sigma", 1e-4)),
                     max_iterations=int(getattr(config, "max_iterations", 20)),
+                    alignment_type=alignment_type,
+                    alignment_prior_weight=alignment_prior_weight,
+                    field=gedf_map,
+                    field_cfg=gedf_cfg.field if gedf_cfg is not None else None,
                 )
             case ("isam"):
                 PoseGraphClass = ISAM
@@ -153,9 +251,24 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
             graph: FactorGraph = PoseGraphClass().to(device=torch.device(config.device), dtype=torch.double)
             assert isinstance(graph, FactorGraph)
 
+            viz_ns = getattr(gedf_cfg, "viz", None) if gedf_cfg is not None else None
             context = {
             "device": config.device,
             "graph": graph,
+            # G-EDF hybrid state (None / inert for the other graph types)
+            "gedf_map": gedf_map,
+            "gedf_insert": bool(gedf_cfg.map.insert_keypoints) if gedf_cfg is not None else False,
+            "gedf_viz": SimpleNamespace(
+                every=int(getattr(viz_ns, "every", 0)),
+                iso=float(getattr(viz_ns, "iso", 0.10)),
+                resolution=float(getattr(viz_ns, "resolution", 0.10)),
+                max_points=int(getattr(viz_ns, "max_points", 100_000)),
+                gaussians=bool(getattr(viz_ns, "gaussians", False)),
+                n_sigma=float(getattr(viz_ns, "n_sigma", 1.0)),
+                max_gaussians=int(getattr(viz_ns, "max_gaussians", 20_000)),
+                max_sigma=(float(viz_ns.max_sigma)
+                           if viz_ns is not None and hasattr(viz_ns, "max_sigma") else None),
+                cubes=bool(getattr(viz_ns, "cubes", False))),
             }
 
         if config.device != "cpu":
@@ -169,6 +282,19 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
     @staticmethod
     def _optimize(context: dict, graph_data: GTSAM_GraphInput) -> tuple[dict, GTSAM_GraphOutput]:
 
+        # G-EDF hybrid: feed and refit the online map before the solve (the
+        # landmarks are anchored at the previous, already-optimized pose —
+        # same pre-solve-insertion argument as GEDF_PGO). Landmark positions
+        # later refined by the solve are NOT retro-fitted into the map.
+        gedf_map = context.get("gedf_map")
+        if gedf_map is not None and not gedf_map.frozen:
+            pts = graph_data.current_graph_data.points
+            if context["gedf_insert"] and len(pts) > 0:
+                gedf_map.insert(pts.data["pos_Tw"], pts.data["cov_Tw"])
+            cam_pos = pp.SE3(graph_data.current_graph_data.init_motion) \
+                .tensor().reshape(-1)[:3]
+            gedf_map.refit(camera_pos=cam_pos)
+
         graph = context["graph"]
 
         # Incorporate new measurements
@@ -177,8 +303,22 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
         # Step optimizer
         graph.run_gtsam_optimization()
 
-        # Export result
-        return context, graph.write_back()
+        # Export result (+ optional G-EDF map snapshot for the parent's Rerun)
+        out = graph.write_back()
+        if graph_data.want_map_snapshot and gedf_map is not None:
+            viz = context["gedf_viz"]
+            if gedf_map.is_ready:
+                out.gedf_points, out.gedf_dist = gedf_map.sample_surface(
+                    resolution=viz.resolution, iso=viz.iso, max_points=viz.max_points)
+                if viz.gaussians:
+                    (out.gedf_gauss_means, out.gedf_gauss_sigmas,
+                     out.gedf_gauss_weights, out.gedf_gauss_mae) = gedf_map.gaussians(
+                        max_gaussians=viz.max_gaussians, max_sigma=viz.max_sigma)
+            if viz.cubes and gedf_map.num_cubes > 0:
+                (out.gedf_cube_centers, out.gedf_cube_valid,
+                 out.gedf_cube_mae) = gedf_map.cubes()
+                out.gedf_cube_size = float(gedf_map.cube_size)
+        return context, out
 
     def write_graph_data(self, result: GTSAM_GraphOutput | None, global_map: VisualMap) -> None:
         if result is None: return
@@ -194,3 +334,34 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
         if result.map_points is not None and result.landmark_indexes is not None:
             idx = torch.tensor(result.landmark_indexes, dtype=torch.long, device=result.map_points.device)
             global_map.map_points.data["pos_Tw"][idx] = result.map_points.to(dtype=torch.float32, device=global_map.map_points.data["pos_Tw"].device)
+
+        # Alignment scale diagnostic (parity with GEDF_PGO): no-op without --useRR.
+        from Utility.Visualize import rr_plt
+        if result.scale is not None and rr_plt.default_mode == "rerun":
+            import rerun as rr
+            rr.set_time("frame_idx", sequence=int(result.frame_idexes[-1]))
+            rr.log("/world/gtsam_alignment/scale", rr.Scalars(result.scale))
+
+        # G-EDF map snapshot (pose2point+gedf): same entities as GEDF_PGO so
+        # the viewer setup is identical across backends.
+        if rr_plt.default_mode == "rerun" and \
+                (result.gedf_points is not None or result.gedf_gauss_means is not None
+                 or result.gedf_cube_centers is not None):
+            import rerun as rr
+            rr.set_time("frame_idx", sequence=int(result.frame_idexes[-1]))
+            if result.gedf_points is not None:
+                rr_plt.log_gedf_map("/world/gedf_map", result.gedf_points, result.gedf_dist)
+            if result.gedf_gauss_means is not None and result.gedf_gauss_sigmas is not None \
+                    and result.gedf_gauss_weights is not None and result.gedf_gauss_mae is not None:
+                rr_plt.log_gedf_gaussians(
+                    "/world/gedf_map/gaussians",
+                    result.gedf_gauss_means, result.gedf_gauss_sigmas,
+                    result.gedf_gauss_weights, result.gedf_gauss_mae,
+                    n_sigma=float(getattr(getattr(getattr(self.config, "gedf", None),
+                                                  "viz", None), "n_sigma", 1.0)))
+            if result.gedf_cube_centers is not None and result.gedf_cube_valid is not None \
+                    and result.gedf_cube_mae is not None and result.gedf_cube_size is not None:
+                rr_plt.log_gedf_cubes(
+                    "/world/gedf_map/cubes",
+                    result.gedf_cube_centers, result.gedf_cube_valid,
+                    result.gedf_cube_mae, cube_size=result.gedf_cube_size)

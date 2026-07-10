@@ -94,7 +94,14 @@ Odometry:
       device: cpu
       vectorize: true
       parallel: false
+      autodiff: true          # required by the config spec (not used for graph selection)
       graph_type: pose2point
+      # Optional alignment axis (pose2point only): per-frame warp on the current
+      # frame's observations correcting monocular depth bias; only SE(3) poses
+      # are written back.
+      # alignment:
+      #   type: sim3          # se3 (default) | sim3 | sl4
+      #   prior_weight: 100.0
 
 Datas: !include ../Common/DeepODO_stereo_experiments.yaml
 Preprocess: !include ../Common/Preprocess.yaml

@@ -136,9 +136,10 @@ Odometry:
         max_points: 100000
       # Optional alignment axis (default: se3). "sim3" absorbs monocular
       # depth-scale bias during each per-frame solve (requires autodiff: true);
-      # "sl4" additionally models affine/projective depth bias. The extra DoF
-      # are estimated + reported in the graph output only - the map pose stays
-      # pure SE(3).
+      # "sl4" additionally models affine/projective depth bias. The map pose
+      # stays pure SE(3); sim3's estimated scale is additionally fed forward
+      # into the next frame's landmark insertion to keep the online map
+      # scale-consistent (see Module/Optimization/README.md).
       # alignment:
       #   type: sim3
       #   prior_weight: 100.0

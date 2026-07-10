@@ -54,8 +54,7 @@ Odometry:
       kernel_size: 7
       mask_width: 32
       max_match_cov: 10.
-      max_depth: 7.0
-      max_depth_cov: 1.
+      # (no max_depth/max_depth_cov: CovAwareSelector_NoDepth drops depth filters)
 
   mappoint:
     # Mapping feature can be conveniently turn off by using
@@ -82,7 +81,6 @@ Odometry:
           device: *device
           enc_dtype: fp32
           dec_dtype: fp32
-          decoder_depth: 12
       monodepth:
         type: DepthAnythingV3
         args:
@@ -114,12 +112,19 @@ Odometry:
       device: cpu
       vectorize: true
       parallel: false
+      autodiff: true          # required by the config spec (not used for graph selection)
       graph_type: pose2point
       # A hyperparameter sweep on EIVA plane_nose[40:200] found the defaults
       # (huber_delta 0.1, huber_delta_prev 1.0, match_atol 1.0, prior_sigma
       # 1e-4, max_iterations 20) optimal for this frontend — the tuned
       # DAv2 combo (see MACVO_MonoDAv2.yaml) does NOT transfer (ATE RMSE
       # 1.702 baseline vs 1.757 with the DAv2 combo).
+      # Optional alignment axis (pose2point only): per-frame warp on the current
+      # frame's observations correcting monocular depth bias (sim3 = scale,
+      # sl4 = projective); only SE(3) poses are written back.
+      # alignment:
+      #   type: sim3
+      #   prior_weight: 100.0
 
 
 Datas: !include ../Common/DeepODO_mono_experiments.yaml
