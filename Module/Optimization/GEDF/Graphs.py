@@ -13,7 +13,9 @@ g = grad d_hat(q).
 `ICP_TwoframePGO` into a 4-row-per-point hybrid graph. While the online map is
 not ready (`field.is_ready` false) the field row is inert (zero residual and
 Jacobian, unit variance), so the hybrid degrades to pure ICP without any shape
-changes mid-run.
+changes mid-run. Constructing with `field_enabled=False` forces that same
+inert-field path on a ready map - this is the pure-ICP init stage of the
+sequential `icp->gedf` mode (see Optimizer.py).
 
 The graphs run in the WORLD frame only (the map is world-anchored); there is no
 `Local_`-frame variant.
@@ -64,6 +66,12 @@ class GEDF_GraphOutput(GraphOutput):
     map_gauss_sigmas: torch.Tensor | None = None     # (N, 3) 1-sigma per-axis extents
     map_gauss_weights: torch.Tensor | None = None    # (N,)  signed amplitudes
     map_gauss_mae: torch.Tensor | None = None        # (N,)  per-cube fit MAE, broadcast
+    # Sparse cube grid (GEDFMapper.cubes), CPU; None unless a snapshot was
+    # requested AND viz.cubes is enabled.
+    map_cube_centers: torch.Tensor | None = None     # (C, 3) float32
+    map_cube_valid: torch.Tensor | None = None       # (C,)   bool
+    map_cube_mae: torch.Tensor | None = None         # (C,)   float32
+    map_cube_size: float | None = None               # cube edge length (m)
     # Alignment diagnostics ("estimate + report"): the warp parameters
     # estimated jointly with the pose. The pose in `motion` is always the pure
     # SE(3) component.
@@ -77,10 +85,14 @@ class GEDF_Registration(FactorGraph):
 
     def __init__(self, graph_data: GEDF_GraphInput, field: GEDFMapProtocol,
                  field_cfg: SimpleNamespace,
-                 alignment_cfg: SimpleNamespace | None = None) -> None:
+                 alignment_cfg: SimpleNamespace | None = None,
+                 field_enabled: bool = True) -> None:
         super().__init__()
         self.field = field                      # plain attribute: .to() must not re-cast the map
         self.field_cfg = field_cfg
+        # False = field rows stay inert even on a ready map (same path as the
+        # not-ready cold start); used by the ICP init stage of "icp->gedf".
+        self.field_enabled = field_enabled
         self.from_idx: torch.Tensor = graph_data.from_idx
         self.frame_idx: torch.Tensor = graph_data.frame_idx
         self.init_motion: pp.LieTensor = graph_data.init_motion
@@ -97,13 +109,17 @@ class GEDF_Registration(FactorGraph):
         self.register_buffer("obs_covTc", graph_data.observations.data["obs2_covTc"])
 
     # -------------------------------------------------------------- #
+    @property
+    def _field_active(self) -> bool:
+        return self.field_enabled and self.field.is_ready
+
     def _points_world(self) -> torch.Tensor:
         return self.alignment.act(typ.cast(torch.Tensor, self.points_Tc), self.edges_index)
 
     def _field_residual(self, q: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Field residual (N,) and OOB mask (N,), differentiable in q."""
         cfg = self.field_cfg
-        if not self.field.is_ready:
+        if not self._field_active:
             zeros = q.sum(-1) * 0.0             # keeps the autograd graph shape intact
             return zeros, torch.zeros_like(zeros, dtype=torch.bool)
         dist = self.field.query(q)
@@ -113,7 +129,7 @@ class GEDF_Registration(FactorGraph):
 
     @torch.no_grad()
     def _oob_mask(self, q: torch.Tensor) -> torch.Tensor:
-        if not self.field.is_ready:
+        if not self._field_active:
             return torch.zeros(q.shape[0], device=q.device, dtype=torch.bool)
         dist, _ = self.field.query_with_grad(q)
         return dist >= self.field_cfg.oob_value_threshold
@@ -122,7 +138,7 @@ class GEDF_Registration(FactorGraph):
     def _field_variance(self, q: torch.Tensor, oob: torch.Tensor) -> torch.Tensor:
         """Variance of the scalar field residual per point (N,), in m^2."""
         cfg = self.field_cfg
-        if not self.field.is_ready:
+        if not self._field_active:
             # Field rows are inert during cold start: unit variance.
             return torch.ones(q.shape[:1], device=q.device, dtype=q.dtype)
         sigma_map = self.field.sigma
@@ -146,7 +162,7 @@ class GEDF_Registration(FactorGraph):
         cfg = self.field_cfg
         N = q.shape[0]
         J = torch.zeros((N, 1, 7), device=q.device, dtype=q.dtype)
-        if not self.field.is_ready:
+        if not self._field_active:
             return J
         _, g = self.field.query_with_grad(q)
         norm = g.norm(dim=-1, keepdim=True)
@@ -200,8 +216,9 @@ class GEDF_ICP(GEDF_Registration):
 
     def __init__(self, graph_data: GEDF_GraphInput, field: GEDFMapProtocol,
                  field_cfg: SimpleNamespace,
-                 alignment_cfg: SimpleNamespace | None = None) -> None:
-        super().__init__(graph_data, field, field_cfg, alignment_cfg)
+                 alignment_cfg: SimpleNamespace | None = None,
+                 field_enabled: bool = True) -> None:
+        super().__init__(graph_data, field, field_cfg, alignment_cfg, field_enabled)
         self.points_Tw: torch.Tensor
         self.pts_covTw: torch.Tensor
         self.register_buffer("points_Tw", graph_data.points.data["pos_Tw"])

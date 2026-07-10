@@ -36,6 +36,12 @@ def main() -> None:
                         help="Ellipsoid half-size = n_sigma * per-axis sigma")
     parser.add_argument("--max_gaussians", type=int, default=200_000,
                         help="Cap on rendered gaussians (top-|weight| kept)")
+    parser.add_argument("--max_sigma", type=float, default=None,
+                        help="Hide components broader than this per-axis sigma (m); "
+                             "default 2 * cube_size, 0 = show all")
+    parser.add_argument("--cubes", action="store_true",
+                        help="Also render the sparse cube grid as wireframe boxes "
+                             "(hue = cube MAE, gray = not yet fitted)")
     parser.add_argument("--save", type=str, default=None,
                         help="Write an .rrd file instead of spawning the viewer")
     parser.add_argument("--device", type=str,
@@ -61,11 +67,18 @@ def main() -> None:
     rr_plt.default_mode = "rerun"
     rr_plt.log_gedf_map("/world/gedf_map", points, dist, radius=args.resolution / 3)
     if args.gaussians:
-        means, sigmas, weights, mae = mapper.gaussians(max_gaussians=args.max_gaussians)
+        means, sigmas, weights, mae = mapper.gaussians(
+            max_gaussians=args.max_gaussians, max_sigma=args.max_sigma)
         print(f"[GEDF] rendering {means.shape[0]} gaussians "
               f"({int((weights < 0).sum())} negative) at {args.n_sigma:.1f} sigma")
         rr_plt.log_gedf_gaussians("/world/gedf_map/gaussians", means, sigmas, weights,
                                   mae, n_sigma=args.n_sigma)
+    if args.cubes:
+        centers, valid, cube_mae = mapper.cubes()
+        print(f"[GEDF] rendering {centers.shape[0]} cubes "
+              f"({int(valid.sum())} fitted) of edge {mapper.cube_size} m")
+        rr_plt.log_gedf_cubes("/world/gedf_map/cubes", centers, valid, cube_mae,
+                              cube_size=mapper.cube_size)
     if args.save is not None:
         print(f"[GEDF] wrote {args.save}")
 

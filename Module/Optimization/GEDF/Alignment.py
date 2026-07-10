@@ -13,7 +13,10 @@ camera-frame points and is one of:
 
 Only the SE(3) factor is ever written back to the map (the pose schema is a
 7-float SE3); the warp parameters are estimated jointly during the solve and
-reported through `GEDF_GraphOutput` for diagnostics ("estimate + report").
+reported through `GEDF_GraphOutput` for diagnostics. For sim3 the estimated
+scale is additionally fed forward by GEDF_PGO into the NEXT call's landmark
+insertion (scaling about the previous camera center), keeping the online map
+scale-consistent with the corrected registration - see Optimizer.py, step 0.
 
 The warp parameters carry a quadratic prior (rows appended to the graph
 residual) pulling them toward identity; `prior_weight` is the information
@@ -109,6 +112,15 @@ class SE3Alignment(nn.Module):
         if extras is None:
             return None
         return extras.detach().float().cpu().clone()
+
+    @torch.no_grad()
+    def load_extra_state(self, state: torch.Tensor | None) -> None:
+        """Seed the warp parameters from another alignment's extra_state()
+        (the ICP->field warp hand-off of graph_type "icp->gedf")."""
+        extras = self._extras()
+        if state is None or extras is None:
+            return
+        extras.copy_(state.to(dtype=extras.dtype, device=extras.device))
 
     def scale(self) -> float | None:
         return None

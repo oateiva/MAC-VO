@@ -87,10 +87,16 @@ key tensor + `searchsorted` serves fully batched queries.
 * `sample_surface(resolution, iso, max_points)` — near-surface point cloud of
   the field (grid-sample valid cubes, keep `d̂ < iso`); shared by the Rerun
   live visualization and `Scripts/VisualizeGEDF.py`.
-* `gaussians(max_gaussians)` — all valid GMM components as flat CPU tensors
-  `(means, sigmas, weights, cube_mae)`; `sigmas` are the per-axis 1-sigma
-  extents (`p²`, axis-aligned — the model has no rotation), `weights` are the
-  signed amplitudes. Feeds the ellipsoid visualization.
+* `cubes()` — the sparse cube grid as flat CPU tensors `(centers, valid, mae)`,
+  one entry per allocated cube (`valid` = has a usable fit). Feeds the
+  wireframe cube-grid visualization.
+* `gaussians(max_gaussians, max_sigma)` — all valid GMM components as flat CPU
+  tensors `(means, sigmas, weights, cube_mae)`; `sigmas` are the per-axis
+  1-sigma extents (`p²`, axis-aligned — the model has no rotation), `weights`
+  are the signed amplitudes. Components broader than `max_sigma` on any axis
+  are dropped (default `2 × cube_size`; `0` = keep all): the fitter inflates
+  some components into near-constant "DC" offsets (σ up to ~1e10 m) that are
+  meaningless as spatial glyphs. Feeds the ellipsoid visualization.
 * `from_gdf1(path)` / `export_gdf1(path)` — load a pre-built map (frozen) /
   write the current map, byte-compatible with G-EDF's visualization tools
   (`visualize_slice.py`, `visualize_3d.py`, `gaussian_to_ply`).
@@ -128,7 +134,9 @@ this backend in a `Local_`-style frame transform).
 * `GEDF_ICP` — the hybrid: 4 rows per keypoint = the standard covariance-
   weighted ICP 3-vector (`T·p_c - p_w`) plus the field row. While the map is
   not ready the field row is inert (zero residual/Jacobian, unit variance), so
-  the graph degrades to pure ICP with no shape changes mid-run.
+  the graph degrades to pure ICP with no shape changes mid-run. Constructing
+  with `field_enabled=False` forces the same inert path on a ready map — the
+  pure-ICP init stage of the sequential `icp->gedf` mode.
 * `Analytic_*` variants supply hand-derived Jacobians in PyPose's 7-wide SE3
   layout: field row `J = [ gᵀ | -gᵀ[q]ₓ | 0 ]` with `q = T·p`, `g = ∇d̂(q)`
   (per-point gradient norm clamped to `max_grad_norm` as solver-side
@@ -191,6 +199,20 @@ spawned worker when `parallel: true`):
    fine (δ=0.5), mirroring G-EDF-Loc's Cauchy coarse→fine schedule — with
    block-diagonal inverse-covariance weights.
 
+With `graph_type: icp->gedf` step 4 runs **twice, sequentially**: a pure-ICP
+solve (the hybrid graph with `field_enabled=False`) produces a frame-to-frame
+initial estimate, then pure field registration against the *whole accumulated
+map*, seeded by it, gets the final word. Rationale: in the joint `gedf+icp`
+solve the 3 ICP rows per point dominate the single field row, so the map can
+only nudge the pose; in the sequential mode the map factor fully owns the
+final registration and on revisits snaps the pose back onto structure mapped
+hundreds of frames earlier — place-recognition-like anchoring without an
+explicit loop-closure detector. Caveat: the final solve inherits pure `gedf`'s
+degeneracy — in locally planar scenes (a flat seabed, a single wall) 3 DoF are
+unconstrained by the field and only the ICP init pins them; on such geometry
+the joint `gedf+icp` remains the safer choice. While the map is not ready the
+mode degrades to pure ICP, exactly like `gedf+icp`.
+
 The map lives in the optimizer **context**, i.e. entirely inside the worker
 process in parallel mode. Only the pose (and, when requested, a bounded map
 snapshot for visualization) crosses the result queue.
@@ -205,7 +227,8 @@ optimizer:
     vectorize: true
     parallel: true          # spawn worker process (pipelined with the frontend)
     autodiff: false         # false = analytic Jacobians (LM_analytic), recommended
-    graph_type: gedf+icp    # "gedf" = pure field registration | "gedf+icp" = hybrid
+    graph_type: gedf+icp    # "gedf" = pure field | "gedf+icp" = joint hybrid |
+                            # "icp->gedf" = sequential: ICP init, whole-map field final
 
     map:
       source: online        # "online" = build during the run | "prebuilt" = load .bin
@@ -249,6 +272,11 @@ optimizer:
       gaussians: false          # OPTIONAL: also snapshot GMM components as ellipsoids
       n_sigma: 1.0              # OPTIONAL: ellipsoid half-size = n_sigma * sigma_axis
       max_gaussians: 20000      # OPTIONAL: per-snapshot cap (top-|weight| kept)
+      max_sigma: 2.0            # OPTIONAL: hide components broader than this (m);
+                                # absent = 2 * cube_size, 0 = show all (incl. huge
+                                # near-constant "DC" components)
+      cubes: false              # OPTIONAL: also draw the sparse cube grid as
+                                # wireframe boxes (hue = cube MAE, gray = pending)
 
     alignment:                  # OPTIONAL (absent = se3; see "Alignment axis" above)
       type: sim3                # se3 | sim3 | sl4 (sim3/sl4 require autodiff: true)
@@ -277,13 +305,60 @@ logged as axis-aligned wireframe ellipsoids under
 can be toggled). Confidence encoding: **hue** = the cube's fit MAE (cividis,
 dark = trustworthy), **alpha** = normalized |weight| (faint = low-amplitude
 component), **magenta** = negative ("carving") components. Half-sizes are
-`n_sigma ×` the per-axis 1-sigma extents.
+`n_sigma ×` the per-axis 1-sigma extents. Components broader than
+`viz.max_sigma` (default `2 × cube_size`) are hidden — the fit produces
+near-constant background components with σ up to ~1e10 m that would otherwise
+dwarf the scene.
+
+**How to read the ellipsoids.** Each one is the 1-sigma (× `n_sigma`)
+iso-surface of one *basis function* of the distance-field approximation — not
+a landmark, not an uncertainty/covariance ellipsoid, and not the cube grid:
+
+* **Axes** are the world NED coordinate axes. The model's scales are purely
+  diagonal (`λ_a = p_a⁴`, `σ_a = p_a²` per axis, no cross terms), so every
+  ellipsoid is axis-aligned; oblique surfaces are approximated by *mixtures*
+  of axis-aligned blobs, never by a tilted one.
+* **Size** is each component's independently *fitted* spatial support — the
+  region over which it meaningfully bends `d̂` (influence decays to ~nothing
+  beyond 2–3σ). Read it as the spatial wavelength of the field feature it
+  encodes: tight magenta negatives carve the near-zero valley at the surface
+  (thickness ≈ how sharply the valley is resolved, in-plane extent ≈ the
+  surface patch one component covers); larger positives encode the coarse
+  "distance grows away from the surface" ramp. Size does **not** indicate
+  importance, confidence, or amount of geometry — that's hue (cube fit MAE)
+  and alpha (|weight|, the field change in meters at the component's center).
+* **Size is unrelated to `cube_size`.** The cube is only the container: each
+  cube owns K components whose sigmas the fitter sets freely, from centimeters
+  to (degenerately) kilometers. A cube's mixture is also only ever *evaluated*
+  inside its own cube ± the blend margin, so a component's actual influence is
+  clipped to that support regardless of its drawn extent — which is exactly
+  why σ ≫ cube_size components are constant offsets (and hidden by
+  `viz.max_sigma`).
+
+**Building a map from a pointcloud** (e.g. a photogrammetry model, for
+`map.source: prebuilt` localization):
+
+```bash
+python Scripts/BuildGEDFMap.py --ply model.ply --config <odom config> [--out model.bin]
+```
+
+reads the mapper parameters from the config's `map.online` (or the GTSAM
+hybrid's `gedf.map.online`) block so the offline map matches the online setup,
+inserts + fits all cubes, and writes a GDF1 `.bin`. The pointcloud must be in
+the same world frame as the sequence's poses.
 
 **Offline** (any GDF1 map — from the C++ trainer or `export_gdf1`):
 
+With `viz.cubes: true` the sparse cube grid itself is logged as wireframe boxes
+at `/world/gedf_map/cubes` — fitted cubes colored by their fit MAE (same
+cividis scale as the ellipsoids), not-yet-fitted cubes faint gray. Unlike the
+points/ellipsoids this layer is **not** gated on map readiness, so it shows
+coverage growing during the cold start.
+
 ```bash
 python Scripts/VisualizeGEDF.py --map path/to/map.bin [--iso 0.05] [--resolution 0.05] \
-    [--gaussians] [--n_sigma 1.0] [--max_gaussians 200000] [--save out.rrd]
+    [--gaussians] [--n_sigma 1.0] [--max_gaussians 200000] [--max_sigma 2.0] \
+    [--cubes] [--save out.rrd]
 ```
 
 ## 5. Results

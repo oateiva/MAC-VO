@@ -344,6 +344,46 @@ def test_gaussian_snapshot_plumbing(scene_map_bin):
         GEDF_PGO.is_valid_config(cfg_bad2)
 
 
+def test_cube_snapshot_plumbing(scene_map_bin):
+    """map_cube_* fields must be populated iff viz.cubes is enabled AND a
+    snapshot was requested; the payload must be picklable CPU tensors."""
+    cfg = make_optimizer_config("gedf+icp", False, scene_map_bin)
+    cfg.viz.cubes = True
+    GEDF_PGO.is_valid_config(cfg)
+    context = GEDF_PGO.init_context(cfg)
+
+    gd = make_graph_input(T_GT, perturbed_pose(T_GT, 2.0, 0.05), scene_registration_points())
+    gd.want_map_snapshot = True
+    _, out = GEDF_PGO._optimize(context, gd)
+    assert out.map_cube_centers is not None and out.map_cube_valid is not None
+    assert out.map_cube_mae is not None and out.map_cube_size is not None
+    C = out.map_cube_centers.shape[0]
+    assert C > 0
+    assert out.map_cube_valid.shape == (C,) and out.map_cube_mae.shape == (C,)
+    assert out.map_cube_centers.dtype == torch.float32 and not out.map_cube_centers.is_cuda
+    assert out.map_cube_valid.dtype == torch.bool
+    assert out.map_cube_size > 0
+    out2 = pickle.loads(pickle.dumps(out))
+    assert torch.equal(out2.map_cube_centers, out.map_cube_centers)
+
+    # no snapshot request -> cube fields stay None
+    gd.want_map_snapshot = False
+    _, out3 = GEDF_PGO._optimize(context, gd)
+    assert out3.map_cube_centers is None and out3.map_cube_size is None
+
+    # off by default (absent key)
+    ctx_plain = GEDF_PGO.init_context(make_optimizer_config("gedf+icp", False, scene_map_bin))
+    gd.want_map_snapshot = True
+    _, out4 = GEDF_PGO._optimize(ctx_plain, gd)
+    assert out4.map_cube_centers is None
+
+    # validator rejects a non-bool value
+    cfg_bad = make_optimizer_config("gedf+icp", False, scene_map_bin)
+    cfg_bad.viz.cubes = "yes"
+    with pytest.raises((ValueError, KeyError)):
+        GEDF_PGO.is_valid_config(cfg_bad)
+
+
 # --------------------------------------------------------------------------- #
 # Alignment axis (se3 | sim3 | sl4)
 # --------------------------------------------------------------------------- #
@@ -586,6 +626,90 @@ def test_alignment_residual_shapes(scene_mapper):
     assert cov4.shape == (N + 1, 4, 4)
     expected = torch.diag(torch.tensor([1.0 / w, 1.0, 1.0, 1.0], dtype=cov4.dtype))
     torch.testing.assert_close(cov4[-1], expected)
+
+
+# --------------------------------------------------------------------------- #
+# Sequential ICP-init -> whole-map field registration ("icp->gedf")
+# --------------------------------------------------------------------------- #
+def test_field_disabled_graph_is_pure_icp(scene_mapper):
+    """field_enabled=False must keep the field rows inert even on a READY map
+    (the pure-ICP init stage of "icp->gedf")."""
+    assert scene_mapper.is_ready
+    init = perturbed_pose(T_GT, 3.0, 0.1)
+    gd = make_graph_input(T_GT, init, scene_registration_points())
+    graph = Analytic_GEDF_ICP(gd, field=scene_mapper, field_cfg=FIELD_NS,
+                              field_enabled=False).to(dtype=torch.double)
+    r = graph()
+    assert (r[:, 3] == 0).all()
+    J = graph.build_jacobian().reshape(-1, 4, 7)
+    assert (J[:, 3] == 0).all()
+    cov = graph.covariance_array()
+    assert torch.allclose(cov[:, 3, 3], torch.ones_like(cov[:, 3, 3]))
+
+
+@pytest.mark.parametrize("autodiff", [False, True])
+def test_icp_gedf_pose_recovery(scene_map_bin, autodiff):
+    cfg = make_optimizer_config("icp->gedf", autodiff, scene_map_bin)
+    GEDF_PGO.is_valid_config(cfg)
+    context = GEDF_PGO.init_context(cfg)
+
+    init = perturbed_pose(T_GT, 5.0, 0.2)
+    gd = make_graph_input(T_GT, init, scene_registration_points())
+    _, out = GEDF_PGO._optimize(context, gd)
+    rot, trans = pose_error(out.motion.detach(), T_GT)
+    # the final answer is pure field registration: limited by the field MAE
+    assert rot < 1.5 and trans < 0.06, f"icp->gedf autodiff={autodiff}: {rot:.3f} deg {trans:.4f} m"
+
+
+def test_icp_gedf_recovers_beyond_pure_gedf_basin(scene_map_bin):
+    """The motivating case: an init far outside pure field registration's
+    convergence basin is recovered because the ICP stage supplies the initial
+    estimate; pure "gedf" from the same init must do strictly worse."""
+    results = {}
+    for graph_type in ("gedf", "icp->gedf"):
+        # fresh (seeded, identical) init per run: pose2opt may share storage
+        # with init_motion and the first solve would mutate a shared one
+        init = perturbed_pose(T_GT, 20.0, 1.0)
+        ctx = GEDF_PGO.init_context(make_optimizer_config(graph_type, False, scene_map_bin))
+        gd = make_graph_input(T_GT, init, scene_registration_points())
+        _, out = GEDF_PGO._optimize(ctx, gd)
+        results[graph_type] = pose_error(out.motion.detach(), T_GT)
+
+    rot_seq, trans_seq = results["icp->gedf"]
+    _, trans_gedf = results["gedf"]
+    assert rot_seq < 1.5 and trans_seq < 0.08, f"icp->gedf: {rot_seq:.3f} deg {trans_seq:.4f} m"
+    assert trans_seq < trans_gedf, \
+        f"pure gedf unexpectedly matched the ICP-seeded solve ({trans_gedf:.4f} m)"
+
+
+def test_icp_gedf_cold_start_runs_pure_icp(scene_map_bin):
+    """With a not-ready map the sequential mode must degrade to pure ICP (which
+    recovers the pose exactly in this fixture), not return init unchanged."""
+    cfg = make_optimizer_config("icp->gedf", False, None, source="online")
+    context = GEDF_PGO.init_context(cfg)   # insert_keypoints=False: stays not-ready
+
+    init = perturbed_pose(T_GT, 5.0, 0.2)
+    gd = make_graph_input(T_GT, init, scene_registration_points())
+    _, out = GEDF_PGO._optimize(context, gd)
+    rot, trans = pose_error(out.motion.detach(), T_GT)
+    assert rot < 0.5 and trans < 0.02, f"cold icp->gedf: {rot:.3f} deg {trans:.4f} m"
+
+
+def test_icp_gedf_sim3_alignment(scene_map_bin):
+    """The alignment axis must survive the two-solve flow: the reported scale
+    comes from the final (field) solve and corrects a 1.2x depth bias."""
+    cfg = make_optimizer_config("icp->gedf", True, scene_map_bin,
+                                alignment=align_ns("sim3"))
+    GEDF_PGO.is_valid_config(cfg)
+    ctx = GEDF_PGO.init_context(cfg)
+    gd = make_graph_input(T_GT, perturbed_pose(T_GT, 3.0, 0.1),
+                          scene_registration_points(), warp_cam=lambda p: 1.2 * p)
+    ctx, out = GEDF_PGO._optimize(ctx, gd)
+    rot, trans = pose_error(out.motion.detach(), T_GT)
+    assert rot < 1.5 and trans < 0.06, f"icp->gedf sim3: {rot:.3f} deg {trans:.4f} m"
+    assert out.alignment_type == "sim3" and out.scale is not None
+    assert out.scale == pytest.approx(1 / 1.2, rel=0.05)
+    assert ctx["align_scale_prev"] is not None   # feed-forward uses the field solve
 
 
 def test_registry_and_sequential_optimize(scene_map_bin):

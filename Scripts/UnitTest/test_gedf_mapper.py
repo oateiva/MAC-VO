@@ -312,7 +312,8 @@ def test_gaussians_accessor():
     mapper.insert(sample_plane(n=5000, extent=2.0, z=0.5).float())
     mapper.flush()
 
-    means, sigmas, weights, mae = mapper.gaussians()
+    # max_sigma=0 disables the broad-component display filter: ALL components
+    means, sigmas, weights, mae = mapper.gaussians(max_sigma=0)
     n = mapper.num_valid_gaussians
     assert means.shape == (n, 3) and sigmas.shape == (n, 3)
     assert weights.shape == (n,) and mae.shape == (n,)
@@ -324,9 +325,22 @@ def test_gaussians_accessor():
     assert bool(torch.isin(mae, cube_maes).all())
 
     # cap keeps the top-|weight| components
-    _, _, w_cap, _ = mapper.gaussians(max_gaussians=2)
+    _, _, w_cap, _ = mapper.gaussians(max_gaussians=2, max_sigma=0)
     assert w_cap.shape == (2,)
     assert bool((w_cap.abs() >= weights.abs().sort(descending=True).values[1] - 1e-6).all())
+
+    # default max_sigma (2 * cube_size) drops the near-constant broad
+    # components the fit uses as DC offsets (sigma can reach ~1e10 m) but
+    # keeps the tight surface structure
+    m_def, s_def, w_def, _ = mapper.gaussians()
+    limit = 2.0 * mapper.cube_size
+    assert 0 < m_def.shape[0] <= n
+    assert bool((s_def.max(dim=-1).values <= limit).all())
+    over = sigmas.max(dim=-1).values > limit
+    assert m_def.shape[0] == n - int(over.sum())
+    # explicit override behaves the same way
+    m_tight, *_ = mapper.gaussians(max_sigma=0.5 * limit)
+    assert m_tight.shape[0] <= m_def.shape[0]
 
     # padding + invalid-cube filtering on a hand-built map
     hand = make_mapper()
@@ -355,6 +369,29 @@ def test_gaussians_accessor():
     e_m, e_s, e_w, e_mae = make_mapper().gaussians()
     assert e_m.shape == (0, 3) and e_s.shape == (0, 3)
     assert e_w.shape == (0,) and e_mae.shape == (0,)
+
+
+def test_cubes_accessor():
+    """cubes() must expose one entry per allocated cube: grid-aligned centers,
+    the valid mask, and per-cube MAE, as CPU tensors."""
+    mapper = make_mapper()
+    mapper.insert(sample_plane(n=5000, extent=2.0, z=0.5).float())
+    mapper.flush()
+
+    centers, valid, mae = mapper.cubes()
+    C = mapper.num_cubes
+    assert centers.shape == (C, 3) and valid.shape == (C,) and mae.shape == (C,)
+    assert centers.dtype == torch.float32 and not centers.is_cuda
+    assert valid.dtype == torch.bool and mae.dtype == torch.float32
+    assert int(valid.sum()) == mapper.num_valid_cubes > 0
+    # centers sit at cube midpoints of the world-anchored grid
+    frac = centers / mapper.cube_size - torch.floor(centers / mapper.cube_size)
+    torch.testing.assert_close(frac, torch.full_like(frac, 0.5))
+    assert bool(torch.isfinite(mae[valid]).all())
+
+    # empty map returns empty tensors
+    e_c, e_v, e_mae = make_mapper().cubes()
+    assert e_c.shape == (0, 3) and e_v.shape == (0,) and e_mae.shape == (0,)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")

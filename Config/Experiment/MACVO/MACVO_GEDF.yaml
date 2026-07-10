@@ -5,8 +5,10 @@
 # landmarks and registers each frame's keypoints against it (in the style of
 # G-EDF-Loc), fused with the covariance-weighted ICP factor (graph_type
 # "gedf+icp"). Set graph_type to "gedf" for pure field registration, or
-# map.source to "prebuilt" (+ map.path to a GDF1 .bin) to localize against a
-# pre-built map.
+# "icp->gedf" for the sequential mode (pure-ICP solve as initial estimate,
+# then whole-map field registration gets the final word - place-recognition-
+# like anchoring on revisits). map.source "prebuilt" (+ map.path to a GDF1
+# .bin) localizes against a pre-built map.
 #
 # Everything except the optimizer block matches MACVO_Performant.yaml.
 #
@@ -85,7 +87,7 @@ Odometry:
       vectorize: true
       parallel: true
       autodiff: false       # analytic Jacobians (LM_analytic)
-      graph_type: gedf+icp  # "gedf" = pure field registration
+      graph_type: gedf+icp  # "gedf" = pure field | "icp->gedf" = ICP init, field final
       map:
         source: online      # "prebuilt" localizes against map.path instead
         path: ""            # GDF1 .bin path; only used when source is "prebuilt"
@@ -119,6 +121,11 @@ Odometry:
         gaussians: false    # also snapshot GMM components as confidence ellipsoids
         n_sigma: 1.0        # ellipsoid half-size = n_sigma * per-axis sigma
         max_gaussians: 20000  # per-snapshot cap (top-|weight| kept)
+        # max_sigma: 2.0      # hide components broader than this per-axis sigma (m);
+                              # absent = 2 * cube_size (near-constant "DC" components
+                              # reach ~1e10 m and would dwarf the surface), 0 = show all
+        cubes: false          # also draw the sparse cube grid as wireframe boxes
+                              # (hue = cube MAE, gray = not yet fitted)
 
 Datas: !include ../Common/DeepODO_stereo_experiments.yaml
 Preprocess: !include ../Common/Preprocess.yaml

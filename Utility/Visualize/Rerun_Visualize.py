@@ -203,6 +203,12 @@ class Rerun_Visualizer:
           ("carving") components at `{path}/neg` in fixed magenta — separate
           entities so each population can be toggled in the viewer.
         Empty populations are logged as empty so stale instances clear.
+
+        Ellipsoid axes are the world NED axes (the field model is diagonal, no
+        rotation); size is each component's fitted spatial support — the scale
+        of the field feature it encodes, NOT uncertainty, importance, or the
+        cube grid. See Module/Optimization/GEDF/README.md §4 ("How to read the
+        ellipsoids").
         """
         assert rr is not None
         import matplotlib.pyplot as plt
@@ -231,6 +237,38 @@ class Rerun_Visualizer:
             rr.log(rerun_path + sub, rr.Ellipsoids3D(
                 centers=mu[mask], half_sizes=half[mask], colors=rgba_u8[mask],
                 fill_mode=rr.components.FillMode.MajorWireframe))
+
+    @register
+    @staticmethod
+    def log_gedf_cubes(rerun_path: str, centers: torch.Tensor, valid: torch.Tensor,
+                       mae: torch.Tensor, cube_size: float):
+        """
+        Log the G-EDF sparse cube grid (see GEDFMapper.cubes) as wireframe
+        boxes of edge `cube_size`. Fitted (valid) cubes are colored by their
+        fit MAE on cividis — the same scale the ellipsoid layer uses — and
+        not-yet-fitted cubes are faint gray, so coverage and fit quality are
+        visible at a glance.
+        """
+        assert rr is not None
+        c = centers.detach().cpu().numpy()
+        if c.shape[0] == 0:
+            rr.log(rerun_path, rr.Boxes3D(half_sizes=np.zeros((0, 3))))
+            return
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import Normalize
+
+        v = valid.detach().cpu().numpy().astype(bool)
+        m = mae.detach().cpu().numpy()
+        rgba = np.full((c.shape[0], 4), [0.5, 0.5, 0.5, 0.25])   # pending: faint gray
+        if v.any():
+            norm = Normalize(vmin=0.0, vmax=max(float(np.quantile(m[v], 0.95)), 1e-6),
+                             clip=True)
+            rgba[v] = plt.cm.cividis(norm(m[v]))    # type: ignore
+            rgba[v, 3] = 0.8
+        rgba_u8 = (rgba * 255).round().astype(np.uint8)
+        rr.log(rerun_path, rr.Boxes3D(
+            centers=c, half_sizes=np.full((c.shape[0], 3), cube_size / 2.0),
+            colors=rgba_u8))
 
     @register
     @staticmethod

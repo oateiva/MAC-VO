@@ -16,6 +16,12 @@ Per `_optimize` call (runs in the spawned worker when `parallel: true`):
   2. refit a budgeted number of dirty map cubes,
   3. solve the pose with a two-stage (coarse -> fine robust kernel) LM over the
      selected factor graph, mirroring G-EDF-Loc's two-stage Ceres solve.
+     `graph_type: icp->gedf` runs that two-stage LM twice: first a pure-ICP
+     solve (field rows disabled) for a frame-to-frame initial estimate, then a
+     pure field-registration solve against the whole accumulated map seeded by
+     it - the field gets the final word, so on revisits the pose snaps back to
+     previously mapped structure (place-recognition-like anchoring) instead of
+     the frame-to-frame rows dominating a joint solve.
 
 Runs in the WORLD frame only (the map is world-anchored) - do not wrap this
 optimizer in a `Local_`-style frame transform.
@@ -82,6 +88,28 @@ def _update_align_scale_state(state: float | None, estimate: float | None) -> fl
                     + _ALIGN_FF_ALPHA * math.log(estimate))
 
 
+def _run_lm_stages(graph: FactorGraph, stages: list[dict], device: str) -> None:
+    """Two-stage (coarse -> fine robust kernel) LM over one factor graph."""
+    for stage in stages:
+        if isinstance(graph, AnalyticModule):
+            optimizer = LM_analytic(graph, min=1e-6, **stage["optimizer_cfg"])
+        else:
+            optimizer = LM(graph, min=1e-6, **stage["optimizer_cfg"])
+        scheduler = StopOnPlateau(optimizer, steps=stage["steps"],
+                                  patience=2, decreasing=1e-5, verbose=False)
+        while scheduler.continual():
+            cov_inv = torch.pinverse(graph.covariance_array().to(device).double())
+            if not isinstance(graph, AnalyticModule) and cov_inv.shape[-1] == 1:
+                # pypose's RobustModel.normalize_RWJ treats the weight of a
+                # residual with last dim 1 as per-scalar entries - an (N,N)
+                # block-diag matrix would explode into N^2 1x1 blocks there.
+                weight = cov_inv.view(-1, 1)
+            else:
+                weight = torch.block_diag(*cov_inv)
+            loss = optimizer.step(input=(), weight=weight)
+            scheduler.step(loss)
+
+
 class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
     @torch.no_grad()
     def get_graph_data(self, global_map: VisualMap, frame_idx: torch.Tensor,
@@ -126,7 +154,7 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
         spec: dict = {
-            "graph_type": lambda s: s in {"gedf", "gedf+icp"},
+            "graph_type": lambda s: s in {"gedf", "gedf+icp", "icp->gedf"},
             "device": lambda v: isinstance(v, str) and (v == "cpu" or "cuda" in v),
             "vectorize": lambda b: isinstance(b, bool),
             "parallel": lambda b: isinstance(b, bool),
@@ -172,6 +200,9 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
                 "gaussians": lambda b: isinstance(b, bool),
                 "n_sigma": lambda v: isinstance(v, (int, float)) and v > 0,
                 "max_gaussians": lambda n: isinstance(n, int) and n > 0,
+                # per-axis display cutoff (m); absent = 2 * cube_size, 0 = show all
+                "max_sigma": lambda v: isinstance(v, (int, float)),
+                "cubes": lambda b: isinstance(b, bool),
             }
             for key, check in optional_viz.items():
                 if hasattr(viz_ns, key):
@@ -192,15 +223,22 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
 
     @staticmethod
     def init_context(config) -> dict:
+        # "icp->gedf": the main graph is pure field registration; a pure-ICP
+        # init solve (InitGraphClass, field_enabled=False) precedes it.
+        InitGraphClass: type | None = None
         match (config.autodiff, config.graph_type):
             case (True, "gedf"):
                 PoseGraphClass = GEDF_Registration
             case (True, "gedf+icp"):
                 PoseGraphClass = GEDF_ICP
+            case (True, "icp->gedf"):
+                PoseGraphClass, InitGraphClass = GEDF_Registration, GEDF_ICP
             case (False, "gedf"):
                 PoseGraphClass = Analytic_GEDF_Registration
             case (False, "gedf+icp"):
                 PoseGraphClass = Analytic_GEDF_ICP
+            case (False, "icp->gedf"):
+                PoseGraphClass, InitGraphClass = Analytic_GEDF_Registration, Analytic_GEDF_ICP
             case _:
                 raise ValueError(f"Graph type of {config.graph_type} is not supported")
 
@@ -244,6 +282,7 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
         return {
             "device": config.device,
             "pose_graph_class": PoseGraphClass,
+            "init_graph_class": InitGraphClass,
             "graph_type": config.graph_type,
             "field_cfg": config.field,
             "alignment_cfg": alignment_cfg,
@@ -258,7 +297,11 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
                 resolution=config.viz.resolution, max_points=config.viz.max_points,
                 gaussians=bool(getattr(config.viz, "gaussians", False)),
                 n_sigma=float(getattr(config.viz, "n_sigma", 1.0)),
-                max_gaussians=int(getattr(config.viz, "max_gaussians", 20_000))),
+                max_gaussians=int(getattr(config.viz, "max_gaussians", 20_000)),
+                # None = mapper default (2 * cube_size); explicit 0 = show all
+                max_sigma=(float(config.viz.max_sigma)
+                           if hasattr(config.viz, "max_sigma") else None),
+                cubes=bool(getattr(config.viz, "cubes", False))),
             "map": gedf_map,
             "insert_keypoints": config.map.insert_keypoints,
             "insert_dense": config.map.insert_dense,
@@ -320,9 +363,17 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
                 snap_pts, snap_dist = gedf_map.sample_surface(
                     resolution=viz.resolution, iso=viz.iso, max_points=viz.max_points)
                 if viz.gaussians:
-                    g_mu, g_sig, g_w, g_mae = gedf_map.gaussians(max_gaussians=viz.max_gaussians)
+                    g_mu, g_sig, g_w, g_mae = gedf_map.gaussians(
+                        max_gaussians=viz.max_gaussians, max_sigma=viz.max_sigma)
                     gauss_kw = dict(map_gauss_means=g_mu, map_gauss_sigmas=g_sig,
                                     map_gauss_weights=g_w, map_gauss_mae=g_mae)
+            # Cube grid: not gated on is_ready — coverage is exactly what one
+            # wants to watch while the map is still warming up.
+            if graph_data.want_map_snapshot and viz.cubes and gedf_map.num_cubes > 0:
+                c_mu, c_valid, c_mae = gedf_map.cubes()
+                gauss_kw.update(map_cube_centers=c_mu, map_cube_valid=c_valid,
+                                map_cube_mae=c_mae,
+                                map_cube_size=float(gedf_map.cube_size))
 
             # 3. Cold start / degenerate input guards.
             no_obs = len(graph_data.observations) == 0
@@ -334,32 +385,41 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
                                                  alignment_type=context["alignment_cfg"].type,
                                                  **gauss_kw)
 
-            # 4. Two-stage robust LM over the same graph module.
-            graph: FactorGraph = context["pose_graph_class"](
-                graph_data, field=gedf_map, field_cfg=context["field_cfg"],
-                alignment_cfg=context["alignment_cfg"]) \
-                .to(device=torch.device(context["device"]), dtype=torch.double)
-            assert isinstance(graph, FactorGraph)
-
-            for stage in context["stages"]:
-                if isinstance(graph, AnalyticModule):
-                    optimizer = LM_analytic(graph, min=1e-6, **stage["optimizer_cfg"])
-                else:
-                    optimizer = LM(graph, min=1e-6, **stage["optimizer_cfg"])
-                scheduler = StopOnPlateau(optimizer, steps=stage["steps"],
-                                          patience=2, decreasing=1e-5, verbose=False)
-                while scheduler.continual():
-                    cov_inv = torch.pinverse(
-                        graph.covariance_array().to(context["device"]).double())
-                    if not isinstance(graph, AnalyticModule) and cov_inv.shape[-1] == 1:
-                        # pypose's RobustModel.normalize_RWJ treats the weight of a
-                        # residual with last dim 1 as per-scalar entries - an (N,N)
-                        # block-diag matrix would explode into N^2 1x1 blocks there.
-                        weight = cov_inv.view(-1, 1)
-                    else:
-                        weight = torch.block_diag(*cov_inv)
-                    loss = optimizer.step(input=(), weight=weight)
-                    scheduler.step(loss)
+            # 4. Two-stage robust LM. "icp->gedf" solves twice (module
+            #    docstring): a pure-ICP solve (field rows disabled) supplies
+            #    the initial estimate, then pure field registration against
+            #    the whole accumulated map gets the final word. While the map
+            #    is not ready only the ICP solve runs (same degradation as
+            #    "gedf+icp" cold start).
+            device = torch.device(context["device"])
+            graph_kwargs = dict(field=gedf_map, field_cfg=context["field_cfg"],
+                                alignment_cfg=context["alignment_cfg"])
+            if context["graph_type"] == "icp->gedf":
+                graph: FactorGraph = context["init_graph_class"](
+                    graph_data, field_enabled=False, **graph_kwargs) \
+                    .to(device=device, dtype=torch.double)
+                assert isinstance(graph, FactorGraph)
+                _run_lm_stages(graph, context["stages"], context["device"])
+                if gedf_map.is_ready:
+                    # Re-seed the field solve with the FULL ICP estimate: the
+                    # pose (cloned - pose2opt shares storage with its
+                    # init_motion) and the warp state. Without the warp
+                    # hand-off a sim3/sl4 field solve would restart at
+                    # identity and have to re-discover e.g. the depth-scale
+                    # correction from scalar field rows alone.
+                    icp_align = typ.cast(GEDF_Registration, graph).alignment
+                    graph_data.init_motion = pp.SE3(
+                        graph.write_back().motion.detach().double().cpu().clone())
+                    graph = context["pose_graph_class"](graph_data, **graph_kwargs) \
+                        .to(device=device, dtype=torch.double)
+                    typ.cast(GEDF_Registration, graph).alignment \
+                        .load_extra_state(icp_align.extra_state())
+                    _run_lm_stages(graph, context["stages"], context["device"])
+            else:
+                graph = context["pose_graph_class"](graph_data, **graph_kwargs) \
+                    .to(device=device, dtype=torch.double)
+                assert isinstance(graph, FactorGraph)
+                _run_lm_stages(graph, context["stages"], context["device"])
 
         out = graph.write_back()
         align = typ.cast("GEDF_Registration", graph).alignment
@@ -388,16 +448,23 @@ class GEDF_PGO(IOptimizer[GEDF_GraphInput, dict, GEDF_GraphOutput]):
         from Utility.Visualize import rr_plt
         if rr_plt.default_mode == "rerun" and \
                 (result.map_points is not None or result.map_gauss_means is not None
-                 or result.scale is not None):
+                 or result.map_cube_centers is not None or result.scale is not None):
             import rerun as rr
             rr.set_time("frame_idx", sequence=int(result.frame_idx.flatten()[0]))
             if result.map_points is not None:
                 rr_plt.log_gedf_map("/world/gedf_map", result.map_points, result.map_dist)
-            if result.map_gauss_means is not None:
+            if result.map_gauss_means is not None and result.map_gauss_sigmas is not None \
+                    and result.map_gauss_weights is not None and result.map_gauss_mae is not None:
                 rr_plt.log_gedf_gaussians(
                     "/world/gedf_map/gaussians",
                     result.map_gauss_means, result.map_gauss_sigmas,
                     result.map_gauss_weights, result.map_gauss_mae,
                     n_sigma=float(getattr(self.config.viz, "n_sigma", 1.0)))
+            if result.map_cube_centers is not None and result.map_cube_valid is not None \
+                    and result.map_cube_mae is not None and result.map_cube_size is not None:
+                rr_plt.log_gedf_cubes(
+                    "/world/gedf_map/cubes",
+                    result.map_cube_centers, result.map_cube_valid,
+                    result.map_cube_mae, cube_size=result.map_cube_size)
             if result.scale is not None:
                 rr.log("/world/gedf_alignment/scale", rr.Scalars(result.scale))

@@ -429,7 +429,8 @@ class GEDFMapper:
         return points, dist
 
     @torch.no_grad()
-    def gaussians(self, max_gaussians: int | None = None
+    def gaussians(self, max_gaussians: int | None = None,
+                  max_sigma: float | None = None
                   ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         All valid gaussian components as flat CPU float32 tensors:
@@ -439,10 +440,16 @@ class GEDFMapper:
         lambda = p^4); components are axis-aligned — the field model has no
         rotation. `weights` are the SIGNED amplitudes (negative gaussians carve
         the field). `cube_mae` broadcasts each cube's fit MAE to its components.
-        Padding slots (k >= n_gauss) and invalid cubes are excluded. When N
-        exceeds `max_gaussians`, the top-|weight| components are kept. Used by
-        the Rerun ellipsoid visualization (live snapshots and the offline
-        viewer script).
+        Padding slots (k >= n_gauss) and invalid cubes are excluded.
+
+        Components broader than `max_sigma` on ANY axis are dropped (before the
+        `max_gaussians` top-|weight| cap): the fitter freely inflates a
+        component's sigma to make it a near-constant offset inside the cube
+        (observed up to ~1e10 m), which is meaningless as a spatial glyph and
+        would dwarf the actual surface structure. `max_sigma=None` (default)
+        = 2 * cube_size (wider than that is constant over the cube's support);
+        <= 0 disables the filter. Used by the Rerun ellipsoid visualization
+        (live snapshots and the offline viewer script).
         """
         empty = (torch.zeros((0, 3), dtype=torch.float32),
                  torch.zeros((0, 3), dtype=torch.float32),
@@ -460,6 +467,12 @@ class GEDFMapper:
         weights = self._weights[sel]
         cube_mae = self._mae.unsqueeze(-1).expand(-1, K)[sel]
 
+        limit = 2.0 * self.cube_size if max_sigma is None else float(max_sigma)
+        if limit > 0:
+            keep = sigmas.max(dim=-1).values <= limit
+            means, sigmas = means[keep], sigmas[keep]
+            weights, cube_mae = weights[keep], cube_mae[keep]
+
         if max_gaussians is not None and means.shape[0] > max_gaussians:
             keep = weights.abs().topk(max_gaussians).indices
             means, sigmas = means[keep], sigmas[keep]
@@ -467,6 +480,20 @@ class GEDFMapper:
 
         return (means.float().cpu(), sigmas.float().cpu(),
                 weights.float().cpu(), cube_mae.float().cpu())
+
+    @torch.no_grad()
+    def cubes(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        The sparse cube grid as flat CPU tensors: (centers (C,3) float32,
+        valid (C,) bool, mae (C,) float32).
+
+        One entry per ALLOCATED cube — `valid` marks cubes with a usable fit
+        (invalid ones hold points but no accepted parameters yet); `mae` is
+        each cube's fit MAE (meaningful only where valid). Feeds the Rerun
+        cube-grid visualization (`log_gedf_cubes`).
+        """
+        centers = (self._origin_i.to(torch.float32) + 0.5) * self.cube_size
+        return (centers.cpu(), self._valid.cpu(), self._mae.float().cpu())
 
     # ------------------------------------------------------------------ #
     # Incremental mapping
