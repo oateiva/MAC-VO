@@ -77,7 +77,11 @@ Odometry:
       monodepth:
         type: DepthAnythingV3
         args:
-          model_name: da3nested-giant-large
+          # The finetuned checkpoint is a single da3-giant model (keys
+          # model.backbone/head/cam_enc). The base HF weight is the NESTED
+          # giant-large; loading this .ckpt into the nested arch matches 0 keys
+          # and leaves the net at random init -> garbage, nondeterministic depth.
+          model_name: da3-giant
           weight: Z:/Research/weights/plane_nose_dav3/epoch=17-val_total_loss=0.1578.ckpt
           device: *device
           q90: 1.
