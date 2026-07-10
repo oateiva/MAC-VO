@@ -11,83 +11,83 @@
         step_size: 1
         compressed: false
 
--   type: TartanAir_NoIMU
-    name: abandonedfactory_Easy_P001
-    args:
-        root: D:\Datasets\TartanAir\abandonedfactory\Easy\P001
-        # Controls optional data sources
-        gtDepth: true
-        gtFlow: true
-        gtPose: true
-        is_stereo: false
-        window_length: 2
-        step_size: 1
-        compressed: false
+# -   type: TartanAir_NoIMU
+#     name: abandonedfactory_Easy_P001
+#     args:
+#         root: D:\Datasets\TartanAir\abandonedfactory\Easy\P001
+#         # Controls optional data sources
+#         gtDepth: true
+#         gtFlow: true
+#         gtPose: true
+#         is_stereo: false
+#         window_length: 2
+#         step_size: 1
+#         compressed: false
 
--   type: TartanAir_NoIMU
-    name: abandonedfactory_Easy_P002
-    args:
-        root: D:\Datasets\TartanAir\abandonedfactory\Easy\P002
-        # Controls optional data sources
-        gtDepth: true
-        gtFlow: true
-        gtPose: true
-        is_stereo: false
-        window_length: 2
-        step_size: 1
-        compressed: false
+# -   type: TartanAir_NoIMU
+#     name: abandonedfactory_Easy_P002
+#     args:
+#         root: D:\Datasets\TartanAir\abandonedfactory\Easy\P002
+#         # Controls optional data sources
+#         gtDepth: true
+#         gtFlow: true
+#         gtPose: true
+#         is_stereo: false
+#         window_length: 2
+#         step_size: 1
+#         compressed: false
 
--   type: TartanAir_NoIMU
-    name: abandonedfactory_Easy_P004
-    args:
-        root: D:\Datasets\TartanAir\abandonedfactory\Easy\P004
-        # Controls optional data sources
-        gtDepth: true
-        gtFlow: true
-        gtPose: true
-        is_stereo: false
-        window_length: 2
-        step_size: 1
-        compressed: false
+# -   type: TartanAir_NoIMU
+#     name: abandonedfactory_Easy_P004
+#     args:
+#         root: D:\Datasets\TartanAir\abandonedfactory\Easy\P004
+#         # Controls optional data sources
+#         gtDepth: true
+#         gtFlow: true
+#         gtPose: true
+#         is_stereo: false
+#         window_length: 2
+#         step_size: 1
+#         compressed: false
 
--   type: TartanAir_NoIMU
-    name: abandonedfactory_Easy_P005
-    args:
-        root: D:\Datasets\TartanAir\abandonedfactory\Easy\P005
-        # Controls optional data sources
-        gtDepth: true
-        gtFlow: true
-        gtPose: true
-        is_stereo: false
-        window_length: 2
-        step_size: 1
-        compressed: false
+# -   type: TartanAir_NoIMU
+#     name: abandonedfactory_Easy_P005
+#     args:
+#         root: D:\Datasets\TartanAir\abandonedfactory\Easy\P005
+#         # Controls optional data sources
+#         gtDepth: true
+#         gtFlow: true
+#         gtPose: true
+#         is_stereo: false
+#         window_length: 2
+#         step_size: 1
+#         compressed: false
 
--   type: TartanAir_NoIMU
-    name: abandonedfactory_Easy_P006
-    args:
-        root: D:\Datasets\TartanAir\abandonedfactory\Easy\P006
-        # Controls optional data sources
-        gtDepth: true
-        gtFlow: true
-        gtPose: true
-        is_stereo: false
-        window_length: 2
-        step_size: 1
-        compressed: false
+# -   type: TartanAir_NoIMU
+#     name: abandonedfactory_Easy_P006
+#     args:
+#         root: D:\Datasets\TartanAir\abandonedfactory\Easy\P006
+#         # Controls optional data sources
+#         gtDepth: true
+#         gtFlow: true
+#         gtPose: true
+#         is_stereo: false
+#         window_length: 2
+#         step_size: 1
+#         compressed: false
 
--   type: TartanAir_NoIMU
-    name: abandonedfactory_Easy_P008
-    args:
-        root: D:\Datasets\TartanAir\abandonedfactory\Easy\P000
-        # Controls optional data sources
-        gtDepth: true
-        gtFlow: true
-        gtPose: true
-        is_stereo: false
-        window_length: 2
-        step_size: 1
-        compressed: false
+# -   type: TartanAir_NoIMU
+#     name: abandonedfactory_Easy_P008
+#     args:
+#         root: D:\Datasets\TartanAir\abandonedfactory\Easy\P000
+#         # Controls optional data sources
+#         gtDepth: true
+#         gtFlow: true
+#         gtPose: true
+#         is_stereo: false
+#         window_length: 2
+#         step_size: 1
+#         compressed: false
 
 -   type: TartanAir_NoIMU
     name: abandonedfactory_night_Easy_P001

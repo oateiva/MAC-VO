@@ -1,0 +1,119 @@
+#
+# OPTIMAL: DAv2 + GTSAM (pose2point, SE(3)) — best known configuration.
+#
+# ATE RMSE 0.233 / 0.229 m (seeds 0/1) on EIVA plane_nose[80:160];
+# 0.512 / 0.496 m on plane_nose[40:200]. Rank 1 of all studied setups.
+# Sources: ProgressReports/2026-07-06_optimizer-hyperparameter-sweep.md,
+#          ProgressReports/2026-07-07_gtsam-alignment-sweep.md
+#
+# What makes it optimal:
+#   - Tuned four-parameter GTSAM combo (huber 0.05, hprev 3.0, atol 2.0,
+#     psigma 1e-3). Gains only appear in combination; the optimum sits next
+#     to cliffs (match_atol 3.0 +21 %, prior_sigma 0.01 +20 %).
+#   - NO alignment block: sim3 is neutral-to-worse and sl4 is seed-unstable
+#     on GTSAM (the pose2point graph already absorbs depth-scale error into
+#     the jointly re-estimated landmarks).
+#   - parallel: false — the 1 s parallel timeout drops results
+#     nondeterministically; sequential reproduces the reported numbers.
+#
+
+Common:
+  device: &device cuda
+
+Odometry:
+  name: MACVO-DAv2-p2p-ft
+  args:
+    device: *device
+    edgewidth: 32
+    num_point: 200
+    match_cov_default: 0.25
+    profile: false
+    mapping: true
+
+  cov:
+    obs:
+      type: MatchCovariance
+      args:
+        device: *device
+        kernel_size: 31
+        match_cov_default: 0.25
+        min_depth_cov: 0.05
+        min_flow_cov: 0.25
+
+  keypoint:
+    type: CovAwareSelector_NoDepth
+    args:
+      device: *device
+      kernel_size: 7
+      mask_width: 32
+      max_match_cov: 1.
+      max_depth: 7.0
+      max_depth_cov: 1.
+
+  mappoint:
+    type: MappingPointSelector
+    args:
+      device: *device
+      max_depth: 5.0
+      max_depth_cov: .4
+      mask_width: 32
+
+  frontend:
+    type: MonocularFrontend
+    args:
+      device: *device
+      parallel: true
+      # Multi-GPU: depth on a second card. Comment out on a single-GPU machine
+      # (DAv2-vitl fits on one 24 GB card).
+      device_depth: cuda:1
+      match:
+        type: FlowFormerCovMatcher
+        args:
+          weight: ./Model/MACVO_FrontendCov.pth
+          device: *device
+          enc_dtype: fp32
+          dec_dtype: fp32
+          decoder_depth: 12
+      monodepth:
+        type: DepthAnythingV2
+        args:
+          weight: Z:/Research/weights/plane_nose_dav2/epoch=05-val_total_loss=0.0626.ckpt
+          encoder: vitl
+          scale_factor: 1000.
+          device: *device
+
+  motion:
+    type: StaticMotionModel
+    args:
+
+  outlier:
+    type: CovarianceSanityFilter
+    args:
+
+  postprocess:
+    type: MotionInterpolate
+    args:
+
+  keyframe:
+    type: AllKeyframe
+    args:
+
+  optimizer:
+    type: GTSAM_Graph
+    args:
+      device: cpu
+      vectorize: true
+      parallel: false         # sequential = deterministic; reproduces report numbers
+      autodiff: true          # required by the config spec (not used for graph selection)
+      graph_type: pose2point
+      # Tuned combo from the plane_nose[40:200] sweep (defaults were
+      # huber_delta 0.1, huber_delta_prev 1.0, match_atol 1.0, prior_sigma 1e-4).
+      huber_delta: 0.05       # robust kernel on pose->point factors
+      huber_delta_prev: 3.0   # robust kernel on prev-frame reobservation factor
+      match_atol: 2.0         # px tolerance for cross-frame keypoint association
+      prior_sigma: 0.001      # gauge prior noise on anchor poses
+      max_iterations: 20      # LM iteration cap
+      # Do NOT enable alignment here — see header.
+
+Datas: !include ../../Common/DeepODO_mono_experiments.yaml
+Preprocess: !include ../../Common/Preprocess.yaml

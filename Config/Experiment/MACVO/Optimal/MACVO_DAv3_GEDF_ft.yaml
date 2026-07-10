@@ -1,0 +1,155 @@
+#
+# OPTIMAL: DAv3 + G-EDF (GEDF_PGO, gedf+icp, plain SE(3)) — defaults.
+#
+# ATE RMSE 0.618 m on EIVA plane_nose[80:160] (single seed, autodiff run).
+# Sources: ProgressReports/2026-07-07_gedf-alignment-manifold-benchmark.md,
+#          ProgressReports/2026-07-06_optimizer-hyperparameter-sweep.md
+#
+# What makes it optimal:
+#   - Plain SE(3) — NO alignment block. DA3NESTED-giant already produces
+#     scale-consistent depth, so the extra warp DoF only inject noise:
+#     se3 0.618 < sim3 0.757 < sl4 0.786.
+#   - Optimizer/field defaults (sigma 0.30). The sweep found no robust
+#     improvement for this frontend (sigma 0.10 won seed 0 but lost seed 1).
+#   - autodiff: false — analytic Jacobians (LM_analytic); fine for SE(3).
+#     The benchmark's 0.618 was measured with autodiff: true and may differ
+#     slightly.
+#   - parallel: false — deterministic, no optimizer-timeout artifacts.
+#
+# Mono-specific mapper note: the covariance insert gate is disabled
+# (cov_trace_gate: 0.0) because monocular depth covariances are much larger
+# than stereo and any stereo-scale gate starves the map. Selecting RELIABLE
+# points is the job of the keypoint / mappoint selectors upstream.
+#
+
+Common:
+  device: &device cuda
+
+Odometry:
+  name: MACVO-DAv3-GEDF-ft
+  args:
+    device: *device
+    edgewidth: 32
+    num_point: 1000
+    match_cov_default: 0.25
+    profile: false
+    mapping: true
+
+  cov:
+    obs:
+      type: MatchCovariance
+      args:
+        device: *device
+        kernel_size: 31
+        match_cov_default: 0.25
+        min_depth_cov: 0.01
+        min_flow_cov: 0.25
+
+  keypoint:
+    type: CovAwareSelector_NoDepth
+    args:
+      device: *device
+      kernel_size: 7
+      mask_width: 32
+      max_match_cov: 10.
+      # Median-relative depth-cov filter: keep pixels below median x 1.0
+      # (absolute mono depth-cov scales are uninformative).
+      depth_cov_rel: 1.0
+
+  mappoint:
+    type: MappingPointSelector
+    args:
+      device: *device
+      max_depth: 7.0
+      max_depth_cov: 1.0
+      mask_width: 32
+      depth_cov_rel: 1.0  # tighten to median-relative: map from reliable pixels only
+
+  frontend:
+    type: MonocularFrontend
+    args:
+      device: *device
+      parallel: true
+      # DA3NESTED-giant is large; running depth, FlowFormer and the GEDF map
+      # all on one GPU OOMs a 24 GB card. Offload depth to a second GPU.
+      # Remove/comment this if you only have one GPU (and expect an OOM).
+      device_depth: cuda:1
+      match:
+        type: FlowFormerCovMatcher
+        args:
+          weight: ./Model/MACVO_FrontendCov.pth
+          device: *device
+          enc_dtype: fp32
+          dec_dtype: fp32
+      monodepth:
+        type: DepthAnythingV3
+        args:
+          model_name: da3nested-giant-large
+          weight: Z:/Research/weights/plane_nose_dav3/epoch=17-val_total_loss=0.1578.ckpt
+          device: *device
+          q90: 1.
+
+  motion:
+    type: StaticMotionModel
+    args:
+
+  outlier:
+    type: CovarianceSanityFilter
+    args:
+
+  postprocess:
+    type: MotionInterpolate
+    args:
+
+  keyframe:
+    type: AllKeyframe
+    args:
+
+  optimizer:
+    type: GEDF_PGO
+    args:
+      device: cpu           # solver device; the mapper has its own (map.online.device)
+      vectorize: true
+      parallel: false       # deterministic; reproduces report numbers
+      autodiff: false       # analytic Jacobians (LM_analytic); SE(3)-only
+      graph_type: gedf+icp  # the ICP factor is load-bearing; pure "gedf" is worse
+      # NO alignment block for DAv3 — see header. (Pure-gedf note: if you switch
+      # graph_type to "gedf", num_gaussians: 32 was the seed-validated optimum.)
+      map:
+        source: online      # "prebuilt" localizes against map.path instead
+        path: ""            # GDF1 .bin path; only used when source is "prebuilt"
+        insert_keypoints: true
+        insert_dense: false
+        min_gaussians: 100  # field factor stays inert until the map has this many
+        online:
+          device: *device
+          cube_size: 1.0
+          num_gaussians: 8
+          sample_points: 1000
+          budget_cubes_per_frame: 8
+          mae_target: 0.03
+          cov_trace_gate: 0.0   # disabled for monocular depth (see header)
+      field:
+        weighting: mahalanobis
+        sigma: 0.30         # field-error floor (m); keeps the young online map from
+                            # outweighing the ICP factor (0.10 is fine for prebuilt maps)
+        oob_value_threshold: 19.0
+        oob_residual: 5.0
+        max_grad_norm: 10.0
+      solver:
+        coarse_kernel_delta: 3.0
+        coarse_steps: 10
+        fine_kernel_delta: 0.5
+        fine_steps: 10
+      viz:                  # Rerun map visualization (active only with --useRR)
+        every: 3            # log a map snapshot every N keyframes; 0 = disabled
+        iso: 0.10           # keep sampled points with field value < iso (m)
+        resolution: 0.10    # sampling grid resolution (m)
+        max_points: 100000
+        gaussians: true     # snapshot GMM components as confidence ellipsoids
+        n_sigma: 1.0        # ellipsoid half-size = n_sigma * per-axis sigma
+        max_gaussians: 20000  # per-snapshot cap (top-|weight| kept)
+        cubes: true         # draw the sparse cube grid (hue = MAE, gray = pending)
+
+Datas: !include ../../Common/DeepODO_mono_experiments.yaml
+Preprocess: !include ../../Common/Preprocess.yaml
