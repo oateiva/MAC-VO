@@ -1,0 +1,72 @@
+# Clipped (first 200 frames/sequence) EIVA mono set for the depth-network
+# benchmark. Keeps all 5 sequences comparable and tractable across many nets
+# (the huge Welland dive is 4717 frames at full length). seq_to applied per entry.
+- type: EIVA_NoIMU
+  name: EIVA_plane_nose
+  args:
+    root: D:\Datasets\EIVA\vobster_quay\plane_nose
+    gtDepth: false
+    gtFlow: false
+    gtPose: true
+    is_stereo: false
+    window_length: 1
+    step_size: 1
+    navigation_names: [plane_nose]
+    sequence_camera_names: [left, right]
+    compressed: true
+    seq_from: 0
+    seq_to: 200
+
+- type: EIVA_NoIMU
+  name: EIVA_plane_mid
+  args:
+    root: D:\Datasets\EIVA\vobster_quay\plane_mid
+    gtDepth: false
+    gtFlow: false
+    gtPose: true
+    is_stereo: false
+    window_length: 1
+    navigation_names: [plane_mid]
+    sequence_camera_names: [left, right]
+    compressed: true
+    seq_from: 0
+    seq_to: 200
+
+- type: EIVA_NoIMU
+  name: EIVA_plane_tail1
+  args:
+    root: D:\Datasets\EIVA\vobster_quay\plane_tail1
+    gtDepth: false
+    gtFlow: false
+    gtPose: true
+    window_length: 1
+    is_stereo: false
+    compressed: true
+    seq_from: 0
+    seq_to: 200
+
+- type: EIVA_NoIMU
+  name: EIVA_plane_tail2
+  args:
+    root: D:\Datasets\EIVA\vobster_quay\plane_tail2
+    gtDepth: false
+    gtFlow: false
+    gtPose: true
+    window_length: 1
+    is_stereo: false
+    compressed: true
+    seq_from: 0
+    seq_to: 200
+
+- type: EIVA_NoIMU
+  name: EIVA_Welland_test_first_dive
+  args:
+    root: D:\Datasets\EIVA\welland\Welland_test_first_dive
+    gtDepth: false
+    gtFlow: false
+    gtPose: true
+    window_length: 1
+    is_stereo: false
+    compressed: true
+    seq_from: 0
+    seq_to: 200

@@ -1,0 +1,142 @@
+#
+# DGGT (CVPR 2026, xiaomi-research/dggt) as MAC-VO monocular depth backbone.
+#
+# DGGT is a VGGT-derivative feedforward 4D-reconstruction model that emits a
+# direct per-pixel METRIC depth (pred["depth"]) + confidence (pred["depth_conf"]).
+# It pins torch 2.4.1 + custom CUDA and cannot share MAC-VO's env, so it is run
+# offline (Scripts/Depth/precompute_dggt.py in env macvo-dggt) over the dumped
+# frames; this config serves that cache via CachedDepth.
+#
+# Caveat: DGGT is trained on Waymo/driving data -> out-of-distribution for the
+# underwater EIVA sequences. Metric scale may be biased; the evaluator's
+# correct_scale=true makes ATE[S] meaningful regardless.
+#
+# Backend is identical to Optimal/MACVO_DAv3_GEDF.yaml (GEDF_PGO, gedf+icp, SE3).
+#
+
+Common:
+  device: &device cuda
+
+Odometry:
+  name: MACVO-flow3r-GEDF
+  args:
+    device: *device
+    edgewidth: 32
+    num_point: 1000
+    match_cov_default: 0.25
+    profile: false
+    mapping: true
+
+  cov:
+    obs:
+      type: MatchCovariance
+      args:
+        device: *device
+        kernel_size: 31
+        match_cov_default: 0.25
+        min_depth_cov: 0.01
+        min_flow_cov: 0.25
+
+  keypoint:
+    type: CovAwareSelector_NoDepth
+    args:
+      device: *device
+      kernel_size: 7
+      mask_width: 32
+      max_match_cov: 10.
+      depth_cov_rel: 1.0
+
+  mappoint:
+    type: MappingPointSelector
+    args:
+      device: *device
+      max_depth: 7.0
+      max_depth_cov: 1.0
+      mask_width: 32
+      depth_cov_rel: 1.0
+
+  frontend:
+    type: MonocularFrontend
+    args:
+      device: *device
+      parallel: true
+      match:
+        type: FlowFormerCovMatcher
+        args:
+          weight: ./Model/MACVO_FrontendCov.pth
+          device: *device
+          enc_dtype: fp32
+          dec_dtype: fp32
+      monodepth:
+        type: CachedDepth
+        args:
+          cache_root: D:/macvo_depth/cache
+          net: flow3r
+          device: *device
+          provide_cov: true
+          cov_from_conf: true   # DGGT emits depth_conf -> var = cov_scale / conf
+          cov_scale: 1.0
+          scale_factor: 1.0     # DGGT is metric
+          missing: error
+
+  motion:
+    type: StaticMotionModel
+    args:
+
+  outlier:
+    type: CovarianceSanityFilter
+    args:
+
+  postprocess:
+    type: MotionInterpolate
+    args:
+
+  keyframe:
+    type: AllKeyframe
+    args:
+
+  optimizer:
+    type: GEDF_PGO
+    args:
+      device: cpu
+      vectorize: true
+      parallel: false
+      autodiff: false
+      graph_type: gedf+icp
+      map:
+        source: online
+        path: ""
+        insert_keypoints: true
+        insert_dense: false
+        min_gaussians: 100
+        online:
+          device: *device
+          cube_size: 1.0
+          num_gaussians: 8
+          sample_points: 1000
+          budget_cubes_per_frame: 8
+          mae_target: 0.03
+          cov_trace_gate: 0.0
+      field:
+        weighting: mahalanobis
+        sigma: 0.30
+        oob_value_threshold: 19.0
+        oob_residual: 5.0
+        max_grad_norm: 10.0
+      solver:
+        coarse_kernel_delta: 3.0
+        coarse_steps: 10
+        fine_kernel_delta: 0.5
+        fine_steps: 10
+      viz:
+        every: 3
+        iso: 0.10
+        resolution: 0.10
+        max_points: 100000
+        gaussians: true
+        n_sigma: 1.0
+        max_gaussians: 20000
+        cubes: true
+
+Datas: !include ../../Common/DeepODO_mono_experiments_clip200.yaml
+Preprocess: !include ../../Common/Preprocess.yaml

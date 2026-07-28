@@ -1,0 +1,14 @@
+# plane_nose, full trajectory (565 frames) — for the p2p depth-backbone comparison.
+- type: EIVA_NoIMU
+  name: EIVA_plane_nose
+  args:
+    root: D:\Datasets\EIVA\vobster_quay\plane_nose
+    gtDepth: false
+    gtFlow: false
+    gtPose: true
+    is_stereo: false
+    window_length: 1
+    step_size: 1
+    navigation_names: [plane_nose]
+    sequence_camera_names: [left, right]
+    compressed: true

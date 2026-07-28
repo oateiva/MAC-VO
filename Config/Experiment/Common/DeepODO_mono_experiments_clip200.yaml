@@ -1,0 +1,2 @@
+!flatten_seq
+- !include ../../Sequence/EIVA_mono_datasets_clip200.yaml

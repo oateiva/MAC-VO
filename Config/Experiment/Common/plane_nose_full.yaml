@@ -1,0 +1,2 @@
+!flatten_seq
+- !include ../../Sequence/EIVA_plane_nose_full.yaml
