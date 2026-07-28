@@ -168,6 +168,24 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
                     state_dict = stripped
                     break
 
+        # Guard against an architecture mismatch. `load_state_dict(strict=False)`
+        # happily loads *nothing* when the checkpoint's keys don't line up with
+        # this model, leaving the whole net at random init -- which silently
+        # produces garbage, non-deterministic depth (e.g. loading a single
+        # `da3-giant` checkpoint into a `da3nested-giant-large` arch matches 0
+        # keys). A correct checkpoint has (almost) all of its tensors consumed;
+        # a near-empty match means `model_name` does not match the checkpoint.
+        matched = len(set(state_dict.keys()) & own_keys)
+        if state_dict and matched < 0.5 * len(state_dict):
+            raise RuntimeError(
+                f"[DepthAnything3] Checkpoint '{weight}' only matched {matched} of "
+                f"its {len(state_dict)} tensors against the '{self.model_name}' "
+                f"architecture. This almost always means monodepth.args.model_name "
+                f"does not match the checkpoint. Set model_name to the preset the "
+                f"checkpoint was trained on (e.g. 'da3-giant' for a single-model "
+                f"finetune vs 'da3nested-giant-large' for the nested base)."
+            )
+
         missing, unexpected = self.load_state_dict(state_dict, strict=False)
         if missing or unexpected:
             print(
