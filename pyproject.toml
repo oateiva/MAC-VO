@@ -29,6 +29,7 @@ exclude = [
     "./Module/Network/UniMatch",            # Third-party lib
     "./Module/Network/UniCeption",          # Third-party lib
     "./Module/Network/match_anything",      # Third-party lib
+    "./Module/Network/Depth/DepthCov/depth_cov",    # Third-party lib (edexheim/DepthCov, non-commercial)
     "./Baseline/DPVO",                      # Need install DPVO and compile cuda kernel
     "./Scripts/AdHoc/FLOPS_analyzer.py",    # Need additional package fvcore
 ]
