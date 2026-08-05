@@ -14,9 +14,8 @@ import torch
 
 gtsam = pytest.importorskip("gtsam")
 
-from Module.Optimization.GTSAM.Graphs import (                              # noqa: E402
-    GTSAM_Pose2Point, make_field_eval,
-)
+from Module.Optimization.GTSAM.Graphs import GTSAM_Pose2Point               # noqa: E402
+from Module.Optimization.GTSAM.Augmentations import GEDFField, make_field_eval  # noqa: E402
 from Module.Optimization.GTSAM.Optimizer import GTSAM_Graph                 # noqa: E402
 from Utility.GTSAM_Utils import make_gedf_field_factor                     # noqa: E402
 
@@ -86,7 +85,7 @@ def test_field_factor_oob(scene_mapper):
 def test_pose2point_gedf_recovery(scene_mapper):
     """Adding the field factor to the pose2point solve must keep (not break)
     pose recovery on consistent data; the reported pose stays near truth."""
-    graph = GTSAM_Pose2Point(field=scene_mapper, field_cfg=FIELD_NS)
+    graph = GTSAM_Pose2Point(augmentations=[GEDFField(scene_mapper, FIELD_NS)])
     graph.parse_graph_data(make_gtsam_input())
     graph.run_gtsam_optimization()
     out = graph.write_back()
@@ -100,7 +99,7 @@ def test_field_inert_when_map_not_ready():
     empty = GEDFMapper(GEDFConfig(device="cpu"))
     assert not empty.is_ready
 
-    out_hybrid = _run(GTSAM_Pose2Point(field=empty, field_cfg=FIELD_NS))
+    out_hybrid = _run(GTSAM_Pose2Point(augmentations=[GEDFField(empty, FIELD_NS)]))
     out_plain = _run(GTSAM_Pose2Point())
     torch.testing.assert_close(out_hybrid.pose_estimates[1], out_plain.pose_estimates[1])
 
@@ -150,7 +149,10 @@ def test_hybrid_context_and_optimize(scene_map_bin):
     cfg = hybrid_cfg(scene_map_bin)
     ctx = GTSAM_Graph.init_context(cfg)
     assert ctx["gedf_map"] is not None and ctx["gedf_map"].is_ready
-    assert ctx["graph"].field is ctx["gedf_map"]
+    # The map reaches the solve through the GEDFField augmentation (the graph
+    # itself is purely pose2point).
+    field_augs = [a for a in ctx["graph"].augmentations if isinstance(a, GEDFField)]
+    assert len(field_augs) == 1 and field_augs[0].field is ctx["gedf_map"]
 
     _, out = GTSAM_Graph._optimize(ctx, make_gtsam_input())
     rot, trans = pose_error(out.pose_estimates[1].double(), P2_TRUE)

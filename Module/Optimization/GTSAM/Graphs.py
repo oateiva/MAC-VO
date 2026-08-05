@@ -12,35 +12,10 @@ from Utility.Point import pixel2point_NED
 from Utility.GTSAM_Utils import (
     pypose_to_pose3, pose3_to_pypose, make_pose_to_point_factor,
     make_aligned_pose_to_point_factor, make_alignment_warp,
-    make_gedf_field_factor,
 )
+from .Augmentations import BuildContext, GraphAugmentation
 from ..PyposeOptimizers import FactorGraph
 from ..TwoFramePGO.Graphs import GraphInput
-
-if typ.TYPE_CHECKING:
-    from types import SimpleNamespace
-    from ..GEDF.Mapper import GEDFMapProtocol
-
-
-def make_field_eval(field: "GEDFMapProtocol", field_cfg: "SimpleNamespace"):
-    """
-    numpy adapter around the G-EDF field for `make_gedf_field_factor`:
-    `(N,3) world points -> (residual (N,), gradient (N,3))` with the same
-    semantics as the pypose GEDF graphs — OOB points (d_hat >=
-    oob_value_threshold) get the constant `oob_residual` and a zero gradient,
-    and the per-point gradient norm is clamped to `max_grad_norm`.
-    """
-    def field_eval(q_np: np.ndarray):
-        q = torch.from_numpy(np.ascontiguousarray(q_np, dtype=np.float64))
-        dist, grad = field.query_with_grad(q)
-        oob = dist >= field_cfg.oob_value_threshold
-        r = torch.where(oob, torch.full_like(dist, field_cfg.oob_residual), dist)
-        norm = grad.norm(dim=-1, keepdim=True)
-        grad = torch.where(norm > field_cfg.max_grad_norm,
-                           grad * (field_cfg.max_grad_norm / norm), grad)
-        grad = torch.where(oob.unsqueeze(-1), torch.zeros_like(grad), grad)
-        return (r.detach().cpu().numpy(), grad.detach().cpu().numpy())
-    return field_eval
 
 
 @dataclass
@@ -57,8 +32,14 @@ class GTSAM_GraphInput:
 class GTSAM_GraphOutput:
     frame_idexes: List[int]
     pose_estimates: List[torch.Tensor]
+    # Optimized landmark positions, to be written into VisualMap.points (the
+    # sparse VO landmarks — NOT map_points, the dense mapping cloud, which no
+    # graph here re-estimates). `landmark_indexes` are therefore GLOBAL indices
+    # into VisualMap.points, carried in from `GraphInput.points.index`; a
+    # graph's own landmark numbering (gtsam symbol index) is a different index
+    # space and must never leak out of the graph.
     landmark_indexes: Optional[list[int] | None] = None
-    map_points: Optional[torch.Tensor] = None
+    landmark_pos_Tw: Optional[torch.Tensor] = None   # (N, 3) world frame
     need_interp: Optional[bool] = None
     # Alignment diagnostics ("estimate + report", mirrors GEDF_GraphOutput):
     # the per-frame warp parameters estimated for the CURRENT frame's
@@ -78,6 +59,11 @@ class GTSAM_GraphOutput:
     gedf_cube_valid: Optional[torch.Tensor] = None   # (C,) bool
     gedf_cube_mae: Optional[torch.Tensor] = None     # (C,)
     gedf_cube_size: Optional[float] = None
+    # Merged per-solve diagnostics from the graph's augmentations (see
+    # Augmentations.py) — plain scalars only: this dataclass crosses an
+    # mp.Queue in parallel mode. None when the graph runs without
+    # augmentations; the parent-side CSV/Rerun emission reads it by key.
+    aug_diag: Optional[dict] = None
 
 PosePixelMap = Dict[int, Dict[Tuple[float, float], int]]
 
@@ -89,16 +75,8 @@ class GTSAM_Pose2Point(FactorGraph):
     def __init__(self, huber_delta: float = 0.1, huber_delta_prev: float = 1.0,
                  prior_sigma: float = 1e-4, max_iterations: int = 20,
                  alignment_type: str = "se3", alignment_prior_weight: float = 100.0,
-                 field: "GEDFMapProtocol | None" = None,
-                 field_cfg: "SimpleNamespace | None" = None):
+                 augmentations: "typ.Sequence[GraphAugmentation]" = ()):
         super().__init__()
-        # Optional G-EDF scan-to-map factor (graph_type "pose2point+gedf"):
-        # one batched unary factor on the CURRENT pose, residual d_hat(T . p_i)
-        # per keypoint, joining the pose->point ("GTSAM ICP") solve. Inert
-        # while the map is not ready. The field factor acts on the RAW camera
-        # points (no alignment warp) — the Optimizer enforces se3-only.
-        self.field = field
-        self.field_cfg = field_cfg
         # Optimizer hyperparameters (config: Odometry.optimizer.args; defaults
         # reproduce the historical hardcoded values).
         self.huber_delta = huber_delta            # robust kernel on pose->point factors
@@ -115,6 +93,13 @@ class GTSAM_Pose2Point(FactorGraph):
         self.alignment_type = alignment_type
         self.alignment_prior_weight = float(alignment_prior_weight)
         self._warp = make_alignment_warp(alignment_type) if alignment_type != "se3" else None
+        # Everything that is NOT the pose2point graph itself (the G-EDF field
+        # factor, the correlated log-depth prior, per-solve diagnostics) is an
+        # injected GraphAugmentation — see Augmentations.py for the contract.
+        # Empty tuple = the bare pose2point graph, byte-identical to the
+        # pre-augmentation implementation (regression gate T5). List order is
+        # factor insertion order.
+        self.augmentations = tuple(augmentations)
 
 
     def parse_graph_data(self, graph_data: GTSAM_GraphInput):
@@ -149,12 +134,23 @@ class GTSAM_Pose2Point(FactorGraph):
 
         pts_Tw = graph_data.current_graph_data.points.data["pos_Tw"].detach().cpu().double().numpy()  # (N,3) # in world frame?
 
+        # Global indices into VisualMap.points, row-aligned with the observation
+        # arrays above (points arrive as get_match2point(observations), so row i
+        # of `points` is the landmark that observation i sees). This is what makes
+        # the optimized landmarks writable back into the map — see GTSAM_GraphOutput.
+        self.point_global_idx = graph_data.current_graph_data.points.index.detach().cpu().long()
+        assert self.point_global_idx.size(0) == self.obs_Tc_1.shape[0], \
+            "points and observations must be row-aligned to write landmarks back"
+
         self.obs1_covTc = graph_data.current_graph_data.observations.data["obs1_covTc"].detach().cpu().double().numpy()  # (N,3,3)
         self.obs2_covTc = graph_data.current_graph_data.observations.data["obs2_covTc"].detach().cpu().double().numpy()  # (N,3,3)
         self.pts_covTw = graph_data.current_graph_data.points.data["cov_Tw"].detach().cpu().double().numpy() # (N,3,3)
 
         self.previous_graph_data = graph_data.previous_graph_data
         self.indexes_prev_curr = graph_data.indexes_prev_curr
+
+        for aug in self.augmentations:
+            aug.on_parse(self, graph_data)
 
         # self.log_save_data(graph_data)
 
@@ -187,6 +183,7 @@ class GTSAM_Pose2Point(FactorGraph):
         initial_estimate.insert(pose_2_key, P2)
 
         p0_index = self.previous_graph_data.from_idx.cpu().item()
+        pose_0_key = None
         if p0_index >= 0:
             pose_0_key = gtsam.symbol('p', int(p0_index))
             P0 = self.P0
@@ -215,14 +212,18 @@ class GTSAM_Pose2Point(FactorGraph):
         for p, c in self.indexes_prev_curr:
             curr_to_prev.setdefault(c, p)
 
+        # The graph's own factor handles, in insertion order — exposed to the
+        # augmentations through BuildContext (e.g. for cost-split diagnostics).
+        point_factors: list = []
+
         landmark_keys = []
-        landmark_idx = []
         for i in range(len(self.obs_Tc_1)):
 
-            # Create landmark key
+            # Create landmark key. The symbol index is local to this solve (one
+            # landmark per current-frame observation); the map-side identity of
+            # landmark i is self.point_global_idx[i].
             landmark_key = gtsam.symbol('l', i)
             landmark_keys.append(landmark_key)
-            landmark_idx.append(i)
 
             if i in curr_to_prev and p0_index >= 0:
                 pi = curr_to_prev[i]
@@ -244,6 +245,7 @@ class GTSAM_Pose2Point(FactorGraph):
                 noise_model_0 = gtsam.noiseModel.Robust.Create(m_huber_0, noise_model_0)
                 factor0 = make_pose_to_point_factor(pose_0_key, landmark_key, obs_Tc_0_i, noise_model_0)
                 graph.add(factor0)
+                point_factors.append(factor0)
 
 
             # Read observation and covariance
@@ -276,34 +278,21 @@ class GTSAM_Pose2Point(FactorGraph):
             # Add factors to graph
             graph.add(factor1)
             graph.add(factor2)
+            point_factors.append(factor1)
+            point_factors.append(factor2)
 
             # Add initial estimate for landmark
             Pt_landmark = P1.transformFrom(obs_Tc_1_i)
             initial_estimate.insert(landmark_key, Pt_landmark)
 
-        # G-EDF field factor on the current pose (see __init__): registers the
-        # frame against the whole accumulated map inside the same joint solve
-        # that re-estimates the landmarks.
-        if self.field is not None and self.field_cfg is not None and self.field.is_ready:
-            import math
-            field_eval = make_field_eval(self.field, self.field_cfg)
-            map_sigma = self.field.sigma
-            floor = max(map_sigma if math.isfinite(map_sigma) else 0.0,
-                        float(self.field_cfg.sigma))
-            if getattr(self.field_cfg, "weighting", "fixed") == "mahalanobis":
-                # Per-point variance via the field gradient at the initial
-                # pose (linearization-point approximation of the pypose
-                # backend's per-iteration reweighting).
-                R0 = self.init_pose.rotation().matrix()
-                t0 = np.asarray(self.init_pose.translation(), dtype=np.float64).reshape(3)
-                _, g0 = field_eval(self.obs_Tc_2 @ R0.T + t0)
-                cov_w = np.einsum("ij,njk,lk->nil", R0, self.obs2_covTc, R0)
-                var = np.einsum("ni,nij,nj->n", g0, cov_w, g0) + floor ** 2
-                field_noise = gtsam.noiseModel.Diagonal.Sigmas(np.sqrt(var))
-            else:
-                field_noise = gtsam.noiseModel.Isotropic.Sigma(len(self.obs_Tc_2), floor)
-            graph.add(make_gedf_field_factor(
-                pose_2_key, self.obs_Tc_2, field_eval, field_noise))
+        # Non-pose2point factors (correlated depth prior, G-EDF field, ...) are
+        # added by the injected augmentations, in list order, at this exact
+        # point of the build — see Augmentations.py for the contract.
+        build_ctx = BuildContext(
+            pose_1_key=pose_1_key, pose_2_key=pose_2_key, pose_0_key=pose_0_key,
+            landmark_keys=landmark_keys, point_factors=point_factors)
+        for aug in self.augmentations:
+            aug.on_build(self, graph, initial_estimate, build_ctx)
 
         # Optimize the graph
         params = gtsam.LevenbergMarquardtParams()
@@ -318,8 +307,20 @@ class GTSAM_Pose2Point(FactorGraph):
         landmark_positions = [result.atPoint3(landmark_keys[i]) for i in range(len(landmark_keys))]
         landmark_positions = torch.stack([torch.from_numpy(pos).double() for pos in landmark_positions], dim=0)  # (N,3)
 
+        # Augmentation diagnostics at the optimized state (child side in
+        # parallel mode — plain scalars only). A diagnostics failure must never
+        # take down the solve.
+        aug_diag: dict = {}
+        for aug in self.augmentations:
+            try:
+                aug_diag.update(aug.on_solved(
+                    self, graph, result, pose_1, pose_2, landmark_positions.numpy()))
+            except Exception as e:
+                Logger.write("warn", f"{type(aug).__name__}.on_solved failed ({e})")
+
         # self.log_plot_data(pose_1=pose_1, pose_2=pose_2, landmark_positions=landmark_positions)
         need_interp = False
+        landmark_idx: Optional[list[int]] = self.point_global_idx.tolist()
         try:
             pose_1 = pose3_to_pypose(pose_1)
             pose_2 = pose3_to_pypose(pose_2)
@@ -328,6 +329,9 @@ class GTSAM_Pose2Point(FactorGraph):
             pose_1 = self.init_pypose
             pose_2 = self.init_pypose
             need_interp = True
+            # The poses fell back to the initial guess, so the landmarks this
+            # solve produced are not consistent with what lands in the map.
+            landmark_idx, landmark_positions = None, None
 
         align_state: Optional[torch.Tensor] = None
         align_scale: Optional[float] = None
@@ -341,11 +345,12 @@ class GTSAM_Pose2Point(FactorGraph):
             frame_idexes=[int(self.from_idx.cpu().item()), int(self.frame_idx.cpu().item())],
             pose_estimates=[pose_1, pose_2],
             landmark_indexes=landmark_idx,
-            map_points=landmark_positions,
+            landmark_pos_Tw=landmark_positions,
             need_interp=need_interp,
             alignment_type=self.alignment_type,
             alignment_state=align_state,
             scale=align_scale,
+            aug_diag=aug_diag or None,
             )
 
     def write_back(self):
@@ -490,6 +495,12 @@ class ISAM(FactorGraph):
 
         pts_Tw = graph_data.current_graph_data.points.data["pos_Tw"].detach().cpu().double().numpy()  # (N,3) # in world frame?
 
+        # Global indices into VisualMap.points, row-aligned with the observation
+        # arrays above (see GTSAM_Pose2Point.parse_graph_data).
+        self.point_global_idx = graph_data.current_graph_data.points.index.detach().cpu().long()
+        assert self.point_global_idx.size(0) == self.obs_Tc_1.shape[0], \
+            "points and observations must be row-aligned to write landmarks back"
+
         self.obs1_covTc = graph_data.current_graph_data.observations.data["obs1_covTc"].detach().cpu().double().numpy()  # (N,3,3)
         self.obs2_covTc = graph_data.current_graph_data.observations.data["obs2_covTc"].detach().cpu().double().numpy()  # (N,3,3)
         self.pts_covTw = graph_data.current_graph_data.points.data["cov_Tw"].detach().cpu().double().numpy() # (N,3,3)
@@ -556,6 +567,12 @@ class ISAM(FactorGraph):
         landmark_keys = []
         cov_landmark_1 = []
         cov_landmark_2 = []
+        # gtsam landmark key observed by row i of this call's observations, so the
+        # solve's landmarks can be mapped back onto self.point_global_idx. iSAM2
+        # merges tracks across frames by pixel proximity, so its own symbol
+        # numbering bears no relation to the map's point indices, and several rows
+        # (here or in an earlier call) can share one landmark.
+        frame_landmark_keys: list[int] = []
 
         eps = 1e-6
 
@@ -600,6 +617,8 @@ class ISAM(FactorGraph):
 
                 self.next_landmark_id += 1
 
+            frame_landmark_keys.append(landmark_key)
+
             # Initial for landmark if missing: use cam1 observation lifted into world with P1
             if not est.exists(landmark_key) and not new_values.exists(landmark_key):
                 pw_init = P1.transformFrom(np.asarray(obs_c1, dtype=np.float64).reshape(3,))
@@ -615,11 +634,22 @@ class ISAM(FactorGraph):
         frame_idexes = list(pose_window.keys())
         pose_estimates = [pose_window[idx] for idx in frame_idexes]
 
-        # landmark_positions = [result.atPoint3(landmark_keys[i]) for i in range(len(landmark_keys))]
-        landmark_idx, landmark_points = self.get_all_landmarks(self.isam)
-        # Convert landmark_points (list of gtsam.Point3) to torch.Tensor (N,3)
-        if len(landmark_points) > 0:
-            landmark_points = torch.tensor(np.stack([np.asarray(p) for p in landmark_points]), dtype=torch.float32)
+        # Write back only the landmarks THIS call observed, keyed by their map
+        # index. iSAM2 keeps refining older landmarks too, but they are not
+        # reachable from here without a persistent key -> map-index table that
+        # would grow with every observation in the sequence; the whole-graph
+        # dump (get_all_landmarks) is in iSAM2's own index space and must not be
+        # handed to the map. A failed update leaves new keys absent - skip those.
+        est_after: gtsam.Values = self.isam.calculateEstimate()
+        landmark_idx: list[int] = []
+        landmark_points_np: list[np.ndarray] = []
+        for global_idx, landmark_key in zip(self.point_global_idx.tolist(), frame_landmark_keys):
+            if not est_after.exists(landmark_key): continue
+            landmark_idx.append(global_idx)
+            landmark_points_np.append(np.asarray(est_after.atPoint3(landmark_key), dtype=np.float64))
+
+        if len(landmark_points_np) > 0:
+            landmark_points = torch.tensor(np.stack(landmark_points_np), dtype=torch.float32)
         else:
             landmark_points = torch.empty((0, 3), dtype=torch.float32)
 
@@ -627,7 +657,7 @@ class ISAM(FactorGraph):
             frame_idexes=frame_idexes,
             pose_estimates=pose_estimates,
             landmark_indexes=landmark_idx,
-            map_points=landmark_points,
+            landmark_pos_Tw=landmark_points,
             )
 
         # self.log_plot_data(pose_1=pose_1, pose_2=pose_2, landmark_positions=landmark_positions)

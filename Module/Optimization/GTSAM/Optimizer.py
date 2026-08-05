@@ -8,6 +8,8 @@ from Utility.Timer import Timer
 from ..Interface import IOptimizer
 from ..PyposeOptimizers import FactorGraph
 from ..TwoFramePGO.Graphs import GraphInput
+from .Augmentations import GEDFField, SolveDiagnostics
+from .DepthPrior import KERNEL_BUILDERS, CorrelatedDepthPrior
 from .Graphs import GTSAM_GraphInput, GTSAM_GraphOutput, GTSAM_Pose2Point, ISAM
 
 
@@ -22,9 +24,21 @@ class GTSAM_Optimizer():
 
 
 class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
+    # Column layout of the per-sequence GP depth-prior CSV (see terminate()).
+    GP_DIAG_HEADERS = [
+        "frame_idx", "s_prev", "s_curr", "s_sigma_prev", "s_sigma_curr",
+        "cost_points", "cost_prior", "cost_scale_prior", "rms_prev", "rms_curr",
+        "median_parallax_deg", "huber_rejects", "n_points",
+        "dropped_nonpos_d", "z_clamps", "blocks_dropped", "n_blocks",
+    ]
+
     def __init__(self, config):
         super().__init__(config)
         self.window_size = 2
+        # Parent-side accumulator for the GP depth-prior diagnostics: rows arrive
+        # via GTSAM_GraphOutput in write_graph_data (the child computes them in
+        # parallel mode) and are flushed to CSV once, in terminate().
+        self.gp_diag_rows: list[list] = []
     def connect_graphs(self, previous_graph_data: GraphInput, current_graph_data: GraphInput) -> GTSAM_GraphInput:
         matches_prev = previous_graph_data.observations
         matches_curr = current_graph_data.observations
@@ -186,6 +200,24 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
             if hasattr(config.alignment, "prior_weight"):
                 align_spec["prior_weight"] = lambda v: isinstance(v, (int, float)) and v > 0
             spec["alignment"] = align_spec
+        # Optional correlated log-depth prior block (Phase 0; defaults preserve the
+        # original path — see Module/Optimization/GTSAM/DepthPrior.py).
+        gp_optional = {
+            "enable_gp_depth_prior": lambda b: isinstance(b, bool),
+            "gp_prior_frames": lambda l: isinstance(l, list) and len(l) > 0
+                                         and set(l) <= {"prev", "curr"},
+            "gp_prior_block_size": lambda n: isinstance(n, int) and n >= 2,
+            "gp_prior_kernel": lambda s: s in KERNEL_BUILDERS,
+            "gp_prior_length_scale_px": lambda v: isinstance(v, (int, float)) and v > 0,
+            "gp_prior_sigma_f": lambda v: isinstance(v, (int, float)) and v > 0,
+            "gp_prior_sigma_n": lambda v: isinstance(v, (int, float)) and v > 0,
+            "gp_scale_prior_sigma": lambda v: isinstance(v, (int, float)) and v > 0,
+            "gp_prior_z_min": lambda v: isinstance(v, (int, float)) and v > 0,
+            "gp_prior_diag_dir": lambda p: p is None or isinstance(p, str),
+        }
+        for key, check in gp_optional.items():
+            if config is not None and hasattr(config, key):
+                spec[key] = check
         cls._enforce_config_spec(config, spec)
 
         a_type = getattr(getattr(config, "alignment", None), "type", "se3") \
@@ -195,6 +227,20 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
             # points, so a warp would desynchronize the two factor families.
             raise ValueError(f"GTSAM_Graph alignment '{a_type}' is only supported by "
                              "graph_type: pose2point (isam and pose2point+gedf stay SE3-only)")
+
+        gp_on = bool(getattr(config, "enable_gp_depth_prior", False)) \
+            if config is not None else False
+        if gp_on and a_type != "se3":
+            # The sim3 warp `a` and the prior's scale `s` occupy the SAME direction
+            # (both shift the target log-depth); running both is the "nothing left
+            # to fix, only adds variance" pathology the July sweep measured. Reject
+            # outright: the failure mode is silent variance inflation, not a crash.
+            raise ValueError("enable_gp_depth_prior is mutually exclusive with "
+                             f"alignment '{a_type}' — both occupy the global depth-"
+                             "scale direction; keep alignment se3")
+        if gp_on and config is not None and config.graph_type != "pose2point":
+            raise ValueError("enable_gp_depth_prior is only supported by graph_type: "
+                             "pose2point (isam and pose2point+gedf are untested with it)")
 
     @staticmethod
     def init_context(config) -> dict:
@@ -206,6 +252,27 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
             # defense in depth for programmatically-built configs
             raise ValueError(f"GTSAM_Graph alignment '{alignment_type}' is only supported by "
                              "graph_type: pose2point (isam stays SE3-only)")
+
+        # Graph augmentations (see GTSAM/Augmentations.py): everything beyond
+        # the bare pose2point graph is assembled here and injected. List order
+        # is factor insertion order. Empty list = the original path (T5-gated).
+        augmentations: list = []
+        gp_enabled = bool(getattr(config, "enable_gp_depth_prior", False))
+        if gp_enabled:
+            # Defense in depth, mirrors the alignment check above.
+            if alignment_type != "se3" or config.graph_type != "pose2point":
+                raise ValueError("enable_gp_depth_prior requires alignment se3 and "
+                                 "graph_type pose2point")
+            augmentations.append(CorrelatedDepthPrior(SimpleNamespace(
+                frames=list(getattr(config, "gp_prior_frames", ["prev", "curr"])),
+                block_size=int(getattr(config, "gp_prior_block_size", 16)),
+                kernel=str(getattr(config, "gp_prior_kernel", "matern32")),
+                length_scale_px=float(getattr(config, "gp_prior_length_scale_px", 40.0)),
+                sigma_f=float(getattr(config, "gp_prior_sigma_f", 0.15)),
+                sigma_n=float(getattr(config, "gp_prior_sigma_n", 0.05)),
+                scale_prior_sigma=float(getattr(config, "gp_scale_prior_sigma", 0.15)),
+                z_min=float(getattr(config, "gp_prior_z_min", 0.05)),
+            )))
 
         # G-EDF map + field config for the hybrid (mirrors GEDF_PGO.init_context)
         gedf_map = None
@@ -228,6 +295,13 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
                 case _:
                     raise ValueError(f"Unknown map source {gedf_cfg.map.source}")
             gedf_map.ready_min_gaussians = max(1, gedf_cfg.map.min_gaussians)
+            augmentations.append(GEDFField(gedf_map, gedf_cfg.field))
+
+        # Per-solve observability diagnostics whenever a CSV is requested, so
+        # prior-OFF arms of an on/off comparison stratify identically. Adds no
+        # factors, so its position in the list is immaterial.
+        if gp_enabled or getattr(config, "gp_prior_diag_dir", None):
+            augmentations.append(SolveDiagnostics())
 
         match (config.graph_type):
             case "pose2point" | "pose2point+gedf":
@@ -238,8 +312,7 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
                     max_iterations=int(getattr(config, "max_iterations", 20)),
                     alignment_type=alignment_type,
                     alignment_prior_weight=alignment_prior_weight,
-                    field=gedf_map,
-                    field_cfg=gedf_cfg.field if gedf_cfg is not None else None,
+                    augmentations=augmentations,
                 )
             case ("isam"):
                 PoseGraphClass = ISAM
@@ -331,16 +404,74 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
         if result.need_interp is not None:
             global_map.frames.data["need_interp"][result.frame_idexes[-1]] = result.need_interp
 
-        if result.map_points is not None and result.landmark_indexes is not None:
-            idx = torch.tensor(result.landmark_indexes, dtype=torch.long, device=result.map_points.device)
-            global_map.map_points.data["pos_Tw"][idx] = result.map_points.to(dtype=torch.float32, device=global_map.map_points.data["pos_Tw"].device)
+        # Optimized landmarks go back into the sparse VO points (`points`), at the
+        # global indices the graph carried in. NOT `map_points`: that is the dense
+        # mapping cloud, a disjoint index space that no graph here re-estimates.
+        from Utility.Visualize import rr_plt
+        if result.landmark_pos_Tw is not None and result.landmark_indexes is not None \
+                and len(result.landmark_indexes) > 0:
+            pos_Tw = global_map.points.data["pos_Tw"]
+            idx = torch.tensor(result.landmark_indexes, dtype=torch.long, device=pos_Tw.device)
+            new_pos_Tw = result.landmark_pos_Tw.to(dtype=pos_Tw.dtype, device=pos_Tw.device)
+            first_pos_Tw = pos_Tw[idx]    # gathered before the write, for the diagnostic below
+            pos_Tw[idx] = new_pos_Tw
+
+            # The refined counterpart of MACVO.py's "/world/vo_tracking", which
+            # logs each batch at creation time (first-estimate geometry, anchored
+            # at a pose the solver had not corrected yet). Same batch, same
+            # timeline slot, so the two entities can be toggled against each
+            # other in the viewer; cov_Tw is the creation-time covariance
+            # (nothing re-estimates it), so the sphere radii match.
+            if rr_plt.default_mode == "rerun":
+                import rerun as rr
+                rr.set_time("frame_idx", sequence=int(result.frame_idexes[-1]))
+                rr_plt.log_points(
+                    "/world/vo_tracking_opt", new_pos_Tw,
+                    global_map.points.data["color"][idx],
+                    global_map.points.data["cov_Tw"][idx], "sphere")
+
+                # How far the solve actually moved this batch, in world units.
+                # Median = the typical depth correction the pose-to-point factors
+                # apply; p95 = the tail the Huber kernels did not clamp. A step
+                # change in either is the signal that the covariance weighting or
+                # the pixel association went wrong on that frame.
+                disp = (new_pos_Tw - first_pos_Tw).norm(dim=-1)
+                rr.log("/world/gtsam_landmark_disp/median",
+                       rr.Scalars(disp.median().item()))
+                rr.log("/world/gtsam_landmark_disp/p95",
+                       rr.Scalars(disp.quantile(0.95).item()))
 
         # Alignment scale diagnostic (parity with GEDF_PGO): no-op without --useRR.
-        from Utility.Visualize import rr_plt
         if result.scale is not None and rr_plt.default_mode == "rerun":
             import rerun as rr
             rr.set_time("frame_idx", sequence=int(result.frame_idexes[-1]))
             rr.log("/world/gtsam_alignment/scale", rr.Scalars(result.scale))
+
+        # Augmentation diagnostics: one CSV row per solve (also with the prior
+        # OFF — the on/off comparison stratifies both arms by parallax), plus
+        # Rerun scalar channels next to /world/gtsam_alignment/scale. Column
+        # names are the aug_diag dict keys (see GP_DIAG_HEADERS).
+        if result.aug_diag:
+            d = result.aug_diag
+            self.gp_diag_rows.append(
+                [int(result.frame_idexes[-1])] + [d.get(k) for k in self.GP_DIAG_HEADERS[1:]])
+            if rr_plt.default_mode == "rerun":
+                import rerun as rr
+                rr.set_time("frame_idx", sequence=int(result.frame_idexes[-1]))
+                scalars = {f"/world/gp_depth_prior/{k}": d.get(k) for k in (
+                    "s_prev", "s_curr", "rms_prev", "rms_curr",
+                    "median_parallax_deg", "huber_rejects")}
+                if all(d.get(k) is not None for k in
+                       ("cost_points", "cost_prior", "cost_scale_prior")):
+                    total = d["cost_points"] + d["cost_prior"] + d["cost_scale_prior"]
+                    if total > 0:
+                        scalars["/world/gp_depth_prior/cost_share_prior"] = \
+                            d["cost_prior"] / total
+                        scalars["/world/gp_depth_prior/cost_share_scale_prior"] = \
+                            d["cost_scale_prior"] / total
+                for channel, value in scalars.items():
+                    if value is not None:
+                        rr.log(channel, rr.Scalars(float(value)))
 
         # G-EDF map snapshot (pose2point+gedf): same entities as GEDF_PGO so
         # the viewer setup is identical across backends.
@@ -365,3 +496,21 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
                     "/world/gedf_map/cubes",
                     result.gedf_cube_centers, result.gedf_cube_valid,
                     result.gedf_cube_mae, cube_size=result.gedf_cube_size)
+
+    def terminate(self):
+        # Chain first: the base terminate kills the parallel child process — a
+        # CSV-only override would leak it.
+        super().terminate()
+        diag_dir = getattr(self.config, "gp_prior_diag_dir", None)
+        if self.gp_diag_rows and diag_dir:
+            # The optimizer never receives the run's Sandbox, so the per-sequence
+            # CSV lands in this configured directory instead (sweep configs point
+            # it into their results tree), timestamped like Sandbox folders.
+            import os
+            from datetime import datetime
+            from Utility.PrettyPrint import save_as_csv
+            os.makedirs(diag_dir, exist_ok=True)
+            save_as_csv(
+                self.GP_DIAG_HEADERS, self.gp_diag_rows,
+                os.path.join(diag_dir,
+                             f"gp_depth_prior_{datetime.now().strftime('%m_%d_%H%M%S')}.csv"))

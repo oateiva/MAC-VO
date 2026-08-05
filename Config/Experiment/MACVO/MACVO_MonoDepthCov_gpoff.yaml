@@ -1,0 +1,133 @@
+#
+# MAC-VO Monocular mode using DepthCov (https://github.com/edexheim/DepthCov,
+# "Learning a Depth Covariance Function", Dexheimer & Davison, CVPR 2023) as the
+# depth + covariance source.
+#
+# DepthCov predicts a Gaussian-process covariance function over log-depth from the RGB
+# image; dense depth + variance are the GP posterior conditioned on sparse depth anchors.
+# MAC-VO supplies the anchors by projecting the running map's landmarks into the current
+# frame (see Odometry/MACVO.py, CameraData.depth_prior). On bootstrap (empty map) the
+# model falls back to a constant depth (init_depth) with a huge variance (init_cov) so the
+# optimizer downweights those observations. The GP posterior variance is converted to a
+# metric depth variance (delta method) and flows into the backend point covariance.
+#
+# License: the vendored DepthCov code and weights are NON-COMMERCIAL (Imperial College
+# London research license) — research experiments only.
+#
+# Weights (36 MB, committed in the upstream repo):
+#   curl -L -o ./Model/depthcov_scannet.ckpt https://github.com/edexheim/DepthCov/raw/master/models/scannet.ckpt
+#
+
+Common:
+  # Some configurations are shared across multiple modules in Odometry, so I write them here.
+  device: &device cuda
+
+Odometry:
+  name: MACVO-DepthCov-gpoff
+  args:
+    # Device directive to the VO system
+    # NOTE: the system may not follow this device config strictly since some module
+    # e.g. those rely on PWC-Net, only support running on cuda device.
+    device: *device
+    edgewidth: 32
+    num_point: 200 # Upper bound of KPs in each frame
+
+    # Match covariance for keypoint on first observation (sub-pixel uncertainty
+    # caused by the quantized pixel)
+    match_cov_default: 0.25
+
+    # Profiling the system using torch, generate chrome json trace file.
+    profile: false
+
+    # Mapping mode provides the dense mapping
+    mapping: true
+
+  cov:
+    obs:
+      type: MatchCovariance
+      args:
+        device: *device
+        kernel_size: 31
+        match_cov_default: 0.25
+        min_depth_cov: 0.05
+        min_flow_cov: 0.25
+
+  keypoint:
+    type: CovAwareSelector_NoDepth
+    args:
+      device: *device
+      kernel_size: 7
+      mask_width: 32
+      max_match_cov: 1.
+      # DepthCov's variance is low near anchors and grows ~depth^2 * kernel-scale away
+      # from them; the median-relative filter keeps keypoints in well-conditioned
+      # (anchor-covered) regions without assuming an absolute scale.
+      depth_cov_rel: 3.0
+
+  mappoint:
+    # Mapping feature can be conveniently turn off by using
+    # "type: NoKeypointSelector" instead of the config below.
+    type: MappingPointSelector
+    args:
+      device: *device
+      max_depth: 5.0
+      max_depth_cov: .4
+      mask_width: 32
+
+  frontend:
+    type: MonocularFrontend
+    args:
+      device: *device
+      parallel: true
+      # Multi-GPU: set device_depth to a second GPU to run depth and flow on separate devices.
+      # Requires parallel: true for concurrent execution. Omit to use a single GPU.
+      # device_depth: cuda:1
+      match:
+        type: FlowFormerCovMatcher
+        args:
+          weight: ./Model/MACVO_FrontendCov.pth
+          device: *device
+          enc_dtype: fp32
+          dec_dtype: fp32
+      monodepth:
+        type: DepthCov
+        args:
+          weight: ./Model/depthcov_scannet.ckpt
+          inference_size: [192, 256]  # (rows, cols) — the trained resolution; kernel
+                                      # lengthscales are learned in normalized coords
+          max_points: 256             # anchor budget from CameraData.depth_prior
+          min_points: 4               # below this -> constant-depth fallback
+          init_depth: 3.0             # metric fallback depth (subsea scene scale)
+          init_cov: 10.0              # fallback variance (m^2) — intentionally huge
+          cov_scale: 1.0              # tuning multiplier on the delta-method variance
+          device: *device
+
+
+  motion:
+    type: StaticMotionModel
+    args:
+
+  outlier:
+    type: CovarianceSanityFilter
+    args:
+
+  postprocess:
+    type: MotionInterpolate
+    args:
+
+  keyframe:
+    type: AllKeyframe
+    args:
+
+  optimizer:
+    type: GTSAM_Graph
+    args:
+      device: cpu
+      vectorize: true
+      parallel: false         # deterministic for the on/off comparison
+      autodiff: true          # required by the config spec (not used for graph selection)
+      graph_type: pose2point
+      gp_prior_diag_dir: Results/gp_prior_t6/diag_dcov_off
+
+Datas: !include ../Common/DeepODO_mono_experiments.yaml
+Preprocess: !include ../Common/Preprocess.yaml
