@@ -103,9 +103,15 @@ def make_pair(from_idx: int, frame_idx: int, pose_a: pp.LieTensor, pose_b: pp.Li
     uv1, d1 = obs_from_pose(pose_a, points_w)
     uv2, d2 = obs_from_pose(pose_b, points_w, warp_cam=warp_b)
     eye_cov = torch.eye(3, dtype=torch.float64).expand(N, 3, 3).clone() * sigma ** 2
+    uv_cov = torch.tensor([0.25, 0.25, 0.0], dtype=torch.float32).expand(N, 3).clone()
     obs = MatchObs.init({
         "pixel1_uv": uv1, "pixel1_d": d1, "obs1_covTc": eye_cov.clone(),
         "pixel2_uv": uv2, "pixel2_d": d2, "obs2_covTc": eye_cov.clone(),
+        # pixel covariances + per-point depth variance, matching the production
+        # MatchObs schema (consumed by the depth-prior augmentation)
+        "pixel1_uv_cov": uv_cov.clone(), "pixel2_uv_cov": uv_cov.clone(),
+        "pixel1_d_cov": (0.1 * d1).square().unsqueeze(-1),
+        "pixel2_d_cov": (0.1 * d2).square().unsqueeze(-1),
     })
     pts = PointNode.init({
         "pos_Tw": points_w.clone(),

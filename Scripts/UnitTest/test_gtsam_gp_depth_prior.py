@@ -288,8 +288,17 @@ def _elongated_cov(uv, d):
     return covs
 
 
-def _solve_t3(prior_on: bool, seed: int = 3):
+def _solve_t3(prior_on: bool, seed: int = 3, formulation: str = "sigma_dd"):
+    """
+    formulation "sigma_dd": Phase-0 point factors (depth measurement in Sigma_p).
+    formulation "own_depth": Phase-1 — depth-free point factors (lateral + ray
+    slide), the prior is the sole depth model. own_depth requires prior_on.
+    """
     from Module.Optimization.GTSAM.DepthPrior import OPTICAL_AXIS as _AX
+    from Module.Optimization.GTSAM.DepthPrior import depth_free_covariance
+    assert formulation in ("sigma_dd", "own_depth")
+    assert not (formulation == "own_depth" and not prior_on), \
+        "own_depth without the prior has no depth information at all"
     rng = np.random.default_rng(seed)
     pts_A, pose_B_true, uv_A, dA_true, uv_B, dB_true = _plane_scene()
     n = len(pts_A)
@@ -324,7 +333,13 @@ def _solve_t3(prior_on: bool, seed: int = 3):
     graph.add(gtsam.PriorFactorPose3(pose_1_key, gtsam.Pose3(),
               gtsam.noiseModel.Diagonal.Sigmas(np.full(6, 1e-4))))
 
-    cov_A, cov_B = _elongated_cov(uv_A, dA), _elongated_cov(uv_B, dB)
+    if formulation == "own_depth":
+        K_intr = np.array([[F_PX, 0, C_PX], [0, F_PX, C_PX], [0, 0, 1.0]])
+        px_cov = np.tile([1.0, 1.0, 0.0], (n, 1))  # (sigma_uu, sigma_vv, sigma_uv)
+        cov_A = depth_free_covariance(uv_A, dA, px_cov, K_intr, slide_rel=10.0)
+        cov_B = depth_free_covariance(uv_B, dB, px_cov, K_intr, slide_rel=10.0)
+    else:
+        cov_A, cov_B = _elongated_cov(uv_A, dA), _elongated_cov(uv_B, dB)
     for i in range(n):
         graph.add(make_pose_to_point_factor(
             pose_1_key, l_keys[i], obs_A[i], gtsam.noiseModel.Gaussian.Covariance(cov_A[i])))
@@ -333,6 +348,10 @@ def _solve_t3(prior_on: bool, seed: int = 3):
         values.insert(l_keys[i], obs_A[i])  # world == frame A
 
     if prior_on:
+        # sigma_dd mode keeps the Phase-0 parameters (the xfailed T3 documents that
+        # regime); own_depth uses the honest error model: nugget = the true iid
+        # noise (2 %), sigma_f covering the smooth corruption, ratio 10.
+        sigma_f, sigma_n = (0.2, 0.02) if formulation == "own_depth" else (0.5, 0.05)
         blocks = partition_blocks(uv_A, block_size=16)
         for role, (pose_key, uv, d) in {"prev": (pose_1_key, uv_A, dA),
                                         "curr": (pose_2_key, uv_B, dB)}.items():
@@ -341,8 +360,8 @@ def _solve_t3(prior_on: bool, seed: int = 3):
             graph.add(gtsam.PriorFactorVector(
                 s_key, np.zeros(1), gtsam.noiseModel.Isotropic.Sigma(1, 0.15)))
             for block in blocks:
-                K_b = matern32_kernel(uv[block], ell=150.0, sigma_f=0.5, sigma_n=0.05)
-                Linv = chol_inv_lower(K_b, base_jitter=0.05 ** 2)
+                K_b = matern32_kernel(uv[block], ell=150.0, sigma_f=sigma_f, sigma_n=sigma_n)
+                Linv = chol_inv_lower(K_b, base_jitter=sigma_n ** 2)
                 assert Linv is not None
                 graph.add(make_gp_depth_prior_factor(
                     pose_key, s_key, [l_keys[int(i)] for i in block],
@@ -399,6 +418,112 @@ def test_t3_prior_never_catastrophic():
     off = _solve_t3(prior_on=False)
     on = _solve_t3(prior_on=True)
     assert on["rms"] < 1.5 * off["rms"], f"prior catastrophically harmful: {on} vs {off}"
+
+
+# ------------------------------------------------- Phase 1: prior owns depth
+
+def test_depth_free_covariance_geometry():
+    from Module.Optimization.GTSAM.DepthPrior import depth_free_covariance
+    rng = np.random.default_rng(11)
+    n = 32
+    uv = rng.uniform(60, 580, size=(n, 2))
+    d = rng.uniform(1.0, 20.0, size=n)
+    px_cov = np.tile([1.0, 1.0, 0.0], (n, 1))
+    K_intr = np.array([[F_PX, 0, C_PX], [0, F_PX, C_PX], [0, 0, 1.0]])
+    slide_rel = 10.0
+    cov = depth_free_covariance(uv, d, px_cov, K_intr, slide_rel)
+
+    rays = np.stack([np.ones(n), (uv[:, 0] - C_PX) / F_PX, (uv[:, 1] - C_PX) / F_PX], -1)
+    for i in range(n):
+        np.linalg.cholesky(cov[i])  # SPD or raises
+        w, V = np.linalg.eigh(cov[i])
+        ray_unit = rays[i] / np.linalg.norm(rays[i])
+        # dominant direction is the viewing ray with the slide variance
+        assert abs(float(V[:, -1] @ ray_unit)) > 1 - 1e-6
+        expected = (slide_rel * d[i]) ** 2 * (rays[i] @ rays[i])
+        assert abs(w[-1] - expected) / expected < 1e-3
+        # a full slide along the ray costs ~1 sigma; a 1-px lateral offset ~1 sigma:
+        # ground truth is never a 10-sigma residual under this model (the Phase-0
+        # synthetic-covariance lesson, now asserted)
+        slide_vec = slide_rel * d[i] * rays[i]
+        m_slide = np.sqrt(slide_vec @ np.linalg.solve(cov[i], slide_vec))
+        assert abs(m_slide - 1.0) < 1e-3
+        lat = np.array([0.0, d[i] / F_PX, 0.0])  # 1 px sideways at depth d
+        m_lat = np.sqrt(lat @ np.linalg.solve(cov[i], lat))
+        assert 0.7 < m_lat < 1.3
+
+
+def test_matern32_per_point_nugget():
+    rng = np.random.default_rng(5)
+    uv = rng.uniform(0, 640, size=(12, 2))
+    nug = rng.uniform(0.01, 0.3, size=12)
+    K_arr = matern32_kernel(uv, 40.0, 0.15, nug)
+    K_ref = matern32_kernel(uv, 40.0, 0.15, 0.0)
+    np.testing.assert_allclose(np.diag(K_arr) - np.diag(K_ref), nug ** 2, atol=1e-15)
+    off = ~np.eye(12, dtype=bool)
+    np.testing.assert_array_equal(K_arr[off], K_ref[off])
+    # scalar path bit-identical to the Phase-0 behavior
+    np.testing.assert_array_equal(matern32_kernel(uv, 40.0, 0.15, 0.05),
+                                  matern32_kernel(uv, 40.0, 0.15, np.full(12, 0.05)))
+
+
+def test_config_own_depth_validation():
+    from Module.Optimization.GTSAM.Optimizer import GTSAM_Graph
+    GTSAM_Graph.is_valid_config(_gtsam_cfg(
+        enable_gp_depth_prior=True, gp_own_depth=True,
+        gp_slide_sigma_rel=10.0, gp_prior_nugget="measured"))
+    with pytest.raises((ValueError, KeyError)):  # own_depth without the prior
+        GTSAM_Graph.is_valid_config(_gtsam_cfg(gp_own_depth=True))
+    with pytest.raises((ValueError, KeyError)):  # prior must cover both frames
+        GTSAM_Graph.is_valid_config(_gtsam_cfg(
+            enable_gp_depth_prior=True, gp_own_depth=True, gp_prior_frames=["curr"]))
+    with pytest.raises((ValueError, KeyError)):
+        GTSAM_Graph.is_valid_config(_gtsam_cfg(
+            enable_gp_depth_prior=True, gp_prior_nugget="adaptive"))
+
+
+def test_own_depth_integration_replaces_covariances():
+    from test_gtsam_alignment import make_gtsam_input
+    from Module.Optimization.GTSAM.Graphs import GTSAM_Pose2Point
+    from Module.Optimization.GTSAM.Augmentations import SolveDiagnostics
+    from Module.Optimization.GTSAM.DepthPrior import (
+        CorrelatedDepthPrior, depth_free_covariance)
+    from types import SimpleNamespace
+
+    cfg = _gp_cfg_ns()
+    cfg.own_depth, cfg.slide_rel, cfg.nugget = True, 10.0, "fixed"
+    g = GTSAM_Pose2Point(augmentations=[CorrelatedDepthPrior(cfg), SolveDiagnostics()])
+    data = make_gtsam_input()
+    g.parse_graph_data(data)
+
+    obs = data.current_graph_data.observations.data
+    K_intr = data.current_graph_data.images_intrinsic.detach().cpu().double().numpy()
+    expect = depth_free_covariance(
+        obs["pixel2_uv"].double().numpy(),
+        obs["pixel2_d"].double().numpy().reshape(-1),
+        obs["pixel2_uv_cov"].double().numpy(), K_intr, 10.0)
+    np.testing.assert_allclose(g.obs2_covTc, expect, rtol=1e-12)
+
+    g.run_gtsam_optimization()
+    out = g.write_back()
+    assert out.aug_diag is not None and out.aug_diag["n_blocks"] > 0
+    assert all(v is None or np.isfinite(v) for v in out.aug_diag.values())
+
+
+def test_phase1_mechanism_own_depth_beats_phase0():
+    """
+    The test Phase 0 could not pass, on the same synthetic scene: with the depth
+    measurement moved out of the point factors and into the prior, the prior-on
+    solution must beat the Phase-0 formulation (sigma_dd + prior) on landmark
+    log-depth RMS. This is the direct check that removing the double count
+    unlocks the coupling.
+    """
+    phase0_off = _solve_t3(prior_on=False, formulation="sigma_dd")
+    phase0_on = _solve_t3(prior_on=True, formulation="sigma_dd")
+    phase1 = _solve_t3(prior_on=True, formulation="own_depth")
+    assert phase1["rms"] < phase0_on["rms"], (
+        f"own-depth did not beat the Phase-0 formulation: "
+        f"phase1={phase1} phase0_on={phase0_on} phase0_off={phase0_off}")
 
 
 # ---------------------------------------------------------------- T4: gauge

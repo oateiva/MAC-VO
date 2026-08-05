@@ -214,6 +214,10 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
             "gp_scale_prior_sigma": lambda v: isinstance(v, (int, float)) and v > 0,
             "gp_prior_z_min": lambda v: isinstance(v, (int, float)) and v > 0,
             "gp_prior_diag_dir": lambda p: p is None or isinstance(p, str),
+            # Phase 1: point factors depth-free, the prior owns the depth measurement.
+            "gp_own_depth": lambda b: isinstance(b, bool),
+            "gp_slide_sigma_rel": lambda v: isinstance(v, (int, float)) and v > 0,
+            "gp_prior_nugget": lambda s: s in {"fixed", "measured"},
         }
         for key, check in gp_optional.items():
             if config is not None and hasattr(config, key):
@@ -241,6 +245,18 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
         if gp_on and config is not None and config.graph_type != "pose2point":
             raise ValueError("enable_gp_depth_prior is only supported by graph_type: "
                              "pose2point (isam and pose2point+gedf are untested with it)")
+
+        if config is not None and bool(getattr(config, "gp_own_depth", False)):
+            if not gp_on:
+                raise ValueError("gp_own_depth requires enable_gp_depth_prior: the point "
+                                 "factors are depth-freed on the premise that the prior "
+                                 "carries the depth measurement instead")
+            frames = list(getattr(config, "gp_prior_frames", ["prev", "curr"]))
+            if set(frames) != {"prev", "curr"}:
+                raise ValueError("gp_own_depth requires gp_prior_frames [prev, curr]: "
+                                 "depth-freeing both frames' factors while the prior "
+                                 "covers only one would silently discard the uncovered "
+                                 "frame's depth measurement")
 
     @staticmethod
     def init_context(config) -> dict:
@@ -272,6 +288,9 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
                 sigma_n=float(getattr(config, "gp_prior_sigma_n", 0.05)),
                 scale_prior_sigma=float(getattr(config, "gp_scale_prior_sigma", 0.15)),
                 z_min=float(getattr(config, "gp_prior_z_min", 0.05)),
+                own_depth=bool(getattr(config, "gp_own_depth", False)),
+                slide_rel=float(getattr(config, "gp_slide_sigma_rel", 10.0)),
+                nugget=str(getattr(config, "gp_prior_nugget", "fixed")),
             )))
 
         # G-EDF map + field config for the hybrid (mirrors GEDF_PGO.init_context)

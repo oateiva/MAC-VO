@@ -41,7 +41,8 @@ if typ.TYPE_CHECKING:
 OPTICAL_AXIS: int = 0
 
 
-def matern32_kernel(uv: np.ndarray, ell: float, sigma_f: float, sigma_n: float) -> np.ndarray:
+def matern32_kernel(uv: np.ndarray, ell: float, sigma_f: float,
+                    sigma_n: "float | np.ndarray") -> np.ndarray:
     """
     Isotropic Matern-3/2 over pixel coordinates, nugget included:
 
@@ -50,13 +51,15 @@ def matern32_kernel(uv: np.ndarray, ell: float, sigma_f: float, sigma_n: float) 
 
     `ell` is in pixels; `sigma_f`/`sigma_n` are in log-depth units. The ratio
     sigma_f/sigma_n is what makes the prior correlated rather than a bag of independent
-    per-point pulls.
+    per-point pulls. `sigma_n` may be a per-point (n,) array — the heteroscedastic
+    nugget used when the prior owns the depth measurement and the network reports
+    per-point uncertainty (gp_prior_nugget: measured).
     """
     uv = np.asarray(uv, dtype=np.float64)
     d = np.linalg.norm(uv[:, None, :] - uv[None, :, :], axis=-1)
     rho = (np.sqrt(3.0) / ell) * d
     K = (sigma_f ** 2) * (1.0 + rho) * np.exp(-rho)
-    K[np.diag_indices_from(K)] += sigma_n ** 2
+    K[np.diag_indices_from(K)] += np.square(np.asarray(sigma_n, dtype=np.float64))
     return K
 
 
@@ -66,6 +69,51 @@ def matern32_kernel(uv: np.ndarray, ell: float, sigma_f: float, sigma_n: float) 
 KERNEL_BUILDERS: dict[str, Callable[..., np.ndarray]] = {
     "matern32": matern32_kernel,
 }
+
+
+def depth_free_covariance(uv: np.ndarray, d: np.ndarray, uv_cov: np.ndarray,
+                          K_intr: np.ndarray, slide_rel: float) -> np.ndarray:
+    """
+    Point-factor covariance with the depth measurement moved OUT (Phase 1: the GP
+    prior owns depth). NED [depth, east, down]:
+
+        Sigma_df = L + (slide_rel * d)^2 * outer(r, r),   r = [1, (u-cx)/fx, (v-cy)/fy]
+
+    where L is the pixel-noise lateral block (d^2 sigma_uu/fx^2 etc., zero on the
+    depth axis) and the second term is a large slide along the VIEWING RAY, making
+    the along-ray direction nearly uninformative. Zeroing sigma_dd instead would
+    claim the measured depth is exact (the observation d*ray embeds it) — the
+    opposite of intent; and a huge sigma_dd inside Covariance_2to3_full blows up
+    the lateral directions through its second-order sigma_uu*sigma_dd term. The
+    slide term also keeps the matrix full-rank SPD: it is the rank floor the
+    depth-free factor needs.
+
+    `uv_cov` columns are (sigma_uu, sigma_vv, sigma_uv), the MatchObs layout.
+    Consequence for robust weighting: Huber on these factors gates on lateral/flow
+    consistency only — the along-ray residual is whitened by ~1/(slide_rel*d).
+    """
+    uv = np.asarray(uv, dtype=np.float64)
+    d = np.asarray(d, dtype=np.float64).reshape(-1)
+    uv_cov = np.asarray(uv_cov, dtype=np.float64)
+    fx, fy = float(K_intr[0, 0]), float(K_intr[1, 1])
+    cx, cy = float(K_intr[0, 2]), float(K_intr[1, 2])
+
+    rho_x = (uv[:, 0] - cx) / fx
+    rho_y = (uv[:, 1] - cy) / fy
+    rays = np.stack([np.ones_like(rho_x), rho_x, rho_y], axis=-1)          # (N,3)
+
+    n = uv.shape[0]
+    cov = (slide_rel * d)[:, None, None] ** 2 * (rays[:, :, None] * rays[:, None, :])
+    d2 = d ** 2
+    # tiny relative jitter keeps the lateral block SPD if a matcher ever emits a
+    # degenerate pixel covariance (sigma_uv^2 == sigma_uu*sigma_vv)
+    eps = 1e-9 * d2
+    cov[:, 1, 1] += d2 * uv_cov[:, 0] / fx ** 2 + eps
+    cov[:, 2, 2] += d2 * uv_cov[:, 1] / fy ** 2 + eps
+    cov[:, 1, 2] += d2 * uv_cov[:, 2] / (fx * fy)
+    cov[:, 2, 1] += d2 * uv_cov[:, 2] / (fx * fy)
+    assert cov.shape == (n, 3, 3)
+    return cov
 
 
 def partition_blocks(uv: np.ndarray, block_size: int,
@@ -187,6 +235,22 @@ def make_gp_depth_prior_factor(pose_key: int, s_key: int, landmark_keys: list[in
     return gtsam.CustomFactor(gtsam.noiseModel.Unit.Create(n_b), keys, error_func)
 
 
+def _sane_uv_cov(t, n: int) -> np.ndarray:
+    """
+    Pixel covariance (sigma_uu, sigma_vv, sigma_uv) sanitized for factor use:
+    the -1 "not available" sentinel (or an absent field) becomes the 1 px^2
+    default, and cross terms that would make the 2x2 indefinite are zeroed.
+    """
+    if t is None:
+        return np.tile([1.0, 1.0, 0.0], (n, 1))
+    c = t.detach().cpu().double().numpy().copy()
+    bad = ~((c[:, 0] > 0) & (c[:, 1] > 0))
+    c[bad] = (1.0, 1.0, 0.0)
+    indefinite = np.square(c[:, 2]) >= c[:, 0] * c[:, 1]
+    c[indefinite, 2] = 0.0
+    return c
+
+
 class CorrelatedDepthPrior:
     """
     The correlated log-depth prior as a `GraphAugmentation` (see
@@ -196,19 +260,29 @@ class CorrelatedDepthPrior:
 
     `cfg` is the resolved namespace built by `GTSAM_Graph.init_context`:
     frames, block_size, kernel, length_scale_px, sigma_f, sigma_n,
-    scale_prior_sigma, z_min. Mutual exclusion with a non-se3 alignment is
-    enforced at config validation (both occupy the global depth-scale
-    direction).
+    scale_prior_sigma, z_min, own_depth, slide_rel, nugget. Mutual exclusion
+    with a non-se3 alignment is enforced at config validation (both occupy the
+    global depth-scale direction).
+
+    Phase 1 (`own_depth: true`): the point factors' covariances are replaced by
+    `depth_free_covariance` — the prior becomes the SOLE per-point depth
+    measurement model, removing the double count that made Phase 0 a structural
+    null (the prior's yhat duplicated the sigma_dd already in Sigma_p). With
+    `nugget: measured` the per-point nugget is the network's own log-depth
+    variance, `pixel*_d_cov / d^2` floored at sigma_n^2 (for DepthCov this is
+    exactly its GP's Var(log d)).
     """
     def __init__(self, cfg: "SimpleNamespace"):
         self.cfg = cfg
         self._uv: dict[str, np.ndarray] = {}
         self._d: dict[str, np.ndarray] = {}
+        self._nugget: dict[str, "float | np.ndarray"] = {}
         self._info: dict = {}
         self._ctx: "BuildContext | None" = None
 
     def on_parse(self, graph: "GTSAM_Pose2Point", data: "GTSAM_GraphInput") -> None:
         # "prev" = frame from_idx (pixel1_*), "curr" = frame frame_idx (pixel2_*).
+        cfg = self.cfg
         obs_data = data.current_graph_data.observations.data
         self._uv = {
             "prev": obs_data["pixel1_uv"].detach().cpu().double().numpy(),
@@ -218,6 +292,38 @@ class CorrelatedDepthPrior:
             "prev": obs_data["pixel1_d"].detach().cpu().double().numpy().reshape(-1),
             "curr": obs_data["pixel2_d"].detach().cpu().double().numpy().reshape(-1),
         }
+
+        if getattr(cfg, "nugget", "fixed") == "measured":
+            # Per-point nugget = the network's log-depth std, sigma_n as floor.
+            # `pixel*_d_cov` can hold the -1 "not available" sentinel (or be
+            # absent from a pared-down bundle) — those rows keep the floor.
+            for role, key in (("prev", "pixel1_d_cov"), ("curr", "pixel2_d_cov")):
+                d = self._d[role]
+                var_log = np.full_like(d, cfg.sigma_n ** 2)
+                if key in obs_data:
+                    d_cov = obs_data[key].detach().cpu().double().numpy().reshape(-1)
+                    ok = (d > 0) & (d_cov > 0)
+                    var_log[ok] = np.maximum(d_cov[ok] / np.square(d[ok]), cfg.sigma_n ** 2)
+                self._nugget[role] = np.sqrt(var_log)
+        else:
+            self._nugget = {"prev": cfg.sigma_n, "curr": cfg.sigma_n}
+
+        if getattr(cfg, "own_depth", False):
+            # Replace the point factors' noise with the depth-free covariance.
+            # graph.obs*_covTc are numpy COPIES of the map data, so the stored
+            # MatchObs covariances (and everything downstream of the map) are
+            # untouched; the frame k-2 re-observation factor reads the map
+            # tensor directly and deliberately keeps sigma_dd — the prior does
+            # not cover frame k-2, so depth-freeing it would discard that
+            # frame's depth measurement outright.
+            K_intr = data.current_graph_data.images_intrinsic.detach().cpu().double().numpy()
+            n = self._uv["curr"].shape[0]
+            graph.obs1_covTc = depth_free_covariance(
+                self._uv["prev"], self._d["prev"],
+                _sane_uv_cov(obs_data.get("pixel1_uv_cov"), n), K_intr, cfg.slide_rel)
+            graph.obs2_covTc = depth_free_covariance(
+                self._uv["curr"], self._d["curr"],
+                _sane_uv_cov(obs_data.get("pixel2_uv_cov"), n), K_intr, cfg.slide_rel)
 
     def on_build(self, graph: "GTSAM_Pose2Point", factor_graph, initial_estimate,
                  ctx: "BuildContext") -> None:
@@ -258,9 +364,11 @@ class CorrelatedDepthPrior:
             pose_key, role_frame_idx = roles[role]
             s_key = gtsam.symbol('s', role_frame_idx)
             uv_f, d_f = self._uv[role], self._d[role]
+            nugget = self._nugget.get(role, cfg.sigma_n)
             role_factors = []
             for block in blocks:
-                K_b = kernel(uv_f[block], cfg.length_scale_px, cfg.sigma_f, cfg.sigma_n)
+                block_nugget = nugget[block] if isinstance(nugget, np.ndarray) else nugget
+                K_b = kernel(uv_f[block], cfg.length_scale_px, cfg.sigma_f, block_nugget)
                 Linv = chol_inv_lower(K_b, base_jitter=cfg.sigma_n ** 2)
                 if Linv is None:
                     info["blocks_dropped"] += 1

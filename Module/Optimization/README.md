@@ -236,6 +236,25 @@ DAv2, DepthCov, stereo) regardless of `monodepth.type`. Note DAv2's *covariance*
 is `0.1·depth` (not a variance), which degrades the point factors themselves —
 prefer DAv3 or DepthCov configs for experiments.
 
+**Phase 1 — the prior owns depth (`gp_own_depth: true`).** Phase 0 measured a
+structural null: the prior's target `log(pixel*_d)` duplicates the depth
+measurement already weighted by `sigma_dd` inside `Sigma_p`, so the prior could
+only re-weight, never add. With `gp_own_depth` the augmentation replaces the
+point factors' covariances (numpy copies only — the map is untouched) with a
+depth-free construction: pixel-noise lateral block plus a large ray-aligned
+slide term `(gp_slide_sigma_rel * d)^2 · r rᵀ` that makes the along-ray
+direction nearly uninformative (NOT zero-variance — the observation `d·ray`
+embeds the measured depth, and zeroing would pin it as exact). The prior is
+then the sole per-point depth model; with `gp_prior_nugget: measured` its
+nugget is the network's own log-depth variance `pixel*_d_cov / d²` (for
+DepthCov: exactly its GP's `Var(log d)`), floored at `gp_prior_sigma_n`.
+Requires `gp_prior_frames: [prev, curr]` (rejected otherwise — a depth-freed
+frame without prior coverage would lose its depth measurement outright); the
+frame k−2 re-observation factor keeps `sigma_dd` (the prior does not cover
+k−2). Note the Huber kernel on depth-free factors gates on lateral/flow
+consistency only. Extra keys: `gp_own_depth: false`, `gp_slide_sigma_rel: 10.0`,
+`gp_prior_nugget: fixed|measured`.
+
 Diagnostics per solve (also with the prior off, for on/off stratification):
 Rerun scalars under `/world/gp_depth_prior/*` (per-frame `s`, RMS of
 `y − ŷ − s`, cost shares, median parallax angle, Huber rejections) and a
