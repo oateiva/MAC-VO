@@ -218,6 +218,9 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
             "gp_own_depth": lambda b: isinstance(b, bool),
             "gp_slide_sigma_rel": lambda v: isinstance(v, (int, float)) and v > 0,
             "gp_prior_nugget": lambda s: s in {"fixed", "measured"},
+            # Display: posterior landmark marginals + measured cloud on
+            # /world/vo_tracking_opt (pose2point only).
+            "viz_landmark_marginals": lambda b: isinstance(b, bool),
         }
         for key, check in gp_optional.items():
             if config is not None and hasattr(config, key):
@@ -332,6 +335,8 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
                     alignment_type=alignment_type,
                     alignment_prior_weight=alignment_prior_weight,
                     augmentations=augmentations,
+                    export_landmark_marginals=bool(
+                        getattr(config, "viz_landmark_marginals", False)),
                 )
             case ("isam"):
                 PoseGraphClass = ISAM
@@ -444,10 +449,25 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
             if rr_plt.default_mode == "rerun":
                 import rerun as rr
                 rr.set_time("frame_idx", sequence=int(result.frame_idexes[-1]))
+                # Sphere radii: POSTERIOR marginals when the solve exported them
+                # (viz_landmark_marginals: true) — the state after the entire
+                # optimization — else the map's creation-time cov_Tw.
+                radii_cov = result.landmark_cov_Tw \
+                    if result.landmark_cov_Tw is not None \
+                    else global_map.points.data["cov_Tw"][idx]
                 rr_plt.log_points(
                     "/world/vo_tracking_opt", new_pos_Tw,
                     global_map.points.data["color"][idx],
-                    global_map.points.data["cov_Tw"][idx], "sphere")
+                    radii_cov, "sphere")
+                # The measured cloud at the OPTIMIZED pose: toggling it against
+                # vo_tracking_opt shows exactly what the solve did to the depth
+                # field (per-point displacement, including the scale the prior's
+                # s absorbed — landmark depth ~= measured * exp(s) at optimum).
+                if result.landmark_meas_pos_Tw is not None:
+                    rr_plt.log_points(
+                        "/world/vo_tracking_meas",
+                        result.landmark_meas_pos_Tw.float(),
+                        global_map.points.data["color"][idx], None, "none")
 
                 # How far the solve actually moved this batch, in world units.
                 # Median = the typical depth correction the pose-to-point factors

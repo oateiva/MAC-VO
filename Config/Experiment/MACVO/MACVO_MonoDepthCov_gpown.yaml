@@ -137,6 +137,7 @@ Odometry:
       gp_scale_prior_sigma: 0.15
       gp_prior_z_min: 0.05
       gp_own_depth: true
+      viz_landmark_marginals: true   # posterior radii + measured cloud on /world/vo_tracking_*
       gp_slide_sigma_rel: 10.0
       gp_prior_nugget: measured
       gp_prior_diag_dir: Results/gp_prior_phase1/diag_dcov_own

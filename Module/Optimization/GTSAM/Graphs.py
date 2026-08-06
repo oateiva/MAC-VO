@@ -40,6 +40,14 @@ class GTSAM_GraphOutput:
     # space and must never leak out of the graph.
     landmark_indexes: Optional[list[int] | None] = None
     landmark_pos_Tw: Optional[torch.Tensor] = None   # (N, 3) world frame
+    # Post-solve landmark visuals (export_landmark_marginals=True only):
+    # posterior marginal covariances — what the solve actually concluded about
+    # each landmark, unlike the map's creation-time cov_Tw which nothing
+    # re-estimates — and the CURRENT frame's measured cloud placed at the
+    # optimized pose, so the depth correction (prior displacement including the
+    # scale s absorbed) is directly visible against the optimized landmarks.
+    landmark_cov_Tw: Optional[torch.Tensor] = None       # (N, 3, 3) world frame
+    landmark_meas_pos_Tw: Optional[torch.Tensor] = None  # (N, 3) world frame
     need_interp: Optional[bool] = None
     # Alignment diagnostics ("estimate + report", mirrors GEDF_GraphOutput):
     # the per-frame warp parameters estimated for the CURRENT frame's
@@ -75,7 +83,8 @@ class GTSAM_Pose2Point(FactorGraph):
     def __init__(self, huber_delta: float = 0.1, huber_delta_prev: float = 1.0,
                  prior_sigma: float = 1e-4, max_iterations: int = 20,
                  alignment_type: str = "se3", alignment_prior_weight: float = 100.0,
-                 augmentations: "typ.Sequence[GraphAugmentation]" = ()):
+                 augmentations: "typ.Sequence[GraphAugmentation]" = (),
+                 export_landmark_marginals: bool = False):
         super().__init__()
         # Optimizer hyperparameters (config: Odometry.optimizer.args; defaults
         # reproduce the historical hardcoded values).
@@ -100,6 +109,10 @@ class GTSAM_Pose2Point(FactorGraph):
         # pre-augmentation implementation (regression gate T5). List order is
         # factor insertion order.
         self.augmentations = tuple(augmentations)
+        # Ship posterior landmark marginals + the measured cloud at the
+        # optimized pose (config: viz_landmark_marginals) — display-only
+        # payload, never written to the map.
+        self.export_landmark_marginals = export_landmark_marginals
 
 
     def parse_graph_data(self, graph_data: GTSAM_GraphInput):
@@ -318,6 +331,23 @@ class GTSAM_Pose2Point(FactorGraph):
             except Exception as e:
                 Logger.write("warn", f"{type(aug).__name__}.on_solved failed ({e})")
 
+        # Display-only payload: posterior landmark marginals (what the solve
+        # concluded, vs the map's never-re-estimated creation-time cov_Tw) and
+        # the measured cloud at the optimized pose (the "before" the depth
+        # correction is visible against). Best-effort — never fails the solve.
+        landmark_cov_Tw = None
+        landmark_meas_pos_Tw = None
+        if self.export_landmark_marginals and len(landmark_keys) > 0:
+            R2 = pose_2.rotation().matrix()
+            t2 = np.asarray(pose_2.translation(), dtype=np.float64).reshape(3)
+            landmark_meas_pos_Tw = torch.from_numpy(self.obs_Tc_2 @ R2.T + t2)
+            try:
+                marginals = gtsam.Marginals(graph, result)
+                landmark_cov_Tw = torch.from_numpy(np.stack(
+                    [marginals.marginalCovariance(k) for k in landmark_keys]))
+            except Exception as e:
+                Logger.write("warn", f"landmark marginals unavailable ({e})")
+
         # self.log_plot_data(pose_1=pose_1, pose_2=pose_2, landmark_positions=landmark_positions)
         need_interp = False
         landmark_idx: Optional[list[int]] = self.point_global_idx.tolist()
@@ -332,6 +362,7 @@ class GTSAM_Pose2Point(FactorGraph):
             # The poses fell back to the initial guess, so the landmarks this
             # solve produced are not consistent with what lands in the map.
             landmark_idx, landmark_positions = None, None
+            landmark_cov_Tw, landmark_meas_pos_Tw = None, None
 
         align_state: Optional[torch.Tensor] = None
         align_scale: Optional[float] = None
@@ -346,6 +377,8 @@ class GTSAM_Pose2Point(FactorGraph):
             pose_estimates=[pose_1, pose_2],
             landmark_indexes=landmark_idx,
             landmark_pos_Tw=landmark_positions,
+            landmark_cov_Tw=landmark_cov_Tw,
+            landmark_meas_pos_Tw=landmark_meas_pos_Tw,
             need_interp=need_interp,
             alignment_type=self.alignment_type,
             alignment_state=align_state,

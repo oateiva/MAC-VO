@@ -492,7 +492,8 @@ def test_own_depth_integration_replaces_covariances():
 
     cfg = _gp_cfg_ns()
     cfg.own_depth, cfg.slide_rel, cfg.nugget = True, 10.0, "fixed"
-    g = GTSAM_Pose2Point(augmentations=[CorrelatedDepthPrior(cfg), SolveDiagnostics()])
+    g = GTSAM_Pose2Point(augmentations=[CorrelatedDepthPrior(cfg), SolveDiagnostics()],
+                         export_landmark_marginals=True)
     data = make_gtsam_input()
     g.parse_graph_data(data)
 
@@ -508,6 +509,16 @@ def test_own_depth_integration_replaces_covariances():
     out = g.write_back()
     assert out.aug_diag is not None and out.aug_diag["n_blocks"] > 0
     assert all(v is None or np.isfinite(v) for v in out.aug_diag.values())
+
+    # Display payload: posterior marginals (SPD, one per landmark) and the
+    # measured cloud at the optimized pose.
+    n = len(out.landmark_indexes)
+    assert out.landmark_cov_Tw is not None and out.landmark_cov_Tw.shape == (n, 3, 3)
+    for i in range(0, n, max(1, n // 5)):
+        np.linalg.cholesky(out.landmark_cov_Tw[i].numpy())
+    assert out.landmark_meas_pos_Tw is not None \
+        and out.landmark_meas_pos_Tw.shape == (n, 3) \
+        and np.isfinite(out.landmark_meas_pos_Tw.numpy()).all()
 
 
 def test_phase1_mechanism_own_depth_beats_phase0():
