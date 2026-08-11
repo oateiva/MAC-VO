@@ -1,0 +1,99 @@
+#
+# MACVO_DAv3_p2p.yaml at num_point 300 — the fast-iteration variant used for the
+# GP depth-prior T5/T6/sweep runs (the optimizer is CustomFactor-callback-bound,
+# ~92 % of frame time at num_point 1000; 300 keeps a run of plane_nose[80:160]
+# under ~10 min). Identical to MACVO_DAv3_p2p.yaml otherwise.
+#
+
+Common:
+  device: &device cuda
+
+Odometry:
+  name: MACVO-DAv3-welland-off
+  args:
+    device: *device
+    edgewidth: 32
+    num_point: 300
+    match_cov_default: 0.25
+    profile: false
+    mapping: true
+
+  cov:
+    obs:
+      type: MatchCovariance
+      args:
+        device: *device
+        kernel_size: 31
+        match_cov_default: 0.25
+        min_depth_cov: 0.01
+        min_flow_cov: 0.25
+
+  keypoint:
+    type: CovAwareSelector_NoDepth
+    args:
+      device: *device
+      kernel_size: 7
+      mask_width: 32
+      max_match_cov: 10.
+      # (no max_depth/max_depth_cov: CovAwareSelector_NoDepth drops depth filters)
+
+  mappoint:
+    type: MappingPointSelector
+    args:
+      device: *device
+      max_depth: 7.0
+      max_depth_cov: 1.0
+      mask_width: 32
+
+  frontend:
+    type: MonocularFrontend
+    args:
+      device: *device
+      parallel: true
+      match:
+        type: FlowFormerCovMatcher
+        args:
+          weight: ./Model/MACVO_FrontendCov.pth
+          device: *device
+          enc_dtype: fp32
+          dec_dtype: fp32
+      monodepth:
+        type: DepthAnythingV3
+        args:
+          model_name: da3nested-giant-large
+          weight: depth-anything/DA3NESTED-GIANT-LARGE-1.1
+          device: *device
+          q90: 1.
+          cov_calibration:
+            bundle: ./Config/Calibration/eiva_depth_da3.yml
+            method: auto
+            scale: 1.0
+
+  motion:
+    type: StaticMotionModel
+    args:
+
+  outlier:
+    type: CovarianceSanityFilter
+    args:
+
+  postprocess:
+    type: MotionInterpolate
+    args:
+
+  keyframe:
+    type: AllKeyframe
+    args:
+
+  optimizer:
+    type: GTSAM_Graph
+    args:
+      device: cpu
+      vectorize: true
+      parallel: false         # sequential = deterministic; required for T5
+      autodiff: true
+      graph_type: pose2point
+      gp_prior_diag_dir: Results/gp_prior_welland/diag_off
+
+Datas: !include ../../../Common/DeepODO_mono_experiments.yaml
+Preprocess: !include ../../../Common/Preprocess.yaml

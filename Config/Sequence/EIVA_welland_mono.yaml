@@ -1,0 +1,14 @@
+type: EIVA_NoIMU
+name: welland_mono
+args:
+  root: D:\Datasets\EIVA\welland\Welland_test_first_dive
+  # Controls optional data sources
+  gtDepth: false
+  gtFlow: false
+  gtPose: true
+  is_stereo: false
+  window_length: 2
+  step_size: 1
+  navigation_names: [Welland]
+  sequence_camera_names: [left, right]
+  compressed: true

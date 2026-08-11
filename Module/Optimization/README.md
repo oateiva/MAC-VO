@@ -255,6 +255,14 @@ k−2). Note the Huber kernel on depth-free factors gates on lateral/flow
 consistency only. Extra keys: `gp_own_depth: false`, `gp_slide_sigma_rel: 10.0`,
 `gp_prior_nugget: fixed|measured`.
 
+**Usage warning (measured on Welland, 2026-08-11): do not enable the prior without a
+far-range gate on scenes with unbounded range.** The prior's coupling propagates biased
+far-tail depths into the clean near cloud — ungated it cost +94 % ATE on a canal survey
+while the gated combo beat prior-off by 26 %. Set the keypoint selector's `max_depth`
+from the scene's candidate-depth distribution (cut ~p75–p80; thresholds do NOT transfer
+across datasets/scale conventions), and pair with `motion_prior_sigma` — the gate thins
+each pair's geometry and the soft cv factor supplies the stabilization back.
+
 Diagnostics per solve (also with the prior off, for on/off stratification):
 Rerun scalars under `/world/gp_depth_prior/*` (per-frame `s`, RMS of
 `y − ŷ − s`, cost shares, median parallax angle, Huber rejections) and a
