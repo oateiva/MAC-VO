@@ -291,7 +291,13 @@ class CovAwareSelector(IKeypointSelector):
         depth1_cov_map = depth1_est.cov.to(self.config.device)
 
         if match_est is not None and match_est.cov is not None:
-            flow_cov_map = match_est.cov.to(self.config.device)
+            # A paired-window matcher returns B=2 (one flow per window slot) while the
+            # depth maps are B=1, so combining them below needs one batch convention.
+            # Batch 0 is the only correct choice: every downstream sample of the
+            # selected pixels goes through `IDepth.retrieve_pixels`, which reads batch
+            # 0 of the flow / depth / covariance maps. Selecting on batch 1 would pair
+            # keypoints found in one flow field with values read from another.
+            flow_cov_map = match_est.cov[:1].to(self.config.device)
         else:
             flow_cov_map = None
 
@@ -342,7 +348,10 @@ class CovAwareSelector(IKeypointSelector):
             point_mask = torch.logical_and(point_mask, depth0_est.mask.to(point_mask.device))
 
         if match_est is not None and match_est.mask is not None:
-            point_mask = torch.logical_and(point_mask, match_est.mask.to(point_mask.device))
+            # Batch 0 for the same reason as the covariance above: an out-of-place
+            # logical_and against a B=2 mask would broadcast point_mask back up to
+            # B=2 and emit every pixel twice from `nonzero` below.
+            point_mask = torch.logical_and(point_mask, match_est.mask[:1].to(point_mask.device))
 
         # Select points
         # NOTE: potential performance bottleneck
@@ -386,7 +395,13 @@ class CovAwareSelector_NoDepth(IKeypointSelector):
         if match_est is None or match_est.cov is None:
             return self.fallback_grid_selector.select_point(frame, numPoint, depth0_est, depth1_est, match_est)
         else:
-            flow_cov_map = match_est.cov.to(self.config.device)
+            # Batch 0 only: a paired-window matcher returns B=2 (one flow per window
+            # slot), but every downstream sample of the selected pixels goes through
+            # `IDepth.retrieve_pixels`, which reads batch 0. Selecting across both
+            # slots yields keypoints found in one flow field whose flow, depth and
+            # covariance are then read from the other. Same convention as
+            # CovAwareSelector.
+            flow_cov_map = match_est.cov[:1].to(self.config.device)
 
         # Derive quality map
         quality_map = (flow_cov_map[:, 0] + flow_cov_map[:, 1] - 2 * flow_cov_map[:, 2]).unsqueeze(1)
@@ -421,16 +436,37 @@ class CovAwareSelector_NoDepth(IKeypointSelector):
         depth_cov_rel: float | None = getattr(self.config, "depth_cov_rel", None)
         if depth_cov_rel is not None and depth0_est.cov is not None:
             depth_cov_map = depth0_est.cov.to(self.config.device)
-            # quality_nms is batched with the matcher output (B=2 for paired
-            # windows) while the depth cov has B=1; expand for mask indexing.
+            # Both are B=1 (the flow cov was sliced to batch 0 above, and the depth
+            # cov is B=1); expand_as stays as a guard should either gain a batch.
             cand_mask = quality_nms & border_mask
             candidate_cov = depth_cov_map.expand_as(cand_mask)[cand_mask]
             if candidate_cov.numel() > 0:
                 depth_cov_thresh = candidate_cov.nanmedian().item() * depth_cov_rel
                 point_mask = torch.logical_and(point_mask, depth_cov_map < depth_cov_thresh)
 
+        # Optional far-range gate. Beyond some range this footage's depth AND
+        # flow are systematically BIASED (featureless open water), and bias
+        # cannot be down-weighted by covariance - only gated (measured in
+        # learningUAVO/gtsam_backend/FINDINGS.md). `max_depth` is absolute in
+        # the depth map's own (mono, scale-inflated) units; `max_depth_rel`
+        # is scale-free, a multiple of the median candidate depth.
+        max_depth: float | None = getattr(self.config, "max_depth", None)
+        max_depth_rel: float | None = getattr(self.config, "max_depth_rel", None)
+        if max_depth is not None or max_depth_rel is not None:
+            depth_map = depth0_est.depth.to(self.config.device)
+            thresh = max_depth if max_depth is not None else float("inf")
+            if max_depth_rel is not None:
+                cand_mask = quality_nms & border_mask
+                candidate_d = depth_map.expand_as(cand_mask)[cand_mask]
+                if candidate_d.numel() > 0:
+                    thresh = min(thresh, candidate_d.nanmedian().item() * max_depth_rel)
+            point_mask = torch.logical_and(point_mask, depth_map < thresh)
+
         if match_est is not None and match_est.mask is not None:
-            point_mask = torch.logical_and(point_mask, match_est.mask.to(point_mask.device))
+            # Batch 0, matching the covariance above: an out-of-place logical_and
+            # against a B=2 mask would broadcast point_mask back up to B=2 and emit
+            # every pixel twice from `nonzero` below.
+            point_mask = torch.logical_and(point_mask, match_est.mask[:1].to(point_mask.device))
 
         # Select points
         # NOTE: potential performance bottleneck
@@ -452,7 +488,9 @@ class CovAwareSelector_NoDepth(IKeypointSelector):
             "kernel_size"   : lambda k: isinstance(k, int) and k > 0 and (k % 2 == 1),
             "max_match_cov" : lambda c: isinstance(c, (int, float)) and c > 0.
         }
-        # Optional median-relative depth-cov filter (see select_point).
-        if config is not None and hasattr(config, "depth_cov_rel"):
-            spec["depth_cov_rel"] = lambda v: isinstance(v, (int, float)) and v > 0.
+        # Optional median-relative depth-cov filter and far-range gates
+        # (see select_point).
+        for key in ("depth_cov_rel", "max_depth", "max_depth_rel"):
+            if config is not None and hasattr(config, key):
+                spec[key] = lambda v: isinstance(v, (int, float)) and v > 0.
         cls._enforce_config_spec(config, spec)

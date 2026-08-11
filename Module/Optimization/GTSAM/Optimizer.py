@@ -8,7 +8,7 @@ from Utility.Timer import Timer
 from ..Interface import IOptimizer
 from ..PyposeOptimizers import FactorGraph
 from ..TwoFramePGO.Graphs import GraphInput
-from .Augmentations import GEDFField, SolveDiagnostics
+from .Augmentations import GEDFField, MotionPrior, SolveDiagnostics
 from .DepthPrior import KERNEL_BUILDERS, CorrelatedDepthPrior
 from .Graphs import GTSAM_GraphInput, GTSAM_GraphOutput, GTSAM_Pose2Point, ISAM
 
@@ -30,6 +30,7 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
         "cost_points", "cost_prior", "cost_scale_prior", "rms_prev", "rms_curr",
         "median_parallax_deg", "huber_rejects", "n_points",
         "dropped_nonpos_d", "z_clamps", "blocks_dropped", "n_blocks",
+        "cost_motion_prior",
     ]
 
     def __init__(self, config):
@@ -221,6 +222,10 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
             # Display: posterior landmark marginals + measured cloud on
             # /world/vo_tracking_opt (pose2point only).
             "viz_landmark_marginals": lambda b: isinstance(b, bool),
+            # Soft constant-velocity motion prior (MotionPrior augmentation);
+            # presence of motion_prior_sigma enables it.
+            "motion_prior_sigma": lambda v: isinstance(v, (int, float)) and v > 0,
+            "motion_prior_rot_mult": lambda v: isinstance(v, (int, float)) and v > 0,
         }
         for key, check in gp_optional.items():
             if config is not None and hasattr(config, key):
@@ -318,6 +323,11 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
                     raise ValueError(f"Unknown map source {gedf_cfg.map.source}")
             gedf_map.ready_min_gaussians = max(1, gedf_cfg.map.min_gaussians)
             augmentations.append(GEDFField(gedf_map, gedf_cfg.field))
+
+        mp_sigma = getattr(config, "motion_prior_sigma", None)
+        if mp_sigma is not None:
+            augmentations.append(MotionPrior(
+                float(mp_sigma), float(getattr(config, "motion_prior_rot_mult", 2.0))))
 
         # Per-solve observability diagnostics whenever a CSV is requested, so
         # prior-OFF arms of an on/off comparison stratify identically. Adds no

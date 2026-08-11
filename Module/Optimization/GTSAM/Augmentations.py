@@ -25,12 +25,13 @@ import math
 import torch
 import gtsam
 import numpy as np
+import pypose as pp
 import typing as typ
 from dataclasses import dataclass
 from typing import Optional, Protocol, runtime_checkable
 
 from Utility.PrettyPrint import Logger
-from Utility.GTSAM_Utils import make_gedf_field_factor
+from Utility.GTSAM_Utils import make_gedf_field_factor, pypose_to_pose3
 
 if typ.TYPE_CHECKING:
     from types import SimpleNamespace
@@ -119,6 +120,51 @@ class GEDFField:
     def on_solved(self, graph: "GTSAM_Pose2Point", factor_graph, result,
                   pose_1, pose_2, landmarks_np: np.ndarray) -> dict:
         return {}
+
+
+class MotionPrior:
+    """
+    Soft constant-velocity prior: one BetweenFactorPose3 from pose_1 to pose_2
+    whose measurement is the PREVIOUS pair's optimized relative motion. A soft
+    factor, deliberately not an extrapolated initialization — the learningUAVO
+    ledger measured the soft form at −35 % APE while velocity-coasting through
+    measurement gaps was 4–8x worse than freezing. Skipped on the first pair
+    (no k−2 pose to derive a velocity from).
+
+    `trans_sigma` is in the VO's own translation units (mono: scale-inflated
+    metres); rotation sigma = rot_mult * trans_sigma in radians (their sweep
+    found rot_mult != 2 regresses).
+    """
+    def __init__(self, trans_sigma: float, rot_mult: float = 2.0):
+        self.trans_sigma = float(trans_sigma)
+        self.rot_mult = float(rot_mult)
+        self._pred: "gtsam.Pose3 | None" = None
+        self._factor = None
+
+    def on_parse(self, graph: "GTSAM_Pose2Point", data: "GTSAM_GraphInput") -> None:
+        self._pred, self._factor = None, None
+        if int(data.previous_graph_data.from_idx) < 0:
+            return
+        p_km2 = pp.SE3(data.previous_graph_data.from_pose.detach().cpu())
+        p_km1 = pp.SE3(data.current_graph_data.from_pose.detach().cpu())
+        self._pred = pypose_to_pose3(typ.cast(pp.LieTensor, p_km2.Inv() @ p_km1))
+
+    def on_build(self, graph: "GTSAM_Pose2Point", factor_graph, initial_estimate,
+                 ctx: BuildContext) -> None:
+        if self._pred is None:
+            return
+        sigmas = np.array([self.rot_mult * self.trans_sigma] * 3
+                          + [self.trans_sigma] * 3, dtype=np.float64)
+        self._factor = gtsam.BetweenFactorPose3(
+            ctx.pose_1_key, ctx.pose_2_key, self._pred,
+            gtsam.noiseModel.Diagonal.Sigmas(sigmas))
+        factor_graph.add(self._factor)
+
+    def on_solved(self, graph: "GTSAM_Pose2Point", factor_graph, result,
+                  pose_1, pose_2, landmarks_np: np.ndarray) -> dict:
+        if self._factor is None:
+            return {}
+        return {"cost_motion_prior": float(self._factor.error(result))}
 
 
 class SolveDiagnostics:

@@ -9,7 +9,7 @@ Common:
   device: &device cuda
 
 Odometry:
-  name: MACVO-DAv3-p2p-np300-gpown
+  name: MACVO-DAv3-gpown-mp0.05
   args:
     device: *device
     edgewidth: 32
@@ -35,7 +35,6 @@ Odometry:
       kernel_size: 7
       mask_width: 32
       max_match_cov: 10.
-      max_depth: 6.0            # far-range bias gate (2026-08-11 structural levers)
       # (no max_depth/max_depth_cov: CovAwareSelector_NoDepth drops depth filters)
 
   mappoint:
@@ -94,7 +93,7 @@ Odometry:
       parallel: false         # sequential = deterministic; required for T5
       autodiff: true
       graph_type: pose2point
-      motion_prior_sigma: 0.0225  # soft cv prior; synergizes with the gate (2026-08-11)
+      motion_prior_sigma: 0.05   # soft cv prior (learningUAVO: -35% APE in their backend)
       enable_gp_depth_prior: true
       gp_prior_frames: ["prev", "curr"]
       gp_prior_block_size: 16
@@ -108,7 +107,7 @@ Odometry:
       viz_landmark_marginals: true   # posterior radii + measured cloud on /world/vo_tracking_*
       gp_slide_sigma_rel: 10.0
       gp_prior_nugget: fixed
-      gp_prior_diag_dir: Results/gp_prior_phase1/diag_dav3_own
+      gp_prior_diag_dir: Results/gp_prior_struct/diag_mp0.05
 
-Datas: !include ../../Common/DeepODO_mono_experiments.yaml
-Preprocess: !include ../../Common/Preprocess.yaml
+Datas: !include ../../../Common/DeepODO_mono_experiments.yaml
+Preprocess: !include ../../../Common/Preprocess.yaml

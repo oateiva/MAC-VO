@@ -620,11 +620,53 @@ def _gp_cfg_ns():
 
 def test_augmentations_conform_to_protocol():
     from Module.Optimization.GTSAM.Augmentations import (
-        GraphAugmentation, GEDFField, SolveDiagnostics)
+        GraphAugmentation, GEDFField, MotionPrior, SolveDiagnostics)
     from Module.Optimization.GTSAM.DepthPrior import CorrelatedDepthPrior
     assert isinstance(SolveDiagnostics(), GraphAugmentation)
     assert isinstance(CorrelatedDepthPrior(_gp_cfg_ns()), GraphAugmentation)
+    assert isinstance(MotionPrior(0.0225), GraphAugmentation)
     assert isinstance(GEDFField(None, None), GraphAugmentation)  # type: ignore[arg-type]
+
+
+def test_motion_prior_soft_factor():
+    """
+    A loose motion prior must not perturb a well-constrained solve; a very
+    tight one must drag pose_2 toward the constant-velocity prediction. Both
+    on the shared synthetic scene (whose true motion P1->P2 differs from the
+    previous pair's motion P0->P1, so the cv prediction is deliberately wrong).
+    """
+    import torch
+    from test_gtsam_alignment import make_gtsam_input, P2_TRUE, pose_error
+    from Module.Optimization.GTSAM.Graphs import GTSAM_Pose2Point
+    from Module.Optimization.GTSAM.Augmentations import MotionPrior
+
+    def run(augs):
+        g = GTSAM_Pose2Point(augmentations=augs)
+        g.parse_graph_data(make_gtsam_input())
+        g.run_gtsam_optimization()
+        return g.write_back()
+
+    out_plain = run(())
+    out_loose = run([MotionPrior(trans_sigma=10.0)])
+    out_tight = run([MotionPrior(trans_sigma=1e-5)])
+
+    rot_p, t_p = pose_error(out_plain.pose_estimates[1].double(), P2_TRUE)
+    rot_l, t_l = pose_error(out_loose.pose_estimates[1].double(), P2_TRUE)
+    rot_t, t_t = pose_error(out_tight.pose_estimates[1].double(), P2_TRUE)
+
+    assert abs(t_l - t_p) < 5e-3 and abs(rot_l - rot_p) < 0.05, \
+        f"loose prior perturbed the solve: {t_l} vs {t_p}"
+    assert t_t > t_l + 1e-3 or rot_t > rot_l + 0.05, \
+        "near-hard cv prior did not move pose_2 toward the (wrong) prediction"
+    assert out_loose.aug_diag is not None and "cost_motion_prior" in out_loose.aug_diag
+
+
+def test_config_motion_prior_validation():
+    from Module.Optimization.GTSAM.Optimizer import GTSAM_Graph
+    GTSAM_Graph.is_valid_config(_gtsam_cfg(motion_prior_sigma=0.0225,
+                                           motion_prior_rot_mult=2.0))
+    with pytest.raises((ValueError, KeyError)):
+        GTSAM_Graph.is_valid_config(_gtsam_cfg(motion_prior_sigma=-1.0))
 
 
 def test_augmented_solve_end_to_end():
