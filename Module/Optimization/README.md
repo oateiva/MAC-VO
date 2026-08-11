@@ -263,6 +263,16 @@ from the scene's candidate-depth distribution (cut ~p75–p80; thresholds do NOT
 across datasets/scale conventions), and pair with `motion_prior_sigma` — the gate thins
 each pair's geometry and the soft cv factor supplies the stabilization back.
 
+**Except on map-anchored frontends (DepthCov): never gate.** A `max_depth` below the
+frontend's bootstrap fallback depth (`init_depth`) is a deterministic deadlock — the
+empty-map fallback depth fails the gate, so no landmarks are ever created and the map
+never grows anchors (measured: frozen trajectory, both seeds). And above the interlock
+threshold the gate has nothing to cut (anchor-driven selection already compresses the
+range). DepthCov also needs the TIGHT scale prior (`gp_scale_prior_sigma: 0.15`) — the
+loose value that is free on DAv3 amplifies its anchor-feedback scale shrinkage
+(path/GT 0.66 → 0.48). Per-frontend recipes:
+`ProgressReports/2026-08-11_gp-prior-depthcov-matrix.md`.
+
 Diagnostics per solve (also with the prior off, for on/off stratification):
 Rerun scalars under `/world/gp_depth_prior/*` (per-frame `s`, RMS of
 `y − ŷ − s`, cost shares, median parallax angle, Huber rejections) and a
