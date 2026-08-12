@@ -28,9 +28,18 @@ partly an artifact of over-trusting depth beyond its calibrated reliability — 
 a frontal plane whose depth shape happened to be good, i.e. exactly the kind of gain that
 does not generalize (and Welland agrees).
 
-## Follow-up
+## sigma_f re-sweep under the measured nugget (executed same day)
 
-`sigma_f` (and the sigma_n floor) were tuned under the fixed nugget; the effective
-sigma_f/nugget ratio has now shifted. A short re-sweep of `sigma_f` under measured
-nugget on both datasets is the natural next step if plane_nose ATE matters; the 08-11
-sweep table suggests trying sigma_f 0.2–0.3 first.
+| sigma_f | plane_nose ATE / t_rel | Welland ATE / t_rel |
+|---|---|---|
+| **0.15 (adopted)** | **0.656** / 0.296 | **0.0547** / 0.0797 |
+| 0.25 | 0.823 / 0.278 | 0.0570 / 0.0789 |
+| 0.40 | 0.881 / 0.267 | 0.0579 / 0.0783 |
+
+Monotone on both datasets: raising sigma_f buys per-step accuracy and costs aligned
+shape, steeper than under the fixed nugget — and it does NOT recover plane_nose's
+fixed-era 0.555. Conclusion: the fixed-era gap was the tight per-point pin (over-trust),
+not the smooth-mode budget, and **sigma_f = 0.15 stays optimal under the corrected
+semantics on both datasets**. Adopted configs unchanged; the settings are at their local
+optimum under measured nugget. No seed-1 confirmation needed for a null adoption with
+monotone ordering.
