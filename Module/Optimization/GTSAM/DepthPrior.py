@@ -293,7 +293,7 @@ class CorrelatedDepthPrior:
             "curr": obs_data["pixel2_d"].detach().cpu().double().numpy().reshape(-1),
         }
 
-        if getattr(cfg, "nugget", "fixed") == "measured":
+        if getattr(cfg, "nugget", "measured") == "measured":
             # Per-point nugget = the network's log-depth std, sigma_n as floor.
             # `pixel*_d_cov` can hold the -1 "not available" sentinel (or be
             # absent from a pared-down bundle) — those rows keep the floor.

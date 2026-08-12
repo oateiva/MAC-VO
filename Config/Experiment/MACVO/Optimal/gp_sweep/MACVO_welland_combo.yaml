@@ -107,7 +107,7 @@ Odometry:
       gp_own_depth: true
       viz_landmark_marginals: true   # posterior radii + measured cloud on /world/vo_tracking_*
       gp_slide_sigma_rel: 10.0
-      gp_prior_nugget: fixed
+      gp_prior_nugget: measured   # DAv3 variance is real (calibrated) - add the kernel on top of it
       gp_prior_diag_dir: Results/gp_prior_welland/diag_combo
 
 Datas: !include ../../../Common/DeepODO_mono_experiments.yaml

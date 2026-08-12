@@ -245,9 +245,14 @@ depth-free construction: pixel-noise lateral block plus a large ray-aligned
 slide term `(gp_slide_sigma_rel * d)^2 · r rᵀ` that makes the along-ray
 direction nearly uninformative (NOT zero-variance — the observation `d·ray`
 embeds the measured depth, and zeroing would pin it as exact). The prior is
-then the sole per-point depth model; with `gp_prior_nugget: measured` its
-nugget is the network's own log-depth variance `pixel*_d_cov / d²` (for
-DepthCov: exactly its GP's `Var(log d)`), floored at `gp_prior_sigma_n`.
+then the sole per-point depth model. Its block covariance is the kernel's
+smooth part ADDED to the network's own per-point log-depth variance
+(`gp_prior_nugget: measured`, the default): nugget² = max(`pixel*_d_cov`/d²,
+σ_n²) — for DAv3 that is the calibrated confidence-head variance, for DepthCov
+exactly its GP's `Var(log d)`; the σ_n floor stands alone wherever the network
+reports nothing. `gp_prior_nugget: fixed` is the explicit escape hatch for
+networks whose stored variance is fake and must not be consumed (DAv2:
+`0.1·d` — positive, so it cannot be auto-detected as invalid).
 Requires `gp_prior_frames: [prev, curr]` (rejected otherwise — a depth-freed
 frame without prior coverage would lose its depth measurement outright); the
 frame k−2 re-observation factor keeps `sigma_dd` (the prior does not cover

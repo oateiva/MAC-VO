@@ -298,7 +298,13 @@ class GTSAM_Graph(IOptimizer[GTSAM_GraphInput, dict, GTSAM_GraphOutput]):
                 z_min=float(getattr(config, "gp_prior_z_min", 0.05)),
                 own_depth=bool(getattr(config, "gp_own_depth", False)),
                 slide_rel=float(getattr(config, "gp_slide_sigma_rel", 10.0)),
-                nugget=str(getattr(config, "gp_prior_nugget", "fixed")),
+                # Default MEASURED (UAVO semantics): the kernel's smooth part is
+                # ADDED to the network's own per-point log-depth variance,
+                # floored at sigma_n; the floor stands alone where the network
+                # reports nothing. "fixed" is the explicit escape hatch for
+                # networks whose stored variance is fake (DAv2: 0.1*d — positive,
+                # so it cannot be auto-detected as invalid).
+                nugget=str(getattr(config, "gp_prior_nugget", "measured")),
             )))
 
         # G-EDF map + field config for the hybrid (mirrors GEDF_PGO.init_context)

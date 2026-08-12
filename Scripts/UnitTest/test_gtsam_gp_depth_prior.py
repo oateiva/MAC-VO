@@ -661,6 +661,17 @@ def test_motion_prior_soft_factor():
     assert out_loose.aug_diag is not None and "cost_motion_prior" in out_loose.aug_diag
 
 
+def test_nugget_defaults_to_measured():
+    # UAVO semantics: the kernel is ADDED to the network's variance by default;
+    # "fixed" is the explicit opt-out for fake-variance networks (DAv2).
+    from Module.Optimization.GTSAM.Optimizer import GTSAM_Graph
+    from Module.Optimization.GTSAM.DepthPrior import CorrelatedDepthPrior
+    ctx = GTSAM_Graph.init_context(_gtsam_cfg(enable_gp_depth_prior=True))
+    prior = [a for a in ctx["graph"].augmentations
+             if isinstance(a, CorrelatedDepthPrior)]
+    assert len(prior) == 1 and prior[0].cfg.nugget == "measured"
+
+
 def test_config_motion_prior_validation():
     from Module.Optimization.GTSAM.Optimizer import GTSAM_Graph
     GTSAM_Graph.is_valid_config(_gtsam_cfg(motion_prior_sigma=0.0225,
