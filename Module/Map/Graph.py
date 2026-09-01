@@ -63,16 +63,24 @@ class TensorBundle(T.Generic[T_Fields]):
             for k, v in self.data.items()
         }
 
+    @staticmethod
+    def _deserialize_fields(prefix: str, value: dict[str, np.ndarray]) -> dict[str, torch.Tensor]:
+        """Recover the field dict written by `serialize` — the key set is
+        self-describing (`{prefix}/{field}`), so no generic introspection is
+        needed (the `FrameStore = AutoScalingBundle[FrameFeature]` aliases carry
+        no literal types at runtime)."""
+        head = f"{prefix}/"
+        data = {
+            k[len(head):]: torch.from_numpy(value[k].copy())
+            for k in value if k.startswith(head)
+        }
+        if not data:
+            raise KeyError(f"No serialized fields found under prefix '{head}'")
+        return data
+
     @classmethod
     def deserialize(cls, prefix: str, value: dict[str, np.ndarray]) -> Self:
-        allowed_fields: T_Fields | None = T.get_args(cls.__orig_bases__[0].__args__[0])  # type: ignore
-        if not allowed_fields:
-            raise Exception("T_Fields must be specified with concrete string literal types.")
-
-        data: dict[T_Fields, torch.Tensor] = T.cast(dict[T_Fields, torch.Tensor], {
-            k : torch.tensor(value[f"{prefix}/k"])
-            for k in allowed_fields
-        })
+        data = T.cast(dict[T_Fields, torch.Tensor], cls._deserialize_fields(prefix, value))
         return cls.init(data)
 
 
@@ -109,6 +117,20 @@ class AutoScalingBundle(TensorBundle[T_Fields]):
 
     def register_edge(self, edge: Scaling_SparseEdge_Multi | Scaling_DenseEdge_Multi | Scaling_SingleEdge):
         self.edges_from.append(edge)
+
+    @classmethod
+    def deserialize(cls, prefix: str, value: dict[str, np.ndarray]) -> Self:
+        # Wrap into AutoScalingTensor (same pattern as the Scaling_* edges) so
+        # push() keeps working on a deserialized store.
+        data = {
+            k: AutoScalingTensor(None, grow_on=0, init_tensor=v)
+            for k, v in cls._deserialize_fields(prefix, value).items()
+        }
+        sizes = [v.size(0) for v in data.values()]
+        assert all(s == sizes[0] for s in sizes), \
+            f"AutoScalingBundle requires all features have (Nx...) shape with same 'N', get {sizes}"
+        index = AutoScalingTensor(None, grow_on=0, init_tensor=torch.arange(0, sizes[0], dtype=torch.long))
+        return cls(index, T.cast(dict[T_Fields, AutoScalingTensor], data))
 
     def __repr__(self) -> str:
         return f"ScalingBundle(size={len(self)}, keys=[{', '.join(self.data.keys())}])"
@@ -156,8 +178,10 @@ class SparseEdge_Multi(EdgeLike):
 
     @classmethod
     def deserialize(cls, prefix: str, value: dict[str, np.ndarray]) -> Self:
-        edges = torch.Tensor(value[f"{prefix}/edges"])
-        deg   = torch.Tensor(value[f"{prefix}/deg"])
+        # torch.tensor, not the torch.Tensor constructor — the latter casts the
+        # int64 index arrays to float32, which breaks tensor indexing in add().
+        edges = torch.tensor(value[f"{prefix}/edges"])
+        deg   = torch.tensor(value[f"{prefix}/deg"])
         num_from, max_deg = edges.shape[0], edges.shape[1]
 
         edge_instance = cls(num_from, max_deg)

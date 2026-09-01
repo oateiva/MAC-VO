@@ -127,6 +127,17 @@ class VisualMap:
         map.match2frame1 = map.match2frame1.deserialize("edge/match2frame1", value)
         map.match2frame2 = map.match2frame2.deserialize("edge/match2frame2", value)
         map.frame2map    = map.frame2map.deserialize("edge/frame2map", value)
+
+        # __init__ registered the ORIGINAL edge objects on the ORIGINAL stores;
+        # both were just replaced, so re-register or pushes after loading stop
+        # auto-growing the edges. NOTE: map_points is not serialized, so the
+        # loaded frame2map ranges point into an empty dense-mapping store.
+        map.frames.register_edge(map.frame2map)
+        map.frames.register_edge(map.frame2match)
+        map.points.register_edge(map.point2match)
+        map.match.register_edge(map.match2point)
+        map.match.register_edge(map.match2frame1)
+        map.match.register_edge(map.match2frame2)
         return map
 
     def __repr__(self) -> str:
