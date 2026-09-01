@@ -114,6 +114,12 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         """
         self.device = config.device if hasattr(config, 'device') else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.q90 = getattr(config, "q90", 1.)
+        # Optional fixed metric gauge `depth * depth_scale + depth_shift` for
+        # checkpoints whose raw output is scale/shift-ambiguous (e.g. SSI-loss
+        # fine-tunes) — the default intrinsics-based mean(fx,fy)/300 scaling
+        # does not apply to those. None keeps the default path.
+        self.depth_scale: float | None = getattr(config, "depth_scale", None)
+        self.depth_shift: float = getattr(config, "depth_shift", 0.)
         weight_path = getattr(config, "weight", None)
         if weight_path is None:
             raise ValueError("`config.weight` must be set for DepthAnything3")
@@ -382,11 +388,14 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         # print min and max for depth conf
         # print("Depth covariance - min:", covariance.min().item(), "max:", covariance.max().item())
 
-        scaled_depth = apply_metric_scaling(
-            torch.as_tensor(depth).to(device=self.device),
-            intrinsics=torch.as_tensor(intrinsics).to(device=self.device),
-            scale_factor=300.,
-        )
+        if self.depth_scale is not None:
+            scaled_depth = torch.as_tensor(depth).to(device=self.device) * self.depth_scale + self.depth_shift
+        else:
+            scaled_depth = apply_metric_scaling(
+                torch.as_tensor(depth).to(device=self.device),
+                intrinsics=torch.as_tensor(intrinsics).to(device=self.device),
+                scale_factor=300.,
+            )
 
         return IDepth.Output(
             depth=scaled_depth,

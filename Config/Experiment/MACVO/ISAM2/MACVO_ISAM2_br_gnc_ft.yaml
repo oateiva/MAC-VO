@@ -1,0 +1,152 @@
+#
+# Persistent-graph iSAM2 backend, native BearingRangeFactor3D + GNC-GM.
+#
+# Port of learningUAVO's isam2_tracker.py winning arm `Z_br_gnc_c04`
+# (results/sweep_online_plane_nose_full: best online APE@0 = 0.744, best chain
+# RTE = 0.032, second chain APE@100 — FINDINGS.md calls it "the arm to reach
+# for on this sequence"), i.e. the learningUAVO flags
+#   --native --cov-max-match 0.5 --relin-threshold 0.05 --extra-updates 3
+#   --seed-radius 90 --depth-var-scale 2.5 --motion-init cv --motion-prior 0.3
+#   --gnc-rounds 5 --gnc-c 0.4 --gnc-mu-rate 5.0
+# on the FlowFormerCov + pretrained DAv3 frontend (MACVO_MonoDAv3 base).
+#
+# GNC-GM REPLACES the Huber kernel (the `kernel` key is ignored while
+# gnc_rounds > 0) and runs its annealing rounds under Dogleg: measured in
+# learningUAVO, undamped GN plus GNC down-weighting diverges to float64
+# overflow on plane_nose_full. Note gnc_c is a residual scale in the depth
+# map's own units — re-sweep it if the depth source changes.
+#
+
+#
+# _ft variant: the identical setup on the fine-tuned SSI DAv3 depth
+# (D:/aitraining_sweeps/final_da3_ssi_conf, held-out AbsRel 0.0522) instead of
+# the pretrained nested giant. Flags byte-identical to the sibling config --
+# only the monodepth block differs -- mirroring learningUAVO's
+# results/eval_online_arms_ft comparison. Caveats from that ledger: plane_nose
+# is IN this checkpoint's training mix (not a generalisation result); the
+# depth variance is NLL-trained but uncalibrated; gnc_c was tuned against the
+# pretrained depth's inflated units and is the first knob to re-sweep. Known
+# deviations from the learningUAVO FT export: inference at 700 px (not the
+# training resolution 518) and on 2-frame windows (not single-view).
+#
+
+Common:
+  device: &device cuda
+
+Odometry:
+  name: MACVO-ISAM2-br-gnc-ft
+  args:
+    device: *device
+    edgewidth: 32
+    num_point: 200        # Caps the SEEDS per frame; carried tracks are never dropped
+    match_cov_default: 0.25
+    profile: false
+    mapping: true
+    # Persistent graph: let nearly every frame reach the optimizer; the
+    # backend's own min_support coast handles low-support frames.
+    min_num_point: 1
+
+  cov:
+    obs:
+      type: MatchCovariance
+      args:
+        device: *device
+        kernel_size: 31
+        match_cov_default: 0.25
+        min_depth_cov: 0.01
+        min_flow_cov: 0.25
+
+  keypoint:
+    type: TrackingCovAwareSelector
+    args:
+      device: *device
+      mask_width: 32      # must stay >= edgewidth and > cov kernel_size // 2
+      kernel_size: 7
+      max_match_cov: 0.5
+      median_rel: 1.5
+      seed_radius: 90.0
+
+  mappoint:
+    type: MappingPointSelector
+    args:
+      device: *device
+      max_depth: 7.0
+      max_depth_cov: 1.0
+      mask_width: 32
+
+  frontend:
+    type: MonocularFrontend
+    args:
+      device: *device
+      parallel: true
+      match:
+        type: FlowFormerCovMatcher
+        args:
+          weight: ./Model/MACVO_FrontendCov.pth
+          device: *device
+          enc_dtype: fp32
+          dec_dtype: fp32
+      monodepth:
+        type: DepthAnythingV3
+        args:
+          # Fine-tuned AITraining checkpoint: a single da3-giant (backbone+head
+          # keys only; loading it into the nested base arch matches 0 keys and
+          # silently leaves the net at random init).
+          model_name: da3-giant
+          weight: D:/aitraining_sweeps/final_da3_ssi_conf/epoch=12-val_absrel=0.0522.ckpt
+          device: *device
+          # ssi_confidence_l1 training makes the raw output scale/shift
+          # ambiguous; this is the global affine learningUAVO pinned on 3DF
+          # Zephyr GT (71 frames of plane_nose_full). q90 = depth_scale^2 puts
+          # the NLL variance in the same metric units (still uncalibrated).
+          depth_scale: 2.935553
+          depth_shift: 0.108397
+          q90: 8.61747
+
+  motion:
+    type: StaticMotionModel
+    args:
+
+  outlier:
+    # Identity on purpose: any row dropped between selector and map splits a
+    # track; the ISAM2 backend applies its own depth/PSD gates per row.
+    type: IdentityFilter
+    args:
+
+  postprocess:
+    type: MotionInterpolate
+    args:
+
+  keyframe:
+    type: AllKeyframe
+    args:
+
+  optimizer:
+    type: ISAM2_Graph
+    args:
+      device: cpu
+      parallel: false           # stateful persistent graph — sequential only
+      factor_type: bearingrange
+      kernel: huber             # ignored while gnc_rounds > 0 (GNC replaces it)
+      kernel_delta: 0.1
+      relin_threshold: 0.05
+      relin_skip: 1
+      extra_updates: 3
+      warmup_frames: 10
+      warmup_extra: 5
+      depth_var_scale: 2.5
+      accumulate_fvar: true
+      motion_init: cv
+      motion_prior_sigma: 0.3
+      coast_sigma: 0.1
+      min_support: 6
+      readout: chain
+      min_flow_cov: 0.25
+      min_depth_cov: 0.01
+      match_cov_default: 0.25
+      gnc_rounds: 5
+      gnc_c: 0.4
+      gnc_mu_rate: 5.0
+
+Datas: !include ../../Common/DeepODO_mono_experiments.yaml
+Preprocess: !include ../../Common/Preprocess.yaml
