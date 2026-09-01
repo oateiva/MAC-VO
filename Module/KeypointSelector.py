@@ -11,6 +11,7 @@ from DataLoader import CameraData
 
 from Utility.Extensions import ConfigTestableSubclass
 from Utility.Timer import Timer
+from Utility.Utils import retrieve_scalar_map_pixels
 
 
 
@@ -375,6 +376,191 @@ class CovAwareSelector(IKeypointSelector):
             "kernel_size"   : lambda k: isinstance(k, int) and k > 0 and (k % 2 == 1),
             "max_depth_cov" : lambda c: isinstance(c, (int, float)) and c > 0.,
             "max_match_cov" : lambda c: isinstance(c, (int, float)) and c > 0.
+        })
+
+
+def spaced_greedy(uv: torch.Tensor, live_uv: torch.Tensor, radius: float, cap: int = 0) -> torch.Tensor:
+    """
+    Accept rows of `uv` in the given order, keeping every accepted point and every
+    point of `live_uv` strictly more than `radius` away; stop at `cap` (0 = no cap).
+
+    Bucketed at a pitch of exactly `radius`, so only the 3x3 cell neighbourhood can
+    hold a conflict (cells two apart already differ by more than `radius` in that
+    axis). Rejection is `d^2 <= radius^2`. Port of learningUAVO
+    gtsam_backend/keypoint_selector.py::spaced_greedy.
+
+    Returns the accepted rows as an (M, 2) tensor with `uv`'s dtype, on CPU.
+    """
+    r = float(radius)
+    r2 = r * r
+    buckets: dict[tuple[int, int], list[tuple[float, float]]] = {}
+
+    def stamp(u: float, v: float) -> None:
+        buckets.setdefault((int(u // r), int(v // r)), []).append((u, v))
+
+    for p in live_uv.detach().cpu().double().reshape(-1, 2):
+        stamp(float(p[0]), float(p[1]))
+
+    uv_cpu = uv.detach().cpu()
+    keep: list[int] = []
+    for row, p in enumerate(uv_cpu.double().reshape(-1, 2)):
+        u, v = float(p[0]), float(p[1])
+        cu, cv = int(u // r), int(v // r)
+        clash = False
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for qu, qv in buckets.get((cu + dx, cv + dy), ()):
+                    if (u - qu) ** 2 + (v - qv) ** 2 <= r2:
+                        clash = True
+                        break
+                if clash: break
+            if clash: break
+        if clash: continue
+        keep.append(row)
+        stamp(u, v)
+        if cap and len(keep) >= cap:
+            break
+    return uv_cpu[torch.tensor(keep, dtype=torch.long)] if keep else uv_cpu[:0]
+
+
+class TrackingCovAwareSelector(IKeypointSelector):
+    """
+    Persistent-track covariance-aware selector: a stateful port of learningUAVO's
+    gtsam_backend/keypoint_selector.py::CovAwareSelector into MAC-VO's per-pair loop.
+
+    Unlike every other selector in this file, this one REMEMBERS its output: each
+    selected keypoint is carried into the next frame by following the optical flow
+    (`kp1 = kp0 + flow(kp0)`, mirrored bit-for-bit from `MACVO.run_pair`), so a
+    physical scene point keeps being re-selected at its flow-tracked position frame
+    after frame. A persistent-graph backend (`ISAM2_Graph`) can then rebuild track
+    identity downstream by exact integer pixel association — `pixel1_uv` of the new
+    pair equals `round(pixel2_uv)` of the previous pair for a surviving track.
+
+    Per call (pair frame0 -> frame1, `match_est` = the OUTGOING flow of frame0):
+      1. Carried tracks are gated at frame0: inside the `mask_width` border and on
+         finite positive depth. No max-age and no per-step-cov kill (both measured
+         harmful in learningUAVO's FINDINGS.md; identical gate sets for tracks and
+         seeds also keep the downstream association airtight).
+      2. New tracks are seeded where no live track sits within `seed_radius`:
+         local minima (NMS) of the flow-variance quality map
+         Q = sigma_uu + sigma_vv - 2*sigma_uv, cut at
+         min(max_match_cov, median(Q[candidates]) * median_rel), depth-gated, then
+         accepted best-Q-first with greedy spacing (deterministic — no randperm).
+      3. `numPoint` caps the SEEDS only; carried tracks are never dropped to
+         honor it (deviation from the "hint" semantics of this interface).
+
+    The emitted keypoints are integer pixels (carried positions rounded), keeping
+    the odometry's color indexing and nearest-pixel retrieval conventions exact.
+    """
+    def __init__(self, config: SimpleNamespace):
+        super().__init__(config)
+        # (L, 2) float32 — flow-carried positions of live tracks in the frame the
+        # NEXT select_point call will see as frame0. None before the first call.
+        self.track_uv: torch.Tensor | None = None
+        self.fallback_grid_selector = GridSelector(SimpleNamespace(mask_width=self.config.mask_width, device=self.config.device))
+
+    def _gate_carried(self, depth0_map: torch.Tensor) -> torch.Tensor:
+        """Round carried tracks to pixels, kill those at the border or on invalid depth."""
+        height, width = depth0_map.shape[-2:]
+        border = int(self.config.mask_width)
+        if self.track_uv is None or self.track_uv.numel() == 0:
+            return torch.zeros((0, 2), dtype=torch.long, device=depth0_map.device)
+
+        kp = self.track_uv.to(depth0_map.device).round().long()
+        inbound = (
+            (kp[:, 0] >= border) & (kp[:, 0] <= width  - 1 - border) &
+            (kp[:, 1] >= border) & (kp[:, 1] <= height - 1 - border)
+        )
+        kp = kp[inbound]
+        depth = depth0_map[0, 0, kp[:, 1], kp[:, 0]]
+        return kp[torch.isfinite(depth) & (depth > 0)]
+
+    def _seed(self, carried: torch.Tensor, numPoint: int, depth0_map: torch.Tensor,
+              match_est: IMatcher.Output) -> torch.Tensor:
+        """Cov-aware seeds, spaced against `carried` and each other at seed_radius."""
+        assert match_est.cov is not None
+        # Batch 0 only: a paired-window matcher returns B=2 while depth is B=1, and
+        # every downstream sample of the selected pixels reads batch 0. Same
+        # convention as CovAwareSelector / CovAwareSelector_NoDepth.
+        flow_cov_map = match_est.cov[:1].to(self.config.device)
+        quality_map = (flow_cov_map[:, 0] + flow_cov_map[:, 1] - 2 * flow_cov_map[:, 2]).unsqueeze(1)
+
+        quality_map_erode = -torch.nn.functional.max_pool2d(
+            -quality_map,
+            kernel_size=self.config.kernel_size,
+            stride=1,
+            padding=(self.config.kernel_size // 2),
+        )
+        quality_nms = torch.logical_and(quality_map == quality_map_erode, ~quality_map.isnan())
+
+        border_mask = torch.zeros_like(quality_nms, dtype=torch.bool)
+        border_mask[
+            ..., self.config.mask_width : -self.config.mask_width, self.config.mask_width : -self.config.mask_width
+        ] = True
+
+        candidates = quality_nms & border_mask
+        candidate_q = quality_map[candidates]
+        if candidate_q.numel() == 0:
+            return torch.zeros((0, 2), dtype=torch.long, device=self.config.device)
+
+        flow_cov_thresh = min(self.config.max_match_cov, candidate_q.nanmedian().item() * self.config.median_rel)
+        point_mask = candidates & (quality_map < flow_cov_thresh)
+
+        # Must stay the same depth gate _gate_carried applies: identical gate sets
+        # keep the downstream pixel association free of seed-resurrection aliasing.
+        point_mask = point_mask & torch.isfinite(depth0_map) & (depth0_map > 0)
+
+        if match_est.mask is not None:
+            point_mask = torch.logical_and(point_mask, match_est.mask[:1].to(point_mask.device))
+
+        selected = torch.nonzero(point_mask, as_tuple=False)    # (M, 4) [b, c, v, u]
+        if selected.size(0) == 0:
+            return torch.zeros((0, 2), dtype=torch.long, device=self.config.device)
+
+        # Best-Q-first (deterministic), then greedy spacing against live tracks.
+        order = torch.argsort(quality_map[point_mask], stable=True)
+        uv = selected[order][..., 2:].roll(shifts=1, dims=1)    # (M, 2) (u, v)
+        seeds = spaced_greedy(uv, carried.float(), float(self.config.seed_radius), cap=numPoint)
+        return seeds.to(device=self.config.device, dtype=torch.long)
+
+    @Timer.cpu_timeit("KPSelector.select")
+    @Timer.gpu_timeit("KPSelector.select")
+    @torch.inference_mode()
+    def select_point(self, frame: CameraData, numPoint: int, depth0_est: IDepth.Output, depth1_est: IDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
+        depth0_map = depth0_est.depth.to(self.config.device)
+        carried = self._gate_carried(depth0_map)
+
+        if match_est is None or match_est.cov is None:
+            # No covariance map: grid fallback, still spaced against live tracks.
+            grid = self.fallback_grid_selector.select_point(frame, numPoint, depth0_est, depth1_est, match_est)
+            seeds = spaced_greedy(grid, carried.float(), float(self.config.seed_radius), cap=numPoint)
+            seeds = seeds.to(device=self.config.device, dtype=torch.long)
+        else:
+            seeds = self._seed(carried, numPoint, depth0_map, match_est)
+
+        keypoints = torch.cat([carried, seeds], dim=0)
+
+        # Carry to frame1 — a bit-for-bit mirror of MACVO.run_pair's
+        # `kp1_uv = kp0_uv + retrieve_pixels(kp0_uv, match01.flow).T`, so the next
+        # pair's pixel1_uv (this rounded) equals this pair's pixel2_uv exactly.
+        if match_est is not None and keypoints.size(0) > 0:
+            flow_at_kp = retrieve_scalar_map_pixels(keypoints, match_est.flow)
+            assert flow_at_kp is not None
+            self.track_uv = keypoints.float() + flow_at_kp.T
+        else:
+            self.track_uv = keypoints.float()
+
+        return keypoints
+
+    @classmethod
+    def is_valid_config(cls, config: SimpleNamespace | None) -> None:
+        cls._enforce_config_spec(config, {
+            "device"        : lambda dev: isinstance(dev, str) and (("cuda" in dev) or (dev == "cpu")),
+            "mask_width"    : lambda m: isinstance(m, int) and m >= 0,
+            "kernel_size"   : lambda k: isinstance(k, int) and k > 0 and (k % 2 == 1),
+            "max_match_cov" : lambda c: isinstance(c, (int, float)) and c > 0.,
+            "median_rel"    : lambda c: isinstance(c, (int, float)) and c > 0.,
+            "seed_radius"   : lambda r: isinstance(r, (int, float)) and r > 0.,
         })
 
 

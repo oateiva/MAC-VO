@@ -1,0 +1,122 @@
+#
+# Persistent-graph iSAM2 backend, native BearingRangeFactor3D + Huber.
+#
+# Port of learningUAVO's isam2_tracker.py winning arm `Y_br_mp03`
+# (results/sweep_online_plane_nose_full: the cheapest arm — 245 ms median on
+# 566 frames — at chain APE@0 = 1.377), i.e. the learningUAVO flags
+#   --native --cov-max-match 0.5 --relin-threshold 0.05 --extra-updates 3
+#   --seed-radius 90 --depth-var-scale 2.5 --motion-init cv --motion-prior 0.3
+# on the FlowFormerCov + pretrained DAv3 frontend (MACVO_MonoDAv3 base).
+#
+# bearingrange relinearizes in C++ (no Python callback per factor per pass),
+# which is the dominant per-frame cost of a persistent graph.
+#
+
+Common:
+  device: &device cuda
+
+Odometry:
+  name: MACVO-ISAM2-br
+  args:
+    device: *device
+    edgewidth: 32
+    num_point: 200        # Caps the SEEDS per frame; carried tracks are never dropped
+    match_cov_default: 0.25
+    profile: false
+    mapping: true
+    # Persistent graph: let nearly every frame reach the optimizer; the
+    # backend's own min_support coast handles low-support frames.
+    min_num_point: 1
+
+  cov:
+    obs:
+      type: MatchCovariance
+      args:
+        device: *device
+        kernel_size: 31
+        match_cov_default: 0.25
+        min_depth_cov: 0.01
+        min_flow_cov: 0.25
+
+  keypoint:
+    type: TrackingCovAwareSelector
+    args:
+      device: *device
+      mask_width: 32      # must stay >= edgewidth and > cov kernel_size // 2
+      kernel_size: 7
+      max_match_cov: 0.5
+      median_rel: 1.5
+      seed_radius: 90.0
+
+  mappoint:
+    type: MappingPointSelector
+    args:
+      device: *device
+      max_depth: 7.0
+      max_depth_cov: 1.0
+      mask_width: 32
+
+  frontend:
+    type: MonocularFrontend
+    args:
+      device: *device
+      parallel: true
+      match:
+        type: FlowFormerCovMatcher
+        args:
+          weight: ./Model/MACVO_FrontendCov.pth
+          device: *device
+          enc_dtype: fp32
+          dec_dtype: fp32
+      monodepth:
+        type: DepthAnythingV3
+        args:
+          model_name: da3nested-giant-large
+          weight: depth-anything/DA3NESTED-GIANT-LARGE-1.1
+          device: *device
+          q90: 1.
+
+  motion:
+    type: StaticMotionModel
+    args:
+
+  outlier:
+    # Identity on purpose: any row dropped between selector and map splits a
+    # track; the ISAM2 backend applies its own depth/PSD gates per row.
+    type: IdentityFilter
+    args:
+
+  postprocess:
+    type: MotionInterpolate
+    args:
+
+  keyframe:
+    type: AllKeyframe
+    args:
+
+  optimizer:
+    type: ISAM2_Graph
+    args:
+      device: cpu
+      parallel: false           # stateful persistent graph — sequential only
+      factor_type: bearingrange
+      kernel: huber
+      kernel_delta: 0.1
+      relin_threshold: 0.05
+      relin_skip: 1
+      extra_updates: 3
+      warmup_frames: 10
+      warmup_extra: 5
+      depth_var_scale: 2.5
+      accumulate_fvar: true
+      motion_init: cv
+      motion_prior_sigma: 0.3
+      coast_sigma: 0.1
+      min_support: 6
+      readout: chain
+      min_flow_cov: 0.25
+      min_depth_cov: 0.01
+      match_cov_default: 0.25
+
+Datas: !include ../../Common/DeepODO_mono_experiments.yaml
+Preprocess: !include ../../Common/Preprocess.yaml

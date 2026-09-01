@@ -148,14 +148,17 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         Module.IFrontend.is_valid_config(config.frontend)
         Module.IOptimizer.is_valid_config(config.optimizer)
 
-        cls._enforce_config_spec(config.args, {
+        args_spec: dict = {
             "device"            : lambda s: isinstance(s, str) and (("cuda" in s) or (s == "cpu")),
             "num_point"         : lambda b: isinstance(b, int) and b > 0,
             "edgewidth"         : lambda b: isinstance(b, int) and b > 0,
             "match_cov_default" : lambda b: isinstance(b, (float, int)) and b > 0.0,
             "profile"           : lambda b: isinstance(b, bool),
             "mapping"           : lambda b: isinstance(b, bool),
-        })
+        }
+        if hasattr(config.args, "min_num_point"):
+            args_spec["min_num_point"] = lambda b: isinstance(b, int) and b > 0
+        cls._enforce_config_spec(config.args, args_spec)
 
     def initialize(self, frame0: T_SensorFrame):
         depth0          = self.Frontend.estimate_depth(frame0.camera)

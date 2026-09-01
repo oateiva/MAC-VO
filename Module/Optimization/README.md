@@ -93,15 +93,17 @@ Below we demonstrate how the internal interfaces mentioned above are orchestrate
 
 # Optimizer backends & shipped setups
 
-Three backends implement `IOptimizer`. All are selected purely through the
+Four backends implement `IOptimizer`. All are selected purely through the
 `Odometry.optimizer` config block (`type:` + `args:`), all support the
-sequential / parallel-worker execution modes described above, and all write a
-7-float SE(3) pose into `frames.data["pose"]`.
+sequential / parallel-worker execution modes described above (except
+`ISAM2_Graph`, sequential-only), and all write a 7-float SE(3) pose into
+`frames.data["pose"]`.
 
 | Backend (`type:`) | Library | Graph types | Alignment axis | Extra state written back | Notes |
 |---|---|---|---|---|---|
 | `TwoFrame_PGO` | PyPose (LM, autodiff or analytic Jacobians) | `icp`, `reproj`, `disp` | se3 only | pose only | The MAC-VO default; frame-to-frame, covariance-weighted |
 | `GTSAM_Graph` | GTSAM (`LevenbergMarquardtOptimizer`, `ISAM2`) | `pose2point`, `isam` | se3 / sim3 / sl4 (`pose2point` only) | pose **and landmark positions** (into `points`) | Optional dependency (guarded import); multi-frame / incremental |
+| `ISAM2_Graph` | GTSAM (`ISAM2`, persistent) | `pose2point`, `bearingrange` factors | se3 only | pose only | One graph over the whole sequence; flow-tracked landmarks via `TrackingCovAwareSelector`; optional GNC-GM; sequential-only |
 | `GEDF_PGO` | PyPose + custom G-EDF mapper | `gedf`, `gedf+icp` | se3 / sim3 / sl4 (autodiff mode) | pose only (+ diagnostics) | Builds a distance-field map online and registers scan-to-map; see [`GEDF/README.md`](GEDF/README.md) |
 
 ## `TwoFrame_PGO` (PyPose two-frame pose graph)
@@ -284,6 +286,65 @@ Rerun scalars under `/world/gp_depth_prior/*` (per-frame `s`, RMS of
 per-sequence CSV flushed to `gp_prior_diag_dir` on `terminate()`. Check the
 cost split before interpreting any sweep: a negligible prior share means the
 sweep measured nothing.
+
+## `ISAM2_Graph` (persistent-graph iSAM2 with flow-tracked landmarks)
+
+One `gtsam.ISAM2` factor graph over the whole sequence — a pose key per frame,
+landmark keys that live as long as their track — updated incrementally per
+frame pair. Port of learningUAVO's `gtsam_backend/isam2_tracker.py` (see that
+repo's `FINDINGS.md` for every hyperparameter's provenance); the shipped
+configs under `Config/Experiment/MACVO/ISAM2/` reproduce the three winning
+arms of its plane_nose_full online sweep.
+
+**Requires `keypoint: TrackingCovAwareSelector`.** Landmark identity is
+positional: the stateful selector carries each keypoint along the optical flow
+(mirroring `run_pair`'s `kp1 = kp0 + flow(kp0)` bit-for-bit), and the backend
+chains rows into tracks by exact integer pixel association
+(`pixel1_uv == round(previous pixel2_uv)`). A carried row's pixel1 observation
+is skipped (it re-quantizes the previous pair's pixel2 obs); an unmatched row
+births a landmark whose pixel1 fields are its first observation. Flow variance
+accumulates along tracks; per-row 3×3 covariances are recomposed in-solver from
+the MatchObs scalars. Pair it with `outlier: IdentityFilter` — a row dropped
+between selector and map splits its track — and `keyframe: AllKeyframe`.
+
+```yaml
+optimizer:
+  type: ISAM2_Graph
+  args:
+    device: cpu
+    parallel: false           # enforced: stateful persistent graph
+    factor_type: bearingrange # bearingrange (C++ relin, cheap) | pose2point (exact model)
+    kernel: huber             # huber|cauchy|geman|tukey|welsch|none; ignored when GNC on
+    kernel_delta: 0.1
+    relin_threshold: 0.05     # LOOSER than the gtsam default is better online
+    relin_skip: 1
+    extra_updates: 3
+    warmup_frames: 10         # early frames get warmup_extra additional update rounds
+    warmup_extra: 5
+    depth_var_scale: 2.5
+    accumulate_fvar: true
+    motion_init: cv           # static | cv (T_prev @ T_rel_prev)
+    motion_prior_sigma: 0.3   # soft BetweenFactorPose3; 0 = off; rot sigma = 2x
+    coast_sigma: 0.1          # weak Between on low-support / skipped frames
+    min_support: 6
+    readout: chain            # chain (composed current-belief rel motions) | online
+    min_flow_cov: 0.25
+    min_depth_cov: 0.01
+    match_cov_default: 0.25
+    # GNC-GM instead of the kernel (runs damped under Dogleg):
+    # gnc_rounds: 5
+    # gnc_c: 0.4              # residual scale in the depth map's own units — re-sweep per depth source
+    # gnc_mu_rate: 5.0
+```
+
+The written-back pose is the **chain readout** by default — current-belief
+relative motions composed into a frozen chain, immune to the gauge slide of
+weakly-bridged young segments that scrambles raw online poses. Landmarks are
+*not* written back (the chain gauge and the live graph's gauge diverge after
+low-support stretches). The solver runs QR factorization unconditionally:
+Huber-downweighted cliques throw `IndeterminantLinearSystemException` under
+Cholesky. Frames the odometry skips (`VOLostTrack`) are coasted in with a weak
+between-factor at the previous relative motion.
 
 ## `GEDF_PGO` (scan-to-map against an online distance-field map)
 
