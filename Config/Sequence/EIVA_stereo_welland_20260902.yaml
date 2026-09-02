@@ -1,0 +1,9 @@
+- type: EIVA_NoIMU
+  name: Welland
+  args:
+    root: D:\Datasets\EIVA\vobster_quay\Welland_test_first_dive
+    gtDepth: false
+    gtFlow: false
+    gtPose: true
+    is_stereo: true
+    compressed: true

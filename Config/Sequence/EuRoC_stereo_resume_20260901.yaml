@@ -1,0 +1,35 @@
+-   type: EuRoC_NoIMU
+    name: V103
+    args:
+        root: D:\\Datasets\\EuRoC\\V1_03_difficult\\mav0
+        gt_pose: true
+        is_stereo: true
+        window_length: 1
+        seq_from: 153
+
+-   type: EuRoC_NoIMU
+    name: V201
+    args:
+        root: D:\\Datasets\\EuRoC\\V2_01_easy\\mav0
+        gt_pose: true
+        is_stereo: true
+        window_length: 1
+        seq_from: 116
+
+-   type: EuRoC_NoIMU
+    name: V202
+    args:
+        root: D:\\Datasets\\EuRoC\\V2_02_medium\\mav0
+        gt_pose: true
+        is_stereo: true
+        window_length: 1
+        seq_from: 75
+
+-   type: EuRoC_NoIMU
+    name: V203
+    args:
+        root: D:\\Datasets\\EuRoC\\V2_03_difficult\\mav0
+        gt_pose: true
+        is_stereo: true
+        window_length: 1
+        seq_from: 207

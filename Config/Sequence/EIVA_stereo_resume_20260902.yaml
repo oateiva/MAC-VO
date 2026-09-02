@@ -1,0 +1,43 @@
+- type: EIVA_NoIMU
+  name: plane_nose
+  args:
+    root: D:\Datasets\EIVA\vobster_quay\plane_nose
+    gtDepth: false
+    gtFlow: false
+    gtPose: true
+    is_stereo: true
+    navigation_names: [plane_nose]
+    sequence_camera_names: [left, right]
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: plane_mid
+  args:
+    root: D:\Datasets\EIVA\vobster_quay\plane_mid
+    gtDepth: false
+    gtFlow: false
+    gtPose: true
+    is_stereo: true
+    navigation_names: [plane_mid]
+    sequence_camera_names: [left, right]
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: plane_tail1
+  args:
+    root: D:\Datasets\EIVA\vobster_quay\plane_tail1
+    gtDepth: false
+    gtFlow: false
+    gtPose: true
+    is_stereo: true
+    compressed: true
+
+- type: EIVA_NoIMU
+  name: plane_tail2
+  args:
+    root: D:\Datasets\EIVA\vobster_quay\plane_tail2
+    gtDepth: false
+    gtFlow: false
+    gtPose: true
+    is_stereo: true
+    compressed: true
