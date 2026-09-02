@@ -44,6 +44,16 @@ import numpy as np
 import torch
 import gtsam
 import pypose as pp
+
+try:
+    import gtsam_unstable
+    # Wrapped only in wheels carrying MAC-VO's PoseToPointFactor wrapper patch
+    # (Scripts/patches/gtsam-posetopoint-wrapper.patch); stock gtsam wheels
+    # ship gtsam_unstable without it, hence getattr rather than an attribute
+    # reference (keeps pyright quiet against unpatched stubs too).
+    _NATIVE_P2P = getattr(gtsam_unstable, "PoseToPointFactorPose3Point3", None)
+except ImportError:
+    _NATIVE_P2P = None
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -136,6 +146,26 @@ def make_native_point_factor(pose_key: int, landmark_key: int, obs_Tc: np.ndarra
     return gtsam.BearingRangeFactor3D(pose_key, landmark_key, bearing, r, noise)
 
 
+def require_native_p2p():
+    """The wrapped C++ PoseToPointFactor class, or a hard error telling how to get it."""
+    if _NATIVE_P2P is None:
+        raise RuntimeError(
+            "factor_type 'pose2point_native' needs gtsam_unstable.PoseToPointFactorPose3Point3, "
+            "which stock gtsam wheels do not wrap. Build gtsam with "
+            "Scripts/build_gtsam_windows.ps1 -PatchFile Scripts/patches/gtsam-posetopoint-wrapper.patch"
+        )
+    return _NATIVE_P2P
+
+
+def make_native_pose_to_point_factor(pose_key: int, landmark_key: int, obs_Tc: np.ndarray,
+                                     cov: np.ndarray, kernel: str, delta: float):
+    """C++ PoseToPointFactor with the exact residual of make_pose_to_point_factor
+    (transformTo(l_w) - obs, same key order and Jacobians) but relinearized in
+    C++ — no Python callback per iSAM2 update."""
+    noise = robustify(gtsam.noiseModel.Gaussian.Covariance(np.asarray(cov, dtype=np.float64)), kernel, delta)
+    return require_native_p2p()(pose_key, landmark_key, np.asarray(obs_Tc, dtype=np.float64), noise)
+
+
 def _covariance_2to3_full(var_u: np.ndarray, var_v: np.ndarray, var_d: np.ndarray,
                           u: np.ndarray, v: np.ndarray, d: np.ndarray,
                           K: np.ndarray) -> np.ndarray:
@@ -186,6 +216,8 @@ class ISAM2FlowTracker:
 
     def __init__(self, cfg: SimpleNamespace):
         self.cfg = cfg
+        if getattr(cfg, "factor_type", "pose2point") == "pose2point_native":
+            require_native_p2p()     # fail at construction, not mid-sequence
         self.gnc_rounds : int   = getattr(cfg, "gnc_rounds", 0)
         self.gnc_c      : float = getattr(cfg, "gnc_c", 1.0)
         self.gnc_mu_rate: float = getattr(cfg, "gnc_mu_rate", 1.4)
@@ -333,6 +365,8 @@ class ISAM2FlowTracker:
                 reweight.append((graph.size(), pose_key, lm_key, obs, cov))
             if cfg.factor_type == "bearingrange":
                 graph.add(make_native_point_factor(pose_key, lm_key, obs, cov, kernel, cfg.kernel_delta))
+            elif cfg.factor_type == "pose2point_native":
+                graph.add(make_native_pose_to_point_factor(pose_key, lm_key, obs, cov, kernel, cfg.kernel_delta))
             else:
                 graph.add(make_pose_to_point_factor(
                     pose_key, lm_key, obs,
@@ -431,6 +465,8 @@ class ISAM2FlowTracker:
             cw = c / w[j]
             if self.cfg.factor_type == "bearingrange":
                 g.add(make_native_point_factor(pk, lk, o, cw, "none", 0.0))
+            elif self.cfg.factor_type == "pose2point_native":
+                g.add(make_native_pose_to_point_factor(pk, lk, o, cw, "none", 0.0))
             else:
                 g.add(make_pose_to_point_factor(pk, lk, o, gtsam.noiseModel.Gaussian.Covariance(cw)))
         res = self.isam.update(g, gtsam.Values(), remove)
@@ -524,7 +560,7 @@ class ISAM2_Graph(IOptimizer[ISAM2_GraphInput, dict, ISAM2_GraphOutput]):
         spec: dict = {
             "device"            : lambda v: isinstance(v, str) and (v == "cpu" or "cuda" in v),
             "parallel"          : lambda b: b is False,     # see class docstring
-            "factor_type"       : lambda s: s in {"pose2point", "bearingrange"},
+            "factor_type"       : lambda s: s in {"pose2point", "pose2point_native", "bearingrange"},
             "kernel"            : lambda s: s in _KERNELS,
             "kernel_delta"      : lambda v: isinstance(v, (int, float)) and v >= 0.,
             "relin_threshold"   : lambda v: isinstance(v, (int, float)) and v > 0.,

@@ -100,7 +100,7 @@ Odometry:
     args:
       device: cpu
       parallel: false           # stateful persistent graph — sequential only
-      factor_type: pose2point
+      factor_type: pose2point_native
       kernel: huber
       kernel_delta: 0.1
       relin_threshold: 0.05

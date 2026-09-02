@@ -107,3 +107,4 @@ The depth model is chosen purely through config: `monodepth.type` + `monodepth.a
 - **Runtime type checking**: `jaxtyping` + `typeguard` are active during pytest for tensor shape validation.
 - Pretrained models go in `Model/` (not committed). Download from the GitHub releases page.
 - Results are written to `Results/<project_name>@<timestamp>/` by the `Sandbox` class.
+- **gtsam**: optional dependency (guard-imported), validated at **4.3a2**. Linux/Docker: `pip install gtsam==4.3a2`. Windows has no PyPI wheels — build one with `Scripts/build_gtsam_windows.ps1` (see `Module/Optimization/README.md`). `gtsam` has no `__version__`; use `importlib.metadata.version("gtsam")`.

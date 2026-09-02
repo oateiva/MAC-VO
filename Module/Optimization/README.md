@@ -103,7 +103,7 @@ sequential / parallel-worker execution modes described above (except
 |---|---|---|---|---|---|
 | `TwoFrame_PGO` | PyPose (LM, autodiff or analytic Jacobians) | `icp`, `reproj`, `disp` | se3 only | pose only | The MAC-VO default; frame-to-frame, covariance-weighted |
 | `GTSAM_Graph` | GTSAM (`LevenbergMarquardtOptimizer`, `ISAM2`) | `pose2point`, `isam` | se3 / sim3 / sl4 (`pose2point` only) | pose **and landmark positions** (into `points`) | Optional dependency (guarded import); multi-frame / incremental |
-| `ISAM2_Graph` | GTSAM (`ISAM2`, persistent) | `pose2point`, `bearingrange` factors | se3 only | pose only | One graph over the whole sequence; flow-tracked landmarks via `TrackingCovAwareSelector`; optional GNC-GM; sequential-only |
+| `ISAM2_Graph` | GTSAM (`ISAM2`, persistent) | `pose2point`, `pose2point_native`, `bearingrange` factors | se3 only | pose only | One graph over the whole sequence; flow-tracked landmarks via `TrackingCovAwareSelector`; optional GNC-GM; sequential-only |
 | `GEDF_PGO` | PyPose + custom G-EDF mapper | `gedf`, `gedf+icp` | se3 / sim3 / sl4 (autodiff mode) | pose only (+ diagnostics) | Builds a distance-field map online and registers scan-to-map; see [`GEDF/README.md`](GEDF/README.md) |
 
 ## `TwoFrame_PGO` (PyPose two-frame pose graph)
@@ -131,6 +131,27 @@ optimizer:
 Factor graph over `gtsam.Pose3` poses and landmarks; the only backend that also
 writes optimized **landmark positions** back into the map. Registered only when
 `gtsam` is installed.
+
+**Installing gtsam (validated version: 4.3a2).** On Linux/Docker:
+`pip install gtsam==4.3a2` (pre-release wheels for Python 3.11–3.14). PyPI ships
+**no Windows wheels**, so on Windows build the wheel from source with
+`Scripts/build_gtsam_windows.ps1` (VS 2022 + CMake + Ninja; ~10 min build), e.g.
+
+```powershell
+powershell -File Scripts/build_gtsam_windows.ps1 -Tag 4.3a2 `
+    -GtsamClone C:\Users\oat\Documents\Github\gtsam `
+    -PythonExe C:\Users\oat\.conda\envs\AITraining12\python.exe `
+    -PatchFile Scripts/patches/gtsam-posetopoint-wrapper.patch
+```
+
+`-PatchFile` adds the Python wrapper for `gtsam_unstable::PoseToPointFactor`
+(not wrapped upstream) that the `pose2point_native` iSAM2 factor type needs;
+omit it for a stock build.
+
+Note `gtsam` exposes no `__version__` attribute — check with
+`importlib.metadata.version("gtsam")`. For local pyright runs, pin the
+interpreter (`pyright --pythonpath <env>\python.exe ...`) or it will resolve
+`gtsam` from whatever `python` is first on PATH.
 
 **Architecture:** `GTSAM_Pose2Point` builds exactly the pose-to-point two-frame
 graph and nothing else. Every optional extension — the G-EDF field factor
@@ -313,7 +334,10 @@ optimizer:
   args:
     device: cpu
     parallel: false           # enforced: stateful persistent graph
-    factor_type: bearingrange # bearingrange (C++ relin, cheap) | pose2point (exact model)
+    factor_type: bearingrange # bearingrange (C++ relin, cheap) | pose2point (exact model, Python
+                              # callback) | pose2point_native (exact model AND C++ relin — needs a
+                              # gtsam wheel built with Scripts/patches/gtsam-posetopoint-wrapper.patch,
+                              # which wraps gtsam_unstable::PoseToPointFactor for Python)
     kernel: huber             # huber|cauchy|geman|tukey|welsch|none; ignored when GNC on
     kernel_delta: 0.1
     relin_threshold: 0.05     # LOOSER than the gtsam default is better online

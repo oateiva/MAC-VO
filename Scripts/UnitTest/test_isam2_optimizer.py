@@ -18,7 +18,8 @@ import pypose as pp
 from Module.Map import VisualMap, FrameNode
 from Module.Optimization.GTSAM.ISAM2Optimizer import (
     ISAM2FlowTracker, ISAM2_Graph, ISAM2_GraphInput, ISAM2_GraphOutput,
-    _matrix_to_se3, gnc_weights, make_native_point_factor)
+    _matrix_to_se3, _NATIVE_P2P, gnc_weights, make_native_point_factor,
+    make_native_pose_to_point_factor)
 from Utility.GTSAM_Utils import make_pose_to_point_factor
 
 FX = FY = 320.0
@@ -225,6 +226,32 @@ def test_bearingrange_carries_same_information():
         # error() is 0.5 * ||whitened||^2 — the Mahalanobis halves must match
         assert abs(f_native.error(values) - f_python.error(values)) \
             <= 1e-3 * max(f_python.error(values), 1e-12)
+
+
+@pytest.mark.skipif(_NATIVE_P2P is None,
+                    reason="gtsam wheel lacks the PoseToPointFactor wrapper patch "
+                           "(Scripts/patches/gtsam-posetopoint-wrapper.patch)")
+def test_native_p2p_matches_custom():
+    """The wrapped C++ PoseToPointFactor and the Python pose-to-point
+    CustomFactor implement the same residual (transformTo(l_w) - obs, same key
+    order): error and full linearization must agree to machine precision."""
+    rng = np.random.default_rng(7)
+    pose_key, lm_key = gtsam.symbol("p", 0), gtsam.symbol("l", 0)
+    for _ in range(4):
+        m = np.array([rng.uniform(1.5, 4.0), rng.uniform(-1, 1), rng.uniform(-1, 1)])
+        A = rng.normal(size=(3, 3)) * 0.05
+        cov = A @ A.T + 0.01 * np.eye(3)
+        f_native = make_native_pose_to_point_factor(pose_key, lm_key, m, cov, "none", 0.0)
+        f_python = make_pose_to_point_factor(
+            pose_key, lm_key, m, gtsam.noiseModel.Gaussian.Covariance(cov))
+        values = gtsam.Values()
+        values.insert(pose_key, gtsam.Pose3.Expmap(rng.normal(scale=0.1, size=6)))
+        values.insert(lm_key, gtsam.Point3(*(m + rng.normal(scale=0.3, size=3))))
+        assert f_native.error(values) == pytest.approx(f_python.error(values), rel=1e-9, abs=1e-12)
+        A_n, b_n = f_native.linearize(values).jacobian()
+        A_p, b_p = f_python.linearize(values).jacobian()
+        assert np.allclose(A_n, A_p, atol=1e-9)
+        assert np.allclose(b_n, b_p, atol=1e-9)
 
 
 def make_map(n_frames: int) -> VisualMap:

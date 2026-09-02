@@ -2,7 +2,7 @@ import torch
 import gtsam
 import numpy as np
 import pypose as pp
-from typing import List,Optional
+from typing import Optional
 
 def skew(p):
     return np.array([
@@ -24,9 +24,11 @@ def make_pose_to_point_factor(pose_key, landmark_key, obs_Tc_k_i, noise_model):
 
     keys = [pose_key, landmark_key]
 
-    def error_func(this_factor, values,  H: Optional[List[np.ndarray]]):
+    # H is left unannotated: gtsam >= 4.3 types it as JacobianVector, older
+    # stubs as Optional[List[ndarray]] — an annotation can't satisfy both.
+    def error_func(this_factor, values, H):
         H_c: gtsam.Pose3 = values.atPose3(this_factor.keys()[0])
-        Tw_k_i: gtsam.Point3 = values.atPoint3(this_factor.keys()[1])
+        Tw_k_i: np.ndarray = values.atPoint3(this_factor.keys()[1])
 
         if H is not None:
             H[0] = np.zeros((3, 6), dtype=np.float64)
@@ -118,7 +120,7 @@ def make_aligned_pose_to_point_factor(pose_key, extras_key, landmark_key,
 
     keys = [pose_key, extras_key, landmark_key]
 
-    def error_func(this_factor, values, H: Optional[List[np.ndarray]]):
+    def error_func(this_factor, values, H):
         pose = values.atPose3(this_factor.keys()[0])
         x = values.atVector(this_factor.keys()[1])
         l_w = values.atPoint3(this_factor.keys()[2])
@@ -155,7 +157,7 @@ def make_gedf_field_factor(pose_key, points_Tc, field_eval, noise_model):
     """
     points_Tc = np.asarray(points_Tc, dtype=np.float64).reshape(-1, 3)
 
-    def error_func(this_factor, values, H: Optional[List[np.ndarray]]):
+    def error_func(this_factor, values, H):
         pose: gtsam.Pose3 = values.atPose3(this_factor.keys()[0])
         R = pose.rotation().matrix()                        # (3,3)
         t = np.asarray(pose.translation(), dtype=np.float64).reshape(3)

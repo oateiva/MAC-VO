@@ -3,7 +3,9 @@ repos:
     rev: v5.0.0   # or any recent version
     hooks:
       - id: trailing-whitespace
+        exclude: \.patch$   # git patches carry significant whitespace in context lines
       - id: end-of-file-fixer
+        exclude: \.patch$
       - id: check-added-large-files
       - id: check-yaml
         args: [--unsafe]   # allows custom tags like !include

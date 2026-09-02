@@ -1,0 +1,22 @@
+diff --git a/gtsam_unstable/gtsam_unstable.i b/gtsam_unstable/gtsam_unstable.i
+index 140433e0f..0875b1fc3 100644
+--- a/gtsam_unstable/gtsam_unstable.i
++++ b/gtsam_unstable/gtsam_unstable.i
+@@ -385,6 +385,17 @@ virtual class RangeFactor : gtsam::NoiseModelFactor {
+ 
+ typedef gtsam::RangeFactor<gtsam::PoseRTV, gtsam::PoseRTV> RangeFactorRTV;
+ 
++#include <gtsam_unstable/slam/PoseToPointFactor.h>
++template<POSE, POINT>
++virtual class PoseToPointFactor : gtsam::NoiseModelFactor {
++  PoseToPointFactor(gtsam::Key key1, gtsam::Key key2, const POINT& measured,
++                    const gtsam::noiseModel::Base* noiseModel);
++  POINT measured() const;
++};
++
++typedef gtsam::PoseToPointFactor<gtsam::Pose3, gtsam::Point3> PoseToPointFactorPose3Point3;
++typedef gtsam::PoseToPointFactor<gtsam::Pose2, gtsam::Point2> PoseToPointFactorPose2Point2;
++
+ class TimeOfArrival {
+   TimeOfArrival();
+   TimeOfArrival(double speed);

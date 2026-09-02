@@ -1,0 +1,2 @@
+# Patches are applied byte-for-byte with `git apply` — never normalize line endings.
+*.patch -text
