@@ -219,6 +219,17 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         kp0_uv  = kp0_uv[inbound_mask]
         kp1_uv  = kp1_uv[inbound_mask]
 
+        if kp0_uv.size(0) == 0:
+            # No keypoint survived selection + inbound filtering (featureless or
+            # blurry frame). The covariance projection below cannot take N=0, so
+            # coast exactly like the VOLostTrack path: keep the motion-model pose,
+            # mark the frame for interpolation, and advance the tracking context
+            # so the next pair re-anchors on this frame.
+            Logger.write("warn", f"VOLostTrack @ {frame1.frame_idx} - no keypoints survived selection")
+            frame_idx = self.push_keyframe(frame1, est_pose, need_interp=True)
+            self.prev_keyframe = (frame1, int(frame_idx.item()), depth1)
+            return
+
         # Retrieve depth and depth cov for kp on frame 0 and 1 ##########################
         kp0_d               = self.Frontend.retrieve_pixels(kp0_uv, depth0.depth).squeeze(0)
         kp0_disparity       = self.Frontend.retrieve_pixels(kp0_uv, depth0.disparity)
