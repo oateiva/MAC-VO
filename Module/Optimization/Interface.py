@@ -217,6 +217,13 @@ class IOptimizer(ABC, T.Generic[T_GraphInput, T_Context, T_GraphOutput], ConfigT
 
         self.write_graph_data(graph_res_local, global_map)
 
+    def finalize(self, global_map: VisualMap) -> None:
+        """Optional end-of-sequence pass over the whole map, called once by the
+        odometry's terminate() after the last write_map() and before terminate().
+        A backend that keeps state across frames (e.g. a persistent graph) can
+        re-optimize offline here and write smoothed poses back. Default: no-op."""
+        return None
+
     def terminate(self):
         if self.child_proc and self.child_proc.is_alive():
             self.child_proc.terminate()

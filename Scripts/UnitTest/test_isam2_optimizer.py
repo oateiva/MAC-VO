@@ -705,3 +705,110 @@ def test_marg_mitigation_config_rules():
         ISAM2_Graph.is_valid_config(make_cfg(marg_lag=5, marg_dead_at_birth="yes"))
     with pytest.raises(ValueError):
         ISAM2_Graph.is_valid_config(make_cfg(marg_lag=5, marg_touch_sigma=-1.0))
+
+
+# ---- offline batch polish (final_lm) --------------------------------------------
+
+def _lazy_cfg(**kw) -> SimpleNamespace:
+    """Deliberately lazy online settings: one GN pass per frame, almost no relinearization."""
+    return make_cfg(relin_threshold=1.0, relin_skip=10, extra_updates=0, warmup_frames=0,
+                    readout="chain", final_lm=True, **kw)
+
+
+def _noisy_jobs(n_pairs: int, lms: np.ndarray, rng: np.random.Generator) -> list[ISAM2_GraphInput]:
+    jobs = chained_jobs(n_pairs, lms)
+    for job in jobs:
+        job.pixel2_uv += torch.from_numpy(rng.normal(scale=0.3, size=(lms.shape[0], 2))).float()
+        job.pixel2_d  += torch.from_numpy(rng.normal(scale=0.05, size=lms.shape[0])).float()
+    return jobs
+
+
+def _traj_error(poses: dict[int, np.ndarray]) -> float:
+    return max(float(np.linalg.norm(T[:3, 3] - pose_gt(k)[:3, 3])) for k, T in poses.items())
+
+
+def test_final_lm_lowers_graph_error_and_covers_every_pose():
+    rng = np.random.default_rng(0)
+    lms = landmarks()
+    tracker = ISAM2FlowTracker(_lazy_cfg())
+    online = {}
+    for job in _noisy_jobs(8, lms, rng):
+        tracker.step(job)
+        online[job.frame_idx] = tracker.isam.calculateEstimatePose3(gtsam.symbol("p", job.frame_idx)).matrix()
+    online[0] = tracker.isam.calculateEstimatePose3(gtsam.symbol("p", 0)).matrix()
+
+    polished = tracker.final_lm_solve()
+    s = tracker.final_lm_stats
+    assert s is not None
+    assert set(polished) == set(range(9)) == tracker.pose_keys
+    assert s["error_after"] <= s["error_before"] and s["iterations"] >= 1
+    assert s["n_values"] == len(tracker.pose_keys) + tracker.next_lm_id
+    assert _traj_error(polished) <= _traj_error(online) + 1e-9
+    # the first pose carries the only gauge prior: LM must not move it
+    assert np.allclose(polished[0], pose_gt(0), atol=1e-3)
+
+
+def test_final_lm_default_off_and_finalize_writes_map():
+    rng = np.random.default_rng(1)
+    lms = landmarks()
+    off = ISAM2_Graph(make_cfg())
+    vmap_off = make_map(6)
+    for job in _noisy_jobs(5, lms, rng):
+        off.write_graph_data(off.sequential_optimize(job), vmap_off)
+    before = vmap_off.frames.data["pose"].tensor.clone()
+    off.finalize(vmap_off)
+    assert torch.equal(vmap_off.frames.data["pose"].tensor, before)     # no-op when off
+    assert off._tracker().final_lm_stats is None                          # type: ignore[union-attr]
+
+    on = ISAM2_Graph(_lazy_cfg())
+    vmap = make_map(6)
+    for job in _noisy_jobs(5, lms, np.random.default_rng(1)):
+        on.write_graph_data(on.sequential_optimize(job), vmap)
+    online = vmap.frames.data["pose"].tensor.clone()
+    on.finalize(vmap)
+    polished = vmap.frames.data["pose"].tensor
+    assert not torch.equal(polished, online)
+    for k in range(6):      # every pose key rewritten with a pose near ground truth
+        assert np.linalg.norm(_translation(polished[k]) - pose_gt(k)[:3, 3]) < 0.05
+    # an empty tracker (no frames ever stepped) must be a no-op too
+    ISAM2_Graph(_lazy_cfg()).finalize(make_map(2))
+
+
+def test_final_lm_under_marg_lag_recovers_expired_poses():
+    """The smoother has eliminated p_0..p_4 by the end; the shadow graph plus the
+    frozen snapshots still let LM polish the WHOLE trajectory, and the result
+    matches the unbounded arm's polish (same model, same measurements)."""
+    pytest.importorskip("gtsam_unstable")
+    lms = landmarks()
+    polished = {}
+    for lag in (0, 3):
+        tracker = ISAM2FlowTracker(_lazy_cfg(marg_lag=lag))
+        for job in _noisy_jobs(8, lms, np.random.default_rng(2)):
+            tracker.step(job)
+        if lag:
+            live = tracker.isam.calculateEstimate()
+            assert not live.exists(gtsam.symbol("p", 0)) and tracker._frozen.exists(gtsam.symbol("p", 0))
+            assert tracker._shadow is not None and tracker._shadow.nrFactors() > 0 and tracker.final_lm_stats is None
+        polished[lag] = tracker.final_lm_solve()
+        assert set(polished[lag]) == set(range(9))
+        assert tracker.final_lm_stats is not None
+        assert tracker.final_lm_stats["n_values"] == len(tracker.pose_keys) + tracker.next_lm_id
+    assert _traj_error(polished[3]) < 0.05
+    for k in range(9):
+        assert np.allclose(polished[0][k], polished[3][k], atol=1e-3), f"pose {k} differs between arms"
+
+
+def test_final_lm_off_keeps_no_shadow_under_marg_lag():
+    pytest.importorskip("gtsam_unstable")
+    tracker = ISAM2FlowTracker(make_cfg(marg_lag=3))
+    for job in chained_jobs(6, landmarks()):
+        tracker.step(job)
+    assert tracker._shadow is None and tracker._frozen.size() == 0
+
+
+def test_final_lm_config_rules():
+    ISAM2_Graph.is_valid_config(make_cfg(final_lm=True, final_lm_max_iters=20))
+    ISAM2_Graph.is_valid_config(make_cfg(final_lm=False, marg_lag=5))
+    for bad in (dict(final_lm=1), dict(final_lm_max_iters=0), dict(final_lm_max_iters=2.5)):
+        with pytest.raises(ValueError):
+            ISAM2_Graph.is_valid_config(make_cfg(**bad))

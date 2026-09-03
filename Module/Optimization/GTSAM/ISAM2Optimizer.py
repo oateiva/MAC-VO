@@ -75,15 +75,33 @@ marginalized (chain-dead for marg_lag frames, or at once under
 marg_dead_at_birth) is skipped, so keyframe rows then only reach chain-alive
 tracks.
 
+`final_lm` (default false) is the port of isam2_tracker.finalize(lm_polish=True)
+and run_isam2.py's `--final-lm`: ONE offline batch Levenberg-Marquardt solve over
+the ENTIRE accumulated graph from the iSAM2 estimate, after the last frame
+(IOptimizer.finalize, called by the odometry's terminate() before poses.npy is
+written). Every pose key's LM result replaces the online readout in the map, so
+the saved trajectory is the smoothed one (the graph's own gauge, anchored by the
+first pose's prior — not the chain's). LM's damping reaches the deeper robust
+basin that the per-frame Gauss-Newton passes miss, and recovers the smoothed
+accuracy when the online settings were deliberately lazy (large
+relin_threshold, few extra_updates). The graph it solves is the SAME
+measurement model the online solver ran (factor_type, kernel, GNC weights as
+frozen): without marg_lag it is gtsam.ISAM2's own factor store
+(getFactorsUnsafe, GNC-replaced slots included); under marg_lag the smoother has
+eliminated old variables, so the tracker keeps a shadow NonlinearFactorGraph of
+every nonlinear factor it ever added (touch priors excluded — they are
+scaffolding, not measurements) and snapshots each key's last live estimate the
+frame it expires, and LM runs over shadow + (live ∪ frozen) values. Cost is one
+batch solve of the whole sequence — `final_lm_max_iters` (default 100) bounds it.
+
 Deliberately NOT ported from isam2_tracker.py (see learningUAVO FINDINGS.md):
 the gp depth-prior mode; obs_stride / obs_phase / add_budget (the winning online
 arms run stride 1 / budget 0, and deferred insertion crashes the online
 readout); max_age and max_step_cov (both measured harmful — track length is
-monotonically good); the exact-model shadow graph + offline LM polish (offline-
-only readout); landmark write-back into the map (the chain readout's gauge and
-the live graph's gauge diverge after low-support stretches — map points stay as
-the odometry registered them). One measured deviation: the observation depth is
-the nearest-sampled `pixel2_d` (this repo's house convention), not the
+monotonically good); landmark write-back into the map (the chain readout's gauge
+and the live graph's gauge diverge after low-support stretches — map points stay
+as the odometry registered them). One measured deviation: the observation depth
+is the nearest-sampled `pixel2_d` (this repo's house convention), not the
 kernel-weighted depth of learningUAVO's compose_observation.
 """
 import time
@@ -303,8 +321,15 @@ class ISAM2FlowTracker:
         self.marg_dead_at_birth: bool = bool(getattr(cfg, "marg_dead_at_birth", False))
         self.marg_touch_sigma  : float = float(getattr(cfg, "marg_touch_sigma", 1e4))
         self.kf_cov_scale      : float = float(getattr(cfg, "kf_cov_scale", 1.0))
+        self.final_lm          : bool  = bool(getattr(cfg, "final_lm", False))
+        self.final_lm_max_iters: int   = int(getattr(cfg, "final_lm_max_iters", 100))
         _check_marg_lag(self.marg_lag, self.gnc_rounds)
         self._stamp_of: dict[int, float] = {}    # mirror of every stamp handed to the smoother
+        # final_lm under marg_lag needs what the smoother forgets (see module docstring)
+        self._shadow: gtsam.NonlinearFactorGraph | None = (
+            gtsam.NonlinearFactorGraph() if self.final_lm and self.marg_lag else None)
+        self._frozen: gtsam.Values = gtsam.Values()
+        self.final_lm_stats: dict | None = None
 
         params = gtsam.ISAM2Params()
         params.setRelinearizeThreshold(cfg.relin_threshold)
@@ -453,6 +478,19 @@ class ISAM2FlowTracker:
                                                   gtsam.noiseModel.Isotropic.Sigma(3, self.marg_touch_sigma)))
             n += 1
         return n
+
+    def _freeze_expiring(self, k: int) -> None:
+        """Snapshot the last live estimate of every key this update will expire
+        (final_lm under marg_lag): the batch solve later needs a value for every
+        key the shadow graph names, and the smoother deletes them."""
+        est = self.isam.calculateEstimate()
+        for key, t in self._stamp_of.items():
+            if t >= k - self.marg_lag or not est.exists(key) or self._frozen.exists(key):
+                continue
+            if chr(gtsam.symbolChr(key)) == "p":
+                self._frozen.insert(key, est.atPose3(key))
+            else:
+                self._frozen.insert(key, est.atPoint3(key))
 
     # -- keyframe re-observations ------------------------------------------------
 
@@ -621,6 +659,9 @@ class ISAM2FlowTracker:
         # -- update and read out
         if self.marg_lag:   # explicit branch: gtsam.ISAM2.update's 3rd positional arg is removeFactorIndices
             stamps = self._stamps(k, values, surviving, dead, gap_last, kf_keys)
+            if self._shadow is not None:
+                self._shadow.push_back(graph)       # measurements only: touch priors come after
+                self._freeze_expiring(k)
             if self.marg_touch_sigma > 0:
                 self._touch_expiring(graph, k)
             res = self.isam.update(graph, values, stamps)
@@ -664,6 +705,47 @@ class ISAM2FlowTracker:
                                ms=(time.perf_counter() - t_start) * 1e3))
 
         return _matrix_to_se3(self.T_chain if cfg.readout == "chain" else T_k)
+
+    # -- offline batch polish (final_lm) --------------------------------------------
+
+    def _final_graph_and_values(self) -> tuple[gtsam.NonlinearFactorGraph, gtsam.Values]:
+        """The exact accumulated model and a value for every key it names."""
+        if self._shadow is None:
+            return self.isam.getFactorsUnsafe(), self.isam.calculateEstimate()
+        graph = self._shadow
+        est = gtsam.Values(self._frozen)
+        live = self.isam.calculateEstimate()
+        for key in live.keys():
+            value = live.atPose3(key) if chr(gtsam.symbolChr(key)) == "p" else live.atPoint3(key)
+            if est.exists(key):
+                est.update(key, value)
+            else:
+                est.insert(key, value)
+        missing = [key for key in graph.keyVector() if not est.exists(key)]
+        assert not missing, (
+            f"final_lm: {len(missing)} shadow-graph keys have no value (first: "
+            f"{chr(gtsam.symbolChr(missing[0]))}{gtsam.symbolIndex(missing[0])}) -- "
+            f"a key was marginalized without ever being snapshotted")
+        return graph, est
+
+    def final_lm_solve(self) -> dict[int, np.ndarray]:
+        """Batch Levenberg-Marquardt over the entire accumulated graph from the
+        iSAM2 estimate (see module docstring); returns {frame_idx: (4,4) pose}
+        for every pose key and records `final_lm_stats`."""
+        t0 = time.perf_counter()
+        graph, initial = self._final_graph_and_values()
+        params = gtsam.LevenbergMarquardtParams()
+        params.setMaxIterations(self.final_lm_max_iters)
+        optimizer = gtsam.LevenbergMarquardtOptimizer(graph, initial, params)
+        result = optimizer.optimize()
+        poses = {k: result.atPose3(gtsam.symbol("p", k)).matrix() for k in sorted(self.pose_keys)}
+        for k, T in poses.items():
+            assert np.isfinite(T).all(), f"final_lm: pose {k} is non-finite after the batch solve"
+        self.final_lm_stats = dict(
+            error_before=float(graph.error(initial)), error_after=float(graph.error(result)),
+            iterations=int(optimizer.iterations()), n_factors=int(graph.nrFactors()),
+            n_values=int(initial.size()), ms=(time.perf_counter() - t0) * 1e3)
+        return poses
 
     # -- GNC-GM ------------------------------------------------------------------
 
@@ -805,6 +887,26 @@ class ISAM2_Graph(IOptimizer[ISAM2_GraphInput, dict, ISAM2_GraphOutput]):
         self._last_written_frame = result.frame_idx
         global_map.frames.data["pose"][result.frame_idx] = result.pose_estimate
 
+    def finalize(self, global_map: VisualMap) -> None:
+        """`final_lm`: one batch LM over the whole accumulated graph, every pose key
+        written back over its online readout (see module docstring). No-op otherwise."""
+        tracker = self._tracker()
+        if tracker is None or not tracker.final_lm or not tracker.pose_keys:
+            return
+        poses = tracker.final_lm_solve()
+        moved = 0.0
+        for k, T in poses.items():
+            polished = _matrix_to_se3(T)
+            moved = max(moved, float((polished[:3] - global_map.frames.data["pose"][k][:3]).norm()))
+            global_map.frames.data["pose"][k] = polished
+        s = tracker.final_lm_stats
+        assert s is not None
+        Logger.write("info",
+            f"ISAM2_Graph final_lm: {s['n_factors']} factors / {s['n_values']} values, "
+            f"error {s['error_before']:.4g} -> {s['error_after']:.4g} in {s['iterations']} LM "
+            f"iterations, {s['ms'] / 1e3:.1f} s (offline) | {len(poses)} poses rewritten, "
+            f"largest translation change vs online readout {moved:.3f} m")
+
     def _tracker(self) -> "ISAM2FlowTracker | None":
         return self.context["tracker"] if isinstance(self.context, dict) else None
 
@@ -871,6 +973,8 @@ class ISAM2_Graph(IOptimizer[ISAM2_GraphInput, dict, ISAM2_GraphOutput]):
             "marg_dead_at_birth": lambda b: isinstance(b, bool),
             "marg_touch_sigma"  : lambda v: isinstance(v, (int, float)) and v >= 0.,
             "kf_cov_scale"      : lambda v: isinstance(v, (int, float)) and v > 0.,
+            "final_lm"          : lambda b: isinstance(b, bool),
+            "final_lm_max_iters": lambda v: isinstance(v, int) and v >= 1,
         }
         for key, check in optional_spec.items():
             if hasattr(config, key):

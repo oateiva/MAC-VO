@@ -359,6 +359,9 @@ optimizer:
     # gnc_rounds: 5
     # gnc_c: 0.4              # residual scale in the depth map's own units — re-sweep per depth source
     # gnc_mu_rate: 5.0
+    # Offline batch polish after the last frame (learningUAVO's --final-lm):
+    # final_lm: true
+    # final_lm_max_iters: 100
 ```
 
 The written-back pose is the **chain readout** by default — current-belief
@@ -369,6 +372,23 @@ low-support stretches). The solver runs QR factorization unconditionally:
 Huber-downweighted cliques throw `IndeterminantLinearSystemException` under
 Cholesky. Frames the odometry skips (`VOLostTrack`) are coasted in with a weak
 between-factor at the previous relative motion.
+
+**`final_lm`** (default off) runs ONE batch `LevenbergMarquardtOptimizer` over
+the entire accumulated graph from the iSAM2 estimate once the sequence ends
+(`IOptimizer.finalize`, invoked by the odometry's `terminate()` before
+`poses.npy` is written) and overwrites every frame's pose in the map with the
+smoothed result — the graph's own gauge (first-pose prior), not the chain's.
+It is the port of `isam2_tracker.finalize(lm_polish=True)` / `--final-lm`: an
+offline solve, not per-frame work, whose damping reaches the robust basin the
+online Gauss-Newton passes miss and which recovers full accuracy when the online
+settings are deliberately lazy. The model it solves is exactly what the online
+solver ran (same factor type, kernel, and frozen GNC weights). Without
+`marg_lag` that is `ISAM2.getFactorsUnsafe()`; under `marg_lag` the tracker
+keeps a shadow graph of every factor added (touch priors excluded) and freezes
+each key's last live value the frame it expires, so the full trajectory is still
+polished. `final_lm_max_iters` (default 100) bounds the solve; the log line
+reports factor/value counts, error before/after, iterations, wall time and the
+largest translation change against the online readout.
 
 ### Keyframe re-observations (`Odometry.keyframe_tracker`)
 

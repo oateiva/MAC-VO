@@ -117,6 +117,7 @@ Odometry:
       min_flow_cov: 0.25
       min_depth_cov: 0.01
       match_cov_default: 0.25
+      # final_lm: true          # offline batch LM over the whole graph after the last frame (--final-lm)
 
 Datas: !include ../../Common/DeepODO_mono_experiments.yaml
 Preprocess: !include ../../Common/Preprocess.yaml

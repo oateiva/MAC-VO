@@ -589,6 +589,7 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         super().terminate()
         if self.prev_keyframe is not None:
             self.Optimizer.write_map(self.graph)
+        self.Optimizer.finalize(self.graph)     # e.g. ISAM2_Graph's offline batch-LM polish (final_lm)
         self.Optimizer.terminate()
         self.MapRefiner.elaborate_map(self.graph.frames)
 
