@@ -4,6 +4,7 @@ from .MotionModel import IMotionModel
 from .OutlierFilter import IObservationFilter
 from .MapProcessor import IMapProcessor
 from .KeyframeSelector import IKeyframeSelector
+from .KeyframeTracker  import IKeyframePolicy, TrackContext
 from .Optimization import IOptimizer
 
 from .Frontend.StereoDepth import IDepth
