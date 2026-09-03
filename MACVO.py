@@ -219,6 +219,9 @@ if __name__ == "__main__":
         np.save(exp_space.path("iter_time_ms.npy"), np.array(_perf_iter_ms))
     if _perf_vram_gb:
         np.save(exp_space.path("vram_usage_gb.npy"), np.array(_perf_vram_gb))
+    optimizer_stats = system.Optimizer.frame_stats()
+    if optimizer_stats:
+        np.savez(exp_space.path("optimizer_stats.npz"), **optimizer_stats)
 
     rr_plt.log_trajectory("/world/est"  , torch.tensor(np.load(exp_space.path("poses.npy"))[:, 1:]))
     try:
