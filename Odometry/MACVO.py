@@ -3,6 +3,7 @@ import rerun as rr
 from Utility.Visualize import rr_plt
 import pypose as pp
 import typing as T
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 from rich.columns import Columns
@@ -12,6 +13,7 @@ from typing import Callable
 import Module
 from DataLoader import Frame, CameraData
 from Module.Map import VisualMap, FrameNode, MatchObs, PointNode
+from Module.KeyframeTracker import TrackContext
 from Utility.Point import filterPointsInRange, pixel2point_NED, point2pixel_NED
 from Utility.PrettyPrint import Logger, GlobalConsole
 from Utility.Timer import Timer
@@ -20,6 +22,21 @@ from Utility.Extensions import ConfigTestable
 from .Interface import IOdometry
 
 T_SensorFrame = T.TypeVar("T_SensorFrame", bound=Frame)
+
+
+@dataclass
+class _KeyframeState:
+    """The reference frame every new frame is additionally matched against.
+
+    `obs` / `point_idx` are the rows (and the points they born) registered when
+    this frame was frame0 of a consecutive pair; None until that pair has run, so
+    a keyframe adopted at frame k yields its first keyframe rows at frame k+2.
+    """
+    camera   : CameraData
+    frame_idx: int
+    depth    : Module.IDepth.Output
+    obs      : MatchObs | None = None
+    point_idx: torch.Tensor | None = None
 
 
 class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
@@ -40,6 +57,7 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         kf_selector     : Module.IKeyframeSelector[T_SensorFrame],
         optimizer       : Module.IOptimizer,
         min_num_point   : int = 10,
+        keyframe_tracker: Module.IKeyframePolicy | None = None,
         **_excessive_args,
     ) -> None:
         super().__init__(profile=profile)
@@ -61,6 +79,7 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         self.MapRefiner = post_process
         self.KeyframeSelector = kf_selector
         self.Optimizer = optimizer
+        self.KeyframeTracker = keyframe_tracker
         # end
 
         self.min_num_point = min_num_point
@@ -73,6 +92,8 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         # [1] - Frame index (in visual map)
         # [2] - Frame stereo depth
         self.prev_keyframe: tuple[T_SensorFrame, int, Module.IStereoDepth.Output] | None = None
+        # Keyframe-tracker reference frame (None when the tracker is off)
+        self.keyframe: _KeyframeState | None = None
 
         # Hooks
         self.on_optimize_writeback: list[MACVO.T_SYSHOOK] = []
@@ -92,6 +113,8 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         MapRefiner          = Module.IMapProcessor.instantiate(odomcfg.postprocess.type, odomcfg.postprocess.args)
         KeyframeSelector    = Module.IKeyframeSelector[T_SensorFrame].instantiate(odomcfg.keyframe.type, odomcfg.keyframe.args)
         Optimizer           = Module.IOptimizer.instantiate(odomcfg.optimizer.type, odomcfg.optimizer.args)
+        KeyframeTracker     = (Module.IKeyframePolicy.instantiate(odomcfg.keyframe_tracker.type, odomcfg.keyframe_tracker.args)
+                               if hasattr(odomcfg, "keyframe_tracker") else None)
 
         return cls(
             frontend=Frontend,
@@ -103,6 +126,7 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
             post_process=MapRefiner,
             kf_selector=KeyframeSelector,
             optimizer=Optimizer,
+            keyframe_tracker=KeyframeTracker,
             **vars(odomcfg.args),
         )
 
@@ -129,6 +153,7 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
                     f"MappointSelector-'{self.MappointSelector.__class__.__name__}'",
                     f"OutlierFilter   -'{self.OutlierFilter   .__class__.__name__}'",
                     f"MapRefiner      -'{self.MapRefiner      .__class__.__name__}'",
+                    f"KeyframeTracker -'{self.KeyframeTracker!r}'",
                 ]
             ),
             title="Odometry Modules",
@@ -147,6 +172,14 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         Module.ICovariance2to3.is_valid_config(config.cov.obs)
         Module.IFrontend.is_valid_config(config.frontend)
         Module.IOptimizer.is_valid_config(config.optimizer)
+        if hasattr(config, "keyframe_tracker"):
+            Module.IKeyframePolicy.is_valid_config(config.keyframe_tracker)
+            if config.optimizer.type != "ISAM2_Graph":
+                raise ValueError("keyframe_tracker needs optimizer.type ISAM2_Graph: it is the only "
+                                 "backend that consumes keyframe re-observations (VisualMap.kf_match)")
+            if config.keyframe.type != "AllKeyframe":
+                raise ValueError("keyframe_tracker needs keyframe.type AllKeyframe: frame subsampling "
+                                 "breaks the consecutive frame indexing the keyframe rows rely on")
 
         args_spec: dict = {
             "device"            : lambda s: isinstance(s, str) and (("cuda" in s) or (s == "cpu")),
@@ -174,6 +207,8 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         }))
         self.OutlierFilter.set_meta(frame0.camera)
         self.prev_keyframe = (frame0, int(frame_idx.item()), depth0)
+        if self.KeyframeTracker is not None:
+            self.keyframe = _KeyframeState(frame0.camera, int(frame_idx.item()), depth0)
 
     def run_pair(self, frame0: T_SensorFrame, frame1: T_SensorFrame) -> None:
         assert self.prev_keyframe is not None
@@ -316,6 +351,16 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         self.graph.match2frame1.set(match_idx    , torch.empty((num_match_kp,), dtype=torch.long).fill_(prev_frame_idx.item()))    # Associate match -> frame1
         self.graph.match2frame2.set(match_idx    , torch.empty((num_match_kp,), dtype=torch.long).fill_(frame_idx.item()     ))    # Associate match -> frame2
 
+        # Keyframe tracking: extra keyframe -> frame1 flow, re-observe the keyframe's points
+        lost_track = match_idx.size(0) < self.min_num_point
+        if self.KeyframeTracker is not None:
+            if lost_track:
+                # the pair's job is skipped below, so this frame can never anchor keyframe rows
+                self.keyframe = _KeyframeState(frame1.camera, int(frame_idx.item()), depth1)
+            else:
+                self._track_keyframe(frame1, int(frame_idx.item()), self.prev_keyframe[1], depth1,
+                                     match_obs, point_idx, est_pose)
+
         # Visualization #################################################################
         rr.set_time("frame_idx", sequence=int(frame_idx.cpu().item())-1)
         rr_plt.log_flow(
@@ -332,7 +377,7 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         self.prev_keyframe = (frame1, int(frame_idx.item()), depth1)
 
         # Launch Optimization task  #####################################################
-        if match_idx.size(0) < self.min_num_point:
+        if lost_track:
             # NOTE: if lost track, we do not do mapping since the pose is not reliable anyway.
             Logger.write("warn", f"VOLostTrack @ {frame1.frame_idx} - only get {match_idx.size(0)} observations")
             self.graph.frames.data["need_interp"][frame_idx] = True
@@ -400,6 +445,111 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
         prior = torch.zeros((1, 1, target.height, target.width), dtype=torch.float32)
         prior[0, 0, v, u] = depth[valid].to(torch.float32)
         return prior
+
+    def _relative_translation(self, from_idx: int, to_pose: pp.LieTensor | torch.Tensor) -> float:
+        T_from = pp.SE3(self.graph.frames.data["pose"][from_idx].reshape(7))
+        T_to   = pp.SE3(torch.as_tensor(to_pose).reshape(7))
+        rel = T_from.Inv() @ T_to           # SE3 layout [tx, ty, tz, qx, qy, qz, qw]
+        return float(rel[..., :3].norm().item())
+
+    def _track_keyframe(self, frame1: T_SensorFrame, frame_idx: int, prev_idx: int, depth1: Module.IDepth.Output,
+                        match_obs: MatchObs, point_idx: torch.Tensor, est_pose: pp.LieTensor | torch.Tensor) -> None:
+        """Keyframe step for frame1 (already registered as `frame_idx`).
+
+        frame0 == keyframe: this pair IS the keyframe pair; remember its rows and the
+        points they born - later frames re-observe exactly these. Otherwise run the
+        keyframe -> frame1 flow, push the surviving re-observations to `kf_match`
+        (kfmatch2point = the keyframe row's point, i.e. the same landmark), and let
+        the policy decide whether frame1 becomes the keyframe.
+        """
+        assert self.KeyframeTracker is not None and self.keyframe is not None
+        kf = self.keyframe
+        frames_since_kf = frame_idx - kf.frame_idx
+        translation = self._relative_translation(kf.frame_idx, est_pose)
+
+        if prev_idx == kf.frame_idx:
+            kf.obs, kf.point_idx = match_obs, point_idx
+            ref = match_obs
+        elif kf.obs is not None and kf.point_idx is not None:
+            ref = self._observe_keyframe(frame1, frame_idx, depth1, kf.obs, kf.point_idx, kf)
+        else:
+            return
+
+        n_ref = len(ref)
+        ctx = TrackContext(
+            frames_since_kf=int(frames_since_kf),
+            n_grid=int(len(match_obs) if kf.obs is None else len(kf.obs)),
+            n_kf_matches=int(n_ref),
+            parallax_px=float((ref.data["pixel2_uv"] - ref.data["pixel1_uv"]).norm(dim=-1).median().item()) if n_ref else float("inf"),
+            translation_m=translation,
+            median_depth_m=float(ref.data["pixel2_d"].median().item()) if n_ref else 0.,
+        )
+        if self.KeyframeTracker.should_switch(ctx):
+            Logger.write("info", f"Keyframe {kf.frame_idx} -> {frame_idx} [{self.KeyframeTracker!r}] "
+                                 f"gap={ctx.frames_since_kf} parallax={ctx.parallax_px:.1f}px "
+                                 f"covis={ctx.n_kf_matches}/{ctx.n_grid} t={ctx.translation_m:.3f}")
+            self.keyframe = _KeyframeState(frame1.camera, frame_idx, depth1)
+
+    def _observe_keyframe(self, frame1: T_SensorFrame, frame_idx: int, depth1: Module.IDepth.Output,
+                          kf_obs: MatchObs, kf_point_idx: torch.Tensor, kf: _KeyframeState) -> MatchObs:
+        """Flow the keyframe's registered pixels into frame1 and register the survivors
+        in `kf_match`. Returns the pushed rows (possibly empty)."""
+        match_kf = self.Frontend.estimate_match(kf.camera, frame1.camera)
+
+        kp_kf = kf_obs.data["pixel1_uv"].to(self.device)
+        kp_k  = kp_kf + self.Frontend.retrieve_pixels(kp_kf, match_kf.flow).T
+        inbound = filterPointsInRange(
+            kp_k,
+            (self.edge_width, frame1.camera.width - self.edge_width),
+            (self.edge_width, frame1.camera.height - self.edge_width)
+        )
+        inbound_cpu = inbound.cpu()
+        kp_kf, kp_k = kp_kf[inbound], kp_k[inbound]
+        kf_obs, kf_point_idx = kf_obs[inbound_cpu], kf_point_idx[inbound_cpu]
+        num_kp = kp_k.size(0)
+
+        rr_plt.log_flow("/world/macvo/cam_left/optical_flow_kf", match_kf.flow[0].detach().permute(1, 2, 0))
+        if num_kp == 0:
+            return kf_obs
+
+        kp_k_d               = self.Frontend.retrieve_pixels(kp_k, depth1.depth).squeeze(0)
+        kp_k_disparity       = self.Frontend.retrieve_pixels(kp_k, depth1.disparity)
+        kp_k_sigma_disparity = self.Frontend.retrieve_pixels(kp_k, depth1.disparity_uncertainty)
+        kp_k_sigma_dd        = self.Frontend.retrieve_pixels(kp_k, depth1.cov)
+        kp_k_sigma_dd        = kp_k_sigma_dd.squeeze(0) if kp_k_sigma_dd is not None else None
+        kp_k_sigma_uv        = self.Frontend.retrieve_pixels(kp_kf, match_kf.cov)
+        kp_k_sigma_uv        = kp_k_sigma_uv.T if kp_k_sigma_uv is not None else None
+        pos_k_covTc          = self.ObsCovModel.estimate(frame1.camera, kp_k, depth1, kp_k_sigma_dd, kp_k_sigma_uv)
+
+        new_obs = MatchObs.init({
+            "pixel1_uv"      : kf_obs.data["pixel1_uv"],
+            "pixel2_uv"      : kp_k.cpu(),
+            "pixel1_d"       : kf_obs.data["pixel1_d"],
+            "pixel2_d"       : kp_k_d.unsqueeze(-1).cpu(),
+            "pixel1_disp"    : kf_obs.data["pixel1_disp"],
+            "pixel2_disp"    : torch.empty((num_kp, 1)).fill_(-1) if kp_k_disparity is None else kp_k_disparity.T.cpu(),
+            "pixel1_disp_cov": kf_obs.data["pixel1_disp_cov"],
+            "pixel2_disp_cov": torch.empty((num_kp, 1)).fill_(-1) if kp_k_sigma_disparity is None else kp_k_sigma_disparity.T.cpu(),
+            "pixel1_d_cov"   : kf_obs.data["pixel1_d_cov"],
+            "pixel2_d_cov"   : torch.empty((num_kp, 1)).fill_(-1) if kp_k_sigma_dd is None else kp_k_sigma_dd.unsqueeze(-1).cpu(),
+            "pixel1_uv_cov"  : kf_obs.data["pixel1_uv_cov"],
+            "pixel2_uv_cov"  : torch.empty((num_kp, 3)).fill_(-1) if kp_k_sigma_uv is None else kp_k_sigma_uv.cpu(),
+            "obs1_covTc"     : kf_obs.data["obs1_covTc"],
+            "obs2_covTc"     : pos_k_covTc,
+        })
+        mask = self.OutlierFilter.filter(new_obs, torch.device("cpu"))
+        new_obs, kf_point_idx = new_obs[mask], kf_point_idx[mask]
+
+        num_orig  = len(self.graph.kf_match)
+        num_new   = len(new_obs)
+        kfm_idx   = self.graph.kf_match.push(new_obs)
+        self.graph.kfmatch2point .set(kfm_idx, kf_point_idx)
+        self.graph.kfmatch2frame1.set(kfm_idx, torch.full((num_new,), kf.frame_idx, dtype=torch.long))
+        self.graph.kfmatch2frame2.set(kfm_idx, torch.full((num_new,), frame_idx,    dtype=torch.long))
+        self.graph.frame2kfmatch.add(torch.tensor([frame_idx], dtype=torch.long),
+                                     torch.tensor([num_orig], dtype=torch.long),
+                                     torch.tensor([num_new], dtype=torch.long))
+        return new_obs
 
     def push_keyframe(self, frame: T_SensorFrame, est_pose: pp.LieTensor | torch.Tensor, need_interp: bool=False) -> torch.Tensor:
         frame_idx = self.graph.frames.push(FrameNode.init({

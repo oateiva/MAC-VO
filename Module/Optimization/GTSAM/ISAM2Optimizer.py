@@ -29,6 +29,52 @@ down-weighting diverges to float64 overflow (surfacing as an
 IndeterminantLinearSystemException naming whichever pose the NaN reached first);
 a weight floor and a divergence rollback were both measured INSUFFICIENT alone.
 
+`marg_lag` N > 0 (default 0 = off) swaps gtsam.ISAM2 for the fixed-lag smoother
+in Marginalization.py: poses older than N frames and landmarks whose track died N
+frames ago are ELIMINATED from the live graph, their information surviving as
+dense marginal factors, so per-frame cost is bounded instead of growing with the
+sequence. Retention is re-stamping: every frame stamps p_k, whatever was inserted
+this frame, and every surviving track's landmark. The linearization point behind
+the window is frozen; the chain readout (which only reads p_k and p_last) should
+be nearly unaffected. Incompatible with GNC (the smoother's result carries no
+factor indices). learningUAVO's ledger: lag 5 was the only lag that survived the
+566-frame plane_nose; longer lags hit a MarginalizationFailure that is never
+silenced — shorten the lag instead.
+
+The failure was traced (backend replay of plane_nose, 2026-09-02) to one Bayes-tree
+shape: the expiring pose is the TOP frontal of a clique that this update does not
+re-eliminate (no new factor on its frontals, no child clique naming the pose in
+its separator), sitting above frontals that stay — dead-but-unexpired landmarks,
+or neighbouring poses merged into the same clique. The smoother then cuts the
+frontal out in place and gtsam 4.2a9 leaves the kept frontals conditioned on the
+removed key; the next solve raises "Requested variable 'pNN' is not in this
+VectorValues". Whenever the clique IS re-eliminated, the smoother's constrained
+ordering puts expiring keys at the bottom and the cut is clean (1100+ such
+expiries observed, none failed). Two mitigations, both flags:
+  marg_touch_sigma (default 1e4; 0 = off)  adds a prior of that sigma on every key
+      about to expire, so its clique is always re-eliminated first. 1e4 m carries
+      1e-8 of precision: readout unchanged to 2 mm at lag 5, and lags 10 and 20
+      complete the 565 frames that died at 314 / 37 without it.
+  marg_dead_at_birth (default false)  re-stamps a landmark to its BIRTH frame the
+      frame its track dies, so it leaves with its first observer and never lingers
+      above a later pose; also halves the largest separators (54 -> 21 at lag 20).
+
+Keyframe rows (`ISAM2_GraphInput.kf`, filled from `VisualMap.kf_match` by the
+odometry's keyframe tracker, Module/KeyframeTracker.py): the keyframe's pixel1
+rows of pair (kf, kf+1) re-observed in frame k through a SECOND flow inference
+kf -> k. Each row is associated to the landmark the same integer pixel resolved
+to when pair (kf, kf+1) was stepped (`frame_lm[kf]`, a per-frame snapshot of the
+pixel -> landmark table) and adds ONE more factor p_k -> l on that SAME key, with
+variance quantization + one flow step (no accumulation: that is the point). The
+chain observation of the same landmark at p_k is kept as well (an additional
+connection, as designed); the two share the frame-k depth sample, so
+`kf_cov_scale` (default 1) exists to inflate the keyframe covariance. Under
+marg_lag the keyframe pose and every landmark it re-observes are re-stamped each
+frame so they never expire while the keyframe is live; a landmark already
+marginalized (chain-dead for marg_lag frames, or at once under
+marg_dead_at_birth) is skipped, so keyframe rows then only reach chain-alive
+tracks.
+
 Deliberately NOT ported from isam2_tracker.py (see learningUAVO FINDINGS.md):
 the gp depth-prior mode; obs_stride / obs_phase / add_budget (the winning online
 arms run stride 1 / budget 0, and deferred insertion crashes the online
@@ -40,6 +86,7 @@ the odometry registered them). One measured deviation: the observation depth is
 the nearest-sampled `pixel2_d` (this repo's house convention), not the
 kernel-weighted depth of learningUAVO's compose_observation.
 """
+import time
 import numpy as np
 import torch
 import gtsam
@@ -59,11 +106,35 @@ from types import SimpleNamespace
 
 from Module.Map import VisualMap
 from Utility.GTSAM_Utils import make_pose_to_point_factor
+from Utility.PrettyPrint import Logger
 from Utility.Timer import Timer
 
 from ..Interface import IOptimizer
 
 _KERNELS = ("huber", "cauchy", "geman", "tukey", "welsch", "none")
+
+
+def _check_marg_lag(marg_lag: int, gnc_rounds: int) -> None:
+    """Cross-key rules for fixed-lag marginalization (see module docstring)."""
+    if marg_lag == 0:
+        return
+    if marg_lag < 2:
+        raise ValueError(f"marg_lag {marg_lag}: the readout reads p_(last) one frame "
+                         f"after its own update, so the window must hold >= 2 poses")
+    if gnc_rounds > 0:
+        raise ValueError("marg_lag needs gnc_rounds 0: the fixed-lag smoother's result "
+                         "has no getNewFactorsIndices(), which GNC re-weighting needs")
+
+
+@dataclass
+class ISAM2_KeyframeRows:
+    """Keyframe -> frame_idx re-observations, straight from VisualMap.kf_match."""
+    kf_idx       : int
+    pixel1_uv    : torch.Tensor     # (M,2) integer-valued keyframe pixels (pixel1 of pair kf -> kf+1)
+    pixel2_uv    : torch.Tensor     # (M,2) subpixel, flow-carried into frame_idx
+    pixel2_d     : torch.Tensor     # (M,)
+    pixel2_d_cov : torch.Tensor     # (M,)  -1 = unavailable
+    pixel2_uv_cov: torch.Tensor     # (M,3) (sigma_uu, sigma_vv, sigma_uv) of the kf -> frame_idx flow
 
 
 @dataclass
@@ -81,6 +152,7 @@ class ISAM2_GraphInput:
     pixel2_d_cov : torch.Tensor     # (N,)  -1 = unavailable
     pixel1_uv_cov: torch.Tensor     # (N,3) (sigma_uu, sigma_vv, sigma_uv), -1 rows = unavailable
     pixel2_uv_cov: torch.Tensor     # (N,3)
+    kf           : ISAM2_KeyframeRows | None = None
 
 
 @dataclass
@@ -94,6 +166,7 @@ class _TrackState:
     lm_key: int                     # gtsam.symbol("l", id) — never reused
     fvar  : np.ndarray              # (2,) accumulated flow variance (see module docstring)
     n_obs : int
+    born  : int                     # frame index of the pose holding its first observation
 
 
 def gnc_weights(r2: np.ndarray, mu: float, c: float, floor: float) -> np.ndarray:
@@ -213,6 +286,7 @@ def _se3_to_matrix(pose: torch.Tensor) -> np.ndarray:
 
 class ISAM2FlowTracker:
     """The persistent iSAM2 graph + track table, fed one frame pair per step()."""
+    FRAME_LM_KEEP = 100     # frames of pixel->landmark tables kept while no keyframe rows arrive
 
     def __init__(self, cfg: SimpleNamespace):
         self.cfg = cfg
@@ -225,6 +299,12 @@ class ISAM2FlowTracker:
         self.gnc_sanity_metres: float = getattr(cfg, "gnc_sanity_metres", 1e3)
         self.gnc_sanity_rel   : float = getattr(cfg, "gnc_sanity_rel", 50.0)
         self.prior_sigma: float = getattr(cfg, "prior_sigma", 1e-4)
+        self.marg_lag   : int   = int(getattr(cfg, "marg_lag", 0))
+        self.marg_dead_at_birth: bool = bool(getattr(cfg, "marg_dead_at_birth", False))
+        self.marg_touch_sigma  : float = float(getattr(cfg, "marg_touch_sigma", 1e4))
+        self.kf_cov_scale      : float = float(getattr(cfg, "kf_cov_scale", 1.0))
+        _check_marg_lag(self.marg_lag, self.gnc_rounds)
+        self._stamp_of: dict[int, float] = {}    # mirror of every stamp handed to the smoother
 
         params = gtsam.ISAM2Params()
         params.setRelinearizeThreshold(cfg.relin_threshold)
@@ -239,9 +319,19 @@ class ISAM2FlowTracker:
             gn = gtsam.ISAM2GaussNewtonParams()
             gn.setWildfireThreshold(getattr(cfg, "wildfire", 1e-3))
             params.setOptimizationParams(gn)
-        self.isam = gtsam.ISAM2(params)
+        if self.marg_lag:
+            # Lazy: the default path never imports gtsam_unstable.
+            from .Marginalization import FixedLagIsam2, timestamp_map
+            self._timestamp_map = timestamp_map
+            self.isam = FixedLagIsam2(params, self.marg_lag)
+        else:
+            self.isam = gtsam.ISAM2(params)
 
+        self.stats: list[dict] = []     # per frame: frame, live_vars, n_tracks, n_in_graph, ms
         self.tracks: dict[tuple[int, int], _TrackState] = {}
+        # frame -> {integer pixel1 -> landmark key}, the association keyframe rows look up
+        self.frame_lm: dict[int, dict[tuple[int, int], int]] = {}
+        self.n_kf_total  : int = 0
         self.next_lm_id  : int = 0
         self.pose_keys   : set[int] = set()
         self.last_out_idx: int | None = None
@@ -298,11 +388,117 @@ class ISAM2FlowTracker:
             return T_f
         return self.isam.calculateEstimatePose3(p_f).matrix()
 
+    def _stamps(self, k: int, values: gtsam.Values, surviving: dict, dead: list,
+                p_last: int | None, kf_keys: list[int]):
+        """Frame k's timestamp map: what the smoother is allowed to forget.
+
+        A key stamped k survives another marg_lag frames, and re-stamping
+        OVERWRITES its stamp, so retention is just "stamp it again every frame":
+
+          every key in `values`   inserted THIS frame: p_k, new landmarks, and
+                                  p_from on the first frame or when coasted in
+                                  (a never-stamped key never expires). p_(k-1)
+                                  is deliberately NOT re-stamped in the normal
+                                  case: the window is exactly marg_lag poses.
+          surviving landmarks     every continuing track; dead tracks are not
+                                  refreshed and expire marg_lag frames later.
+                                  All of them are in the graph (new ones got
+                                  their Values this frame).
+          dead tracks             (marg_dead_at_birth only) stamped back to
+                                  their birth frame the frame they die, so
+                                  they leave with their first observer — see
+                                  the module docstring for the failure shape
+                                  this removes.
+          p_last (gap only)       after a VOLostTrack gap the readout reads
+                                  p_(last_out_idx) AFTER this update; its own
+                                  stamp is older than the gap, so refresh it.
+          kf_keys                 the keyframe pose and every landmark a keyframe
+                                  row re-observed this frame.
+        """
+        stamps = {int(key): float(k) for key in values.keys()}
+        for track in surviving.values():
+            stamps[track.lm_key] = float(k)
+        if self.marg_dead_at_birth:
+            for track in dead:
+                stamps[track.lm_key] = float(track.born)
+        if p_last is not None:
+            stamps[p_last] = float(k)
+        for key in kf_keys:
+            stamps[key] = float(k)
+        self._stamp_of.update(stamps)
+        return self._timestamp_map(stamps)
+
+    def _touch_expiring(self, graph: gtsam.NonlinearFactorGraph, k: int) -> int:
+        """Add a near-zero-information prior on every key this update will expire.
+
+        The smoother only re-eliminates cliques it touches (new factor, or a
+        child clique whose separator names the expiring key). An expiring pose
+        sitting untouched as the TOP frontal of a clique above kept frontals is
+        cut out of the clique in place, and gtsam 4.2a9 leaves the kept
+        frontals conditioned on the removed key (the plane_nose failure at every
+        lag). A new factor on the key forces its clique through the constrained
+        re-elimination that puts expiring keys at the bottom, where the cut is
+        clean. sigma = marg_touch_sigma; 1e4 m adds 1e-8 of precision.
+        """
+        est = self.isam.calculateEstimate()
+        n = 0
+        for key, t in self._stamp_of.items():
+            if t >= k - self.marg_lag or not est.exists(key):
+                continue
+            if chr(gtsam.symbolChr(key)) == "p":
+                graph.add(gtsam.PriorFactorPose3(key, est.atPose3(key),
+                                                 gtsam.noiseModel.Isotropic.Sigma(6, self.marg_touch_sigma)))
+            else:
+                graph.add(gtsam.PriorFactorPoint3(key, est.atPoint3(key),
+                                                  gtsam.noiseModel.Isotropic.Sigma(3, self.marg_touch_sigma)))
+            n += 1
+        return n
+
+    # -- keyframe re-observations ------------------------------------------------
+
+    def _keyframe_factors(self, kf: ISAM2_KeyframeRows, K: np.ndarray, p_k: int,
+                          add_point) -> tuple[int, list[int]]:
+        """Add p_k -> l for every keyframe row whose integer keyframe pixel resolves
+        to a live landmark; return (count, [p_kf, *landmark keys]) for stamping."""
+        cfg = self.cfg
+        table = self.frame_lm.get(kf.kf_idx)
+        if table is None or kf.kf_idx not in self.pose_keys:
+            return 0, []
+        p_kf = gtsam.symbol("p", kf.kf_idx)
+        est = self.isam.calculateEstimate() if self.marg_lag else None
+        if est is not None and not est.exists(p_kf):
+            return 0, []
+
+        m = kf.pixel1_uv.shape[0]
+        uv1 = kf.pixel1_uv.detach().cpu().numpy().astype(np.float64)
+        uv2 = kf.pixel2_uv.detach().cpu().numpy().astype(np.float64)
+        d2  = kf.pixel2_d.detach().cpu().numpy().astype(np.float64)
+        var_d2 = self._depth_variance(kf.pixel2_d_cov.detach().cpu().numpy())
+        fvar = cfg.match_cov_default + self._step_variance(kf.pixel2_uv_cov.detach().cpu().numpy())
+        obs2 = _pixel2point_ned(uv2, d2, K)
+        cov2 = _covariance_2to3_full(fvar[:, 0], fvar[:, 1], var_d2, uv2[:, 0], uv2[:, 1], d2, K) * self.kf_cov_scale
+        valid = np.isfinite(d2) & (d2 > 0) & np.isfinite(cov2.reshape(m, -1)).all(axis=1)
+        valid &= np.linalg.eigvalsh(np.where(valid[:, None, None], cov2, np.eye(3))).min(axis=1) > 0
+
+        keys: list[int] = [p_kf]
+        seen: set[int] = set()
+        for j in range(m):
+            if not valid[j]:
+                continue
+            lm = table.get((int(np.rint(uv1[j, 0])), int(np.rint(uv1[j, 1]))))
+            if lm is None or lm in seen or (est is not None and not est.exists(lm)):
+                continue
+            add_point(p_k, lm, obs2[j], cov2[j])
+            seen.add(lm)
+            keys.append(lm)
+        return len(seen), keys
+
     # -- the per-frame step ----------------------------------------------------
 
     def step(self, data: ISAM2_GraphInput) -> torch.Tensor:
         """Associate rows to tracks, add the pair's factors, isam.update(),
         return the (7,) readout pose of `frame_idx`."""
+        t_start = time.perf_counter()
         cfg = self.cfg
         k = data.frame_idx
         K = data.K.detach().cpu().double().numpy().reshape(3, 3)
@@ -312,6 +508,9 @@ class ISAM2FlowTracker:
         p_k = gtsam.symbol("p", k)
         p_f = gtsam.symbol("p", data.from_idx)
         T_f_est = self._ensure_from_pose(graph, values, data)
+        # the readout reads p_(last_out_idx) even across a VOLostTrack gap: keep it stamped
+        gap_last = (gtsam.symbol("p", self.last_out_idx)
+                    if self.last_out_idx is not None and self.last_out_idx != data.from_idx else None)
 
         T_init = (T_f_est @ self.T_rel_prev
                   if cfg.motion_init == "cv" and self.T_rel_prev is not None else T_f_est)
@@ -373,26 +572,45 @@ class ISAM2FlowTracker:
                     robustify(gtsam.noiseModel.Gaussian.Covariance(cov), kernel, cfg.kernel_delta)))
 
         surviving: dict[tuple[int, int], _TrackState] = {}
+        dead: list[_TrackState] = list(self.tracks.values())    # un-popped = no row carried them
+        lm_table: dict[tuple[int, int], int] = {}
         n_in_graph = 0
         for i in range(n):
-            if not valid[i]:
-                continue
             track = row_track[i]
+            if not valid[i]:
+                if track is not None:
+                    dead.append(track)
+                continue
             if track is None:
                 lm_key = gtsam.symbol("l", self.next_lm_id)
                 self.next_lm_id += 1
                 values.insert(lm_key, gtsam.Point3(*(T_f_est[:3, :3] @ obs1[i] + T_f_est[:3, 3])))
                 add_point(p_f, lm_key, obs1[i], cov1[i])
-                track = _TrackState(lm_key=lm_key, fvar=fvar2[i].copy(), n_obs=2)
+                track = _TrackState(lm_key=lm_key, fvar=fvar2[i].copy(), n_obs=2, born=data.from_idx)
             else:
-                track = _TrackState(lm_key=track.lm_key, fvar=fvar2[i].copy(), n_obs=track.n_obs + 1)
+                track = _TrackState(lm_key=track.lm_key, fvar=fvar2[i].copy(), n_obs=track.n_obs + 1,
+                                    born=track.born)
             add_point(p_k, track.lm_key, obs2[i], cov2[i])
             n_in_graph += 1
+            key1 = (int(np.rint(uv1[i, 0])), int(np.rint(uv1[i, 1])))
+            lm_table.setdefault(key1, track.lm_key)
             key2 = (int(np.rint(uv2[i, 0])), int(np.rint(uv2[i, 1])))
             surviving.setdefault(key2, track)
         self.tracks = surviving
+        self.frame_lm[data.from_idx] = lm_table
 
-        if n_in_graph < cfg.min_support:
+        # -- keyframe rows: extra p_k -> l on the keyframe's landmarks
+        n_kf, kf_keys = 0, []
+        if data.kf is not None:
+            keep_from = data.kf.kf_idx
+            n_kf, kf_keys = self._keyframe_factors(data.kf, K, p_k, add_point)
+        else:
+            keep_from = data.from_idx - self.FRAME_LM_KEEP
+        self.frame_lm = {f: t for f, t in self.frame_lm.items() if f >= keep_from}
+        self.n_kf_total += n_kf
+        n_obs = n_in_graph + n_kf
+
+        if n_obs < cfg.min_support:
             # Low-support coast — weak on purpose: a tight coast welds low-support
             # garbage into the chain; a loose one lets later evidence pull it straight.
             graph.add(gtsam.BetweenFactorPose3(
@@ -401,11 +619,22 @@ class ISAM2FlowTracker:
                 gtsam.noiseModel.Diagonal.Sigmas(self._sigmas(cfg.coast_sigma))))
 
         # -- update and read out
-        res = self.isam.update(graph, values)
+        if self.marg_lag:   # explicit branch: gtsam.ISAM2.update's 3rd positional arg is removeFactorIndices
+            stamps = self._stamps(k, values, surviving, dead, gap_last, kf_keys)
+            if self.marg_touch_sigma > 0:
+                self._touch_expiring(graph, k)
+            res = self.isam.update(graph, values, stamps)
+            self._stamp_of = {key: t for key, t in self._stamp_of.items() if t >= k - self.marg_lag}
+        else:
+            res = self.isam.update(graph, values)
         n_extra = cfg.extra_updates + (cfg.warmup_extra if self.n_frames_done < cfg.warmup_frames else 0)
         for _ in range(n_extra):
+            # Bare call on either object: an extra GN pass that expires nothing.
             self.isam.update()
         if gnc_on and reweight:
+            # GNC needs the per-update factor indices, which only gtsam.ISAM2Result
+            # carries; the marg_lag + GNC combination is rejected at construction.
+            assert isinstance(res, gtsam.ISAM2Result), "GNC requires plain gtsam.ISAM2 (not marg_lag)"
             self._gnc_reweight(reweight, list(res.getNewFactorsIndices()), p_k)
 
         T_k = self.isam.calculateEstimatePose3(p_k).matrix()
@@ -416,7 +645,7 @@ class ISAM2FlowTracker:
             f"where the NaN surfaced, not the cause.")
 
         assert self.last_out_idx is not None and self.T_chain is not None
-        if n_in_graph > 0:
+        if n_obs > 0:
             T_last_now = self.isam.calculateEstimatePose3(gtsam.symbol("p", self.last_out_idx)).matrix()
             T_rel_now = np.linalg.inv(T_last_now) @ T_k
             self.T_rel_prev = T_rel_now
@@ -425,6 +654,14 @@ class ISAM2FlowTracker:
         self.T_chain = self.T_chain @ T_rel_now
         self.last_out_idx = k
         self.n_frames_done += 1
+
+        # marg_lag: the Values is already cached by the readouts above; unbounded: nothing is ever removed
+        live_vars = (self.isam.calculateEstimate().size() if self.marg_lag
+                     else len(self.pose_keys) + self.next_lm_id)
+        self.stats.append(dict(frame=k, live_vars=live_vars, n_tracks=len(surviving),
+                               n_in_graph=n_in_graph, n_kf_obs=n_kf,
+                               kf_idx=(data.kf.kf_idx if data.kf is not None else -1),
+                               ms=(time.perf_counter() - t_start) * 1e3))
 
         return _matrix_to_se3(self.T_chain if cfg.readout == "chain" else T_k)
 
@@ -470,6 +707,7 @@ class ISAM2FlowTracker:
             else:
                 g.add(make_pose_to_point_factor(pk, lk, o, gtsam.noiseModel.Gaussian.Covariance(cw)))
         res = self.isam.update(g, gtsam.Values(), remove)
+        assert isinstance(res, gtsam.ISAM2Result), "GNC requires plain gtsam.ISAM2 (not marg_lag)"
         fresh = list(res.getNewFactorsIndices())
         assert len(fresh) == len(rows), f"factor index drift {len(fresh)} != {len(rows)}"
         return [(fresh[j], pk, lk, o, c) for j, (_, pk, lk, o, c) in enumerate(rows)]
@@ -518,6 +756,18 @@ class ISAM2_Graph(IOptimizer[ISAM2_GraphInput, dict, ISAM2_GraphOutput]):
                        observations: torch.Tensor | None = None, edges: torch.Tensor | None = None) -> ISAM2_GraphInput:
         frame2opt = global_map.frames[frame_idx]
         obs = global_map.get_frame2match(frame2opt)
+        kf_rows = global_map.frame2kfmatch.project(frame2opt.index)
+        kf: ISAM2_KeyframeRows | None = None
+        if kf_rows.numel() > 0:
+            kf_obs = global_map.kf_match[kf_rows]
+            kf = ISAM2_KeyframeRows(
+                kf_idx=int(global_map.kfmatch2frame1.project(kf_rows[:1])[0].item()),
+                pixel1_uv=kf_obs.data["pixel1_uv"].clone(),
+                pixel2_uv=kf_obs.data["pixel2_uv"].clone(),
+                pixel2_d=kf_obs.data["pixel2_d"].reshape(-1).clone(),
+                pixel2_d_cov=kf_obs.data["pixel2_d_cov"].reshape(-1).clone(),
+                pixel2_uv_cov=kf_obs.data["pixel2_uv_cov"].clone(),
+            )
         return ISAM2_GraphInput(
             frame_idx=int(frame_idx.item()),
             from_idx=int(frame_idx.item()) - 1,
@@ -531,6 +781,7 @@ class ISAM2_Graph(IOptimizer[ISAM2_GraphInput, dict, ISAM2_GraphOutput]):
             pixel2_d_cov=obs.data["pixel2_d_cov"].reshape(-1).clone(),
             pixel1_uv_cov=obs.data["pixel1_uv_cov"].clone(),
             pixel2_uv_cov=obs.data["pixel2_uv_cov"].clone(),
+            kf=kf,
         )
 
     @staticmethod
@@ -553,6 +804,32 @@ class ISAM2_Graph(IOptimizer[ISAM2_GraphInput, dict, ISAM2_GraphOutput]):
             return
         self._last_written_frame = result.frame_idx
         global_map.frames.data["pose"][result.frame_idx] = result.pose_estimate
+
+    def _tracker(self) -> "ISAM2FlowTracker | None":
+        return self.context["tracker"] if isinstance(self.context, dict) else None
+
+    def frame_stats(self) -> dict[str, np.ndarray] | None:
+        """Per-frame backend stats as column arrays (frame, live_vars, n_tracks,
+        n_in_graph, ms), or None before the first step."""
+        tracker = self._tracker()
+        if tracker is None or not tracker.stats:
+            return None
+        return {key: np.array([s[key] for s in tracker.stats]) for key in tracker.stats[0]}
+
+    def terminate(self):
+        super().terminate()
+        tracker = self._tracker()
+        if tracker is None or not tracker.stats:
+            return
+        lv = np.array([s["live_vars"] for s in tracker.stats])
+        ms = np.array([s["ms"] for s in tracker.stats])
+        # the plateau is the result: unbounded climbs with the frame index, marginalized levels off
+        Logger.write("info",
+            f"ISAM2_Graph marg_lag={tracker.marg_lag}: live variables peak {lv.max()}, "
+            f"last {lv[-1]}, median over the last half {np.median(lv[len(lv) // 2:]):.0f} | "
+            f"step ms median {np.median(ms):.0f}, p90 {np.percentile(ms, 90):.0f}, "
+            f"max {ms.max():.0f} | {tracker.next_lm_id} landmarks minted over {len(lv)} frames"
+            f" | {tracker.n_kf_total} keyframe re-observations")
 
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
@@ -590,8 +867,13 @@ class ISAM2_Graph(IOptimizer[ISAM2_GraphInput, dict, ISAM2_GraphOutput]):
             "gnc_sanity_metres" : lambda v: isinstance(v, (int, float)),
             "gnc_sanity_rel"    : lambda v: isinstance(v, (int, float)),
             "gnc_damped"        : lambda b: isinstance(b, bool),
+            "marg_lag"          : lambda v: isinstance(v, int) and v >= 0,
+            "marg_dead_at_birth": lambda b: isinstance(b, bool),
+            "marg_touch_sigma"  : lambda v: isinstance(v, (int, float)) and v >= 0.,
+            "kf_cov_scale"      : lambda v: isinstance(v, (int, float)) and v > 0.,
         }
         for key, check in optional_spec.items():
             if hasattr(config, key):
                 spec[key] = check
         cls._enforce_config_spec(config, spec)
+        _check_marg_lag(getattr(config, "marg_lag", 0), getattr(config, "gnc_rounds", 0))

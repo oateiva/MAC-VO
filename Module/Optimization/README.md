@@ -370,6 +370,25 @@ Huber-downweighted cliques throw `IndeterminantLinearSystemException` under
 Cholesky. Frames the odometry skips (`VOLostTrack`) are coasted in with a weak
 between-factor at the previous relative motion.
 
+### Keyframe re-observations (`Odometry.keyframe_tracker`)
+
+Optional, `ISAM2_Graph` only. A keyframe *policy* (`Module/KeyframeTracker.py`,
+port of learningUAVO's `keyframe_selection.py`: `EveryN`, `Parallax`,
+`Covisibility`, `BaselineRatio`, `AnyOf`) holds one reference frame. Every frame
+k the odometry runs one extra flow inference keyframe -> k
+(`IFrontend.estimate_match`), carries the keyframe's registered keypoints (the
+pixel1 rows of pair kf -> kf+1) into frame k and stores the survivors in
+`VisualMap.kf_match` (`kfmatch2point` = the point those rows born). The backend
+associates each row to the landmark that integer pixel resolved to when pair
+(kf, kf+1) was stepped and adds a pose-to-point factor `p_k -> l` on that SAME
+key — an extra, non-consecutive connection whose variance is quantization + one
+flow step instead of the accumulated chain variance. The chain observation of the
+same landmark is kept; `kf_cov_scale` inflates the keyframe factors (both share
+the frame-k depth sample). Under `marg_lag` the keyframe pose and its
+re-observed landmarks are re-stamped every frame; already-marginalized landmarks
+are skipped. `frame_stats()` gains `n_kf_obs` and `kf_idx`. Requires
+`keyframe: AllKeyframe`. Config: `Config/Experiment/MACVO/ISAM2/MACVO_ISAM2_p2p_kf.yaml`.
+
 ## `GEDF_PGO` (scan-to-map against an online distance-field map)
 
 Builds a G-EDF map from MAC-VO's own landmarks during the run (or loads a

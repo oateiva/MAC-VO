@@ -84,6 +84,15 @@ class IFrontend(ABC, ConfigTestableSubclass):
         """
         ...
 
+    def estimate_match(self, frame_a: CameraData, frame_b: CameraData) -> IMatcher.Output:
+        """
+        Optical flow (and covariance) of the left camera a -> b ONLY, for an arbitrary,
+        possibly non-consecutive frame pair - the keyframe -> current inference of
+        `MACVO._track_keyframe`. Must be called after `estimate_pair` has returned
+        (CUDA-graph frontends replay into shared static buffers).
+        """
+        raise NotImplementedError(f"{self.__class__.__name__} does not implement estimate_match")
+
     def estimate_triplet(self, frame_t1: CameraData, frame_t2: CameraData) -> tuple[IDepth.Output, IDepth.Output, IMatcher.Output]:
         """
         Given two frames with imageL, imageR with shape of Bx3xHxW, return `output` of
@@ -201,6 +210,16 @@ class ParallelEstimateMixin:
         s.synchronize()
         return result
 
+    def _on_match_stream(self, fn: Callable[[], _B], parallel: bool) -> _B:
+        """Run a flow-only inference on the stream the matcher's transients already live
+        on: the `_parallel` matcher slot when the frontend runs parallel, the current
+        stream otherwise. The caching allocator pools blocks per stream, so a flow
+        inference on any OTHER stream adds a pool the size of the flow model's
+        transients (measured: reserved VRAM 24 -> 37 GB on a 24 GB card, WDDM paging)."""
+        if self._streams is None or not parallel:
+            return fn()
+        return self._run_on_stream(self._streams[1], fn)  # type: ignore[return-value]
+
     def _parallel(self, fn_a: Callable[[], _A], fn_b: Callable[[], _B]) -> tuple[_A, _B]:
         """
         Run fn_a and fn_b concurrently on two threads, each on its own (reused)
@@ -240,6 +259,12 @@ class FrontendCompose(ParallelEstimateMixin, IFrontend):
 
     def estimate_depth(self, frame: CameraData) -> IDepth.Output:
         return self.depth.estimate(frame)
+
+    @Timer.cpu_timeit("Frontend.estimate_match")
+    @Timer.gpu_timeit("Frontend.estimate_match")
+    def estimate_match(self, frame_a: CameraData, frame_b: CameraData) -> IMatcher.Output:
+        return self._on_match_stream(lambda: self.match.estimate(frame_a, frame_b),
+                                     getattr(self.config, "parallel", False))
 
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
@@ -324,6 +349,16 @@ class FlowFormerCovFrontend(IFrontend):
             self.inference_2_depth(est_flow[0:1], est_cov[0:1], frame_t2, self.config.enforce_positive_disparity),
             self.inference_2_match(est_flow[1:2], est_cov[1:2])
         )
+
+    @Timer.cpu_timeit("Frontend.estimate_match")
+    @Timer.gpu_timeit("Frontend.estimate_match")
+    @torch.inference_mode()
+    def estimate_match(self, frame_a: CameraData, frame_b: CameraData) -> IMatcher.Output:
+        # Eager B=1 path (the CUDAGraph subclass captures the B=2 estimate_pair batch only).
+        input_A = frame_a.imageL.to(device=self.config.device)
+        input_B = frame_b.imageL.to(device=self.config.device)
+        est_flow, est_cov = self.model.inference(input_A, input_B)
+        return self.inference_2_match(est_flow.float(), est_cov.float())
 
     @torch.inference_mode()
     def estimate_triplet(self, frame_t1: CameraData, frame_t2: CameraData) -> tuple[IDepth.Output, IDepth.Output, IMatcher.Output]:
@@ -427,6 +462,13 @@ class MonocularFrontend(ParallelEstimateMixin, IFrontend):
 
     def estimate_flowcov(self, frame_t1: CameraData, frame_t2: CameraData) -> IMatcher.Output:
         return self.match.estimate(frame_t1, frame_t2)
+
+    @Timer.cpu_timeit("Frontend.estimate_match")
+    @Timer.gpu_timeit("Frontend.estimate_match")
+    def estimate_match(self, frame_a: CameraData, frame_b: CameraData) -> IMatcher.Output:
+        # via estimate_flowcov: CUDAGraph_MonocularFrontend's captured B=1 flow graph applies
+        return self._on_match_stream(lambda: self.estimate_flowcov(frame_a, frame_b),
+                                     getattr(self.config, "parallel", True))
 
     @property
     def provide_cov(self) -> tuple[bool, bool]:

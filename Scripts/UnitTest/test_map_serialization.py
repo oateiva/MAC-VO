@@ -61,11 +61,26 @@ def push_pair(vmap: VisualMap, prev_idx: torch.Tensor, n_kp: int, seed: int) -> 
     return frame_idx
 
 
-def build_map(n_pairs: int = 3, n_kp: int = 4) -> VisualMap:
+def push_keyframe_rows(vmap: VisualMap, kf_idx: int, frame_idx: torch.Tensor, n_kp: int, seed: int) -> torch.Tensor:
+    """Mimic MACVO._observe_keyframe: keyframe -> frame_idx rows pointing at the
+    points born by the keyframe's own pair (the first n_kp points here)."""
+    kf_obs = make_matches(n_kp, seed)
+    n_orig = len(vmap.kf_match)
+    kfm_idx = vmap.kf_match.push(kf_obs)
+    vmap.kfmatch2point.set(kfm_idx, torch.arange(n_kp))
+    vmap.kfmatch2frame1.set(kfm_idx, torch.full((n_kp,), kf_idx, dtype=torch.long))
+    vmap.kfmatch2frame2.set(kfm_idx, torch.full((n_kp,), int(frame_idx.item()), dtype=torch.long))
+    vmap.frame2kfmatch.add(frame_idx, torch.tensor([n_orig]), torch.tensor([n_kp]))
+    return kfm_idx
+
+
+def build_map(n_pairs: int = 3, n_kp: int = 4, keyframe_rows: bool = True) -> VisualMap:
     vmap = VisualMap()
     frame_idx = vmap.frames.push(make_frame(0))
     for p in range(n_pairs):
         frame_idx = push_pair(vmap, frame_idx, n_kp, seed=p)
+        if keyframe_rows and p >= 1:
+            push_keyframe_rows(vmap, 0, frame_idx, n_kp, seed=100 + p)
     return vmap
 
 
@@ -84,8 +99,9 @@ def test_roundtrip_preserves_data():
     assert len(loaded.frames) == len(vmap.frames)
     assert len(loaded.match) == len(vmap.match)
     assert len(loaded.points) == len(vmap.points)
+    assert len(loaded.kf_match) == len(vmap.kf_match) > 0
     raw = lambda t: t.tensor if hasattr(t, "tensor") else t
-    for store in ("frames", "match", "points"):
+    for store in ("frames", "match", "points", "kf_match"):
         for key, tensor in getattr(vmap, store).data.items():
             expected, got = raw(tensor), raw(getattr(loaded, store).data[key])
             assert got.dtype == expected.dtype, f"{store}/{key} dtype"
@@ -109,6 +125,16 @@ def test_roundtrip_preserves_edges():
     assert torch.equal(vmap.match2frame2.project(all_matches),
                        loaded.match2frame2.project(all_matches))
 
+    for k in range(len(vmap.frames)):
+        idx = torch.tensor([k])
+        original = vmap.get_frame2kfmatch(vmap.frames[idx])
+        restored = loaded.get_frame2kfmatch(loaded.frames[idx])
+        assert torch.equal(original.index, restored.index)
+        assert torch.equal(vmap.get_kfmatch2point(original).index,
+                           loaded.get_kfmatch2point(restored).index)
+        assert torch.equal(vmap.get_kfmatch2frame1(original).index,
+                           loaded.get_kfmatch2frame1(restored).index)
+
 
 def test_deserialized_map_accepts_pushes():
     """Edges must be re-registered on the NEW stores, or pushes after loading
@@ -121,6 +147,25 @@ def test_deserialized_map_accepts_pushes():
     obs = loaded.get_frame2match(loaded.frames[new_frame_idx])
     assert len(obs) == 4
     assert len(loaded.get_match2point(obs)) == 4
+
+    push_keyframe_rows(loaded, 0, new_frame_idx, n_kp=3, seed=7)
+    kf_obs = loaded.get_frame2kfmatch(loaded.frames[new_frame_idx])
+    assert len(kf_obs) == 3
+    assert torch.equal(loaded.get_kfmatch2frame1(kf_obs).index, torch.zeros(3, dtype=torch.long))
+
+
+def test_legacy_npz_without_keyframe_store_loads():
+    """Maps written before kf_match existed carry no kf_match/ keys: they must
+    load with an empty keyframe store that still accepts pushes."""
+    vmap = build_map(keyframe_rows=False)
+    legacy = {k: v for k, v in vmap.serialize().items()
+              if not (k.startswith("kf_match/") or "kfmatch" in k)}
+    loaded = VisualMap.deserialize(legacy)
+    assert len(loaded.kf_match) == 0
+    assert len(loaded.get_frame2kfmatch(loaded.frames[torch.tensor([1])])) == 0
+    last = torch.tensor([len(loaded.frames) - 1])
+    push_keyframe_rows(loaded, 0, last, n_kp=2, seed=3)
+    assert len(loaded.get_frame2kfmatch(loaded.frames[last])) == 2
 
 
 def test_deserialize_missing_prefix_raises():

@@ -15,9 +15,9 @@ gtsam = pytest.importorskip("gtsam")
 
 import pypose as pp
 
-from Module.Map import VisualMap, FrameNode
+from Module.Map import VisualMap, FrameNode, MatchObs, PointNode
 from Module.Optimization.GTSAM.ISAM2Optimizer import (
-    ISAM2FlowTracker, ISAM2_Graph, ISAM2_GraphInput, ISAM2_GraphOutput,
+    ISAM2FlowTracker, ISAM2_Graph, ISAM2_GraphInput, ISAM2_GraphOutput, ISAM2_KeyframeRows,
     _matrix_to_se3, _NATIVE_P2P, gnc_weights, make_native_point_factor,
     make_native_pose_to_point_factor)
 from Utility.GTSAM_Utils import make_pose_to_point_factor
@@ -87,6 +87,31 @@ def make_job(k: int, uv1: np.ndarray, d1: np.ndarray, uv2: np.ndarray, d2: np.nd
         pixel1_uv_cov=uv_cov.clone(),
         pixel2_uv_cov=uv_cov.clone(),
     )
+
+
+def make_kf_rows(kf: int, k: int, lms: np.ndarray, uv_noise: float = 0.0,
+                 rng: np.random.Generator | None = None) -> ISAM2_KeyframeRows:
+    """Keyframe rows kf -> k with the odometry's contract: pixel1 is the ROUNDED
+    keyframe projection (the pixel1 of pair kf -> kf+1), pixel2 the flow-carried
+    position in frame k."""
+    uv1, _ = observe(lms, kf)
+    uv2, d2 = observe(lms, k)
+    if uv_noise > 0 and rng is not None:
+        uv2 = uv2 + rng.normal(scale=uv_noise, size=uv2.shape)
+    m = uv1.shape[0]
+    return ISAM2_KeyframeRows(
+        kf_idx=kf,
+        pixel1_uv=torch.from_numpy(np.rint(uv1)).float(),
+        pixel2_uv=torch.from_numpy(uv2).float(),
+        pixel2_d=torch.from_numpy(d2).float(),
+        pixel2_d_cov=torch.full((m,), 0.01),
+        pixel2_uv_cov=torch.tensor([0.09, 0.09, 0.0]).repeat(m, 1),
+    )
+
+
+def with_kf(job: ISAM2_GraphInput, kf: int, lms: np.ndarray, **kw) -> ISAM2_GraphInput:
+    job.kf = make_kf_rows(kf, job.frame_idx, lms, **kw)
+    return job
 
 
 def chained_jobs(n_pairs: int, lms: np.ndarray) -> list[ISAM2_GraphInput]:
@@ -254,6 +279,137 @@ def test_native_p2p_matches_custom():
         assert np.allclose(b_n, b_p, atol=1e-9)
 
 
+# ---- keyframe re-observations --------------------------------------------------
+
+def test_keyframe_rows_reuse_landmark_keys():
+    """Keyframe 0 re-observed from frames 2..4: every row must land on the landmark
+    the keyframe pixel resolved to when pair (0,1) was stepped - no new landmarks,
+    one extra p_k -> l factor per row, keyframe pose stamped alongside."""
+    lms = landmarks()
+    tracker = ISAM2FlowTracker(make_cfg())
+    jobs = chained_jobs(4, lms)
+    tracker.step(jobs[0])                                     # builds frame_lm[0]
+    lm_of_kf_pixel = dict(tracker.frame_lm[0])
+    assert len(lm_of_kf_pixel) == len(lms)
+    for job in jobs[1:]:
+        pose = tracker.step(with_kf(job, 0, lms))
+        err = np.linalg.norm(_translation(pose) - pose_gt(job.frame_idx)[:3, 3])
+        assert err < 0.02, f"frame {job.frame_idx}: translation error {err:.4f} m"
+        assert tracker.stats[-1]["n_kf_obs"] == len(lms)
+        assert tracker.stats[-1]["kf_idx"] == 0
+    assert tracker.next_lm_id == len(lms)                     # nothing minted by keyframe rows
+    assert tracker.frame_lm[0] == lm_of_kf_pixel              # table untouched, still live
+    assert tracker.n_kf_total == 3 * len(lms)
+    # the graph holds one chain factor AND one keyframe factor on p_k per landmark
+    fg = tracker.isam.getFactorsUnsafe()
+    p3 = gtsam.symbol("p", 3)
+    on_p3 = [fg.at(i) for i in range(fg.size()) if fg.at(i) is not None and p3 in fg.at(i).keys()]
+    assert len(on_p3) == 2 * len(lms)                          # motion prior off (sigma 0)
+
+
+def test_keyframe_rows_ignore_unknown_pixels_and_stale_tables():
+    lms = landmarks()
+    tracker = ISAM2FlowTracker(make_cfg())
+    jobs = chained_jobs(3, lms)
+    tracker.step(jobs[0])
+    # rows whose keyframe pixel never resolved to a landmark are skipped
+    job = with_kf(jobs[1], 0, lms)
+    assert job.kf is not None
+    job.kf.pixel1_uv = job.kf.pixel1_uv + 7.0
+    tracker.step(job)
+    assert tracker.stats[-1]["n_kf_obs"] == 0
+    # a keyframe with no table (its pair never reached the backend) adds nothing, no exception
+    tracker.step(with_kf(jobs[2], 99, lms))
+    assert tracker.stats[-1]["n_kf_obs"] == 0
+    assert tracker.next_lm_id == len(lms)
+
+
+def test_keyframe_rows_help_against_drifting_chain():
+    """Chain pixel2 carries a random walk (accumulated flow error); the drift-free
+    keyframe re-observation must not make the readout worse and should help."""
+    lms = landmarks()
+    n_pairs = 8
+    errors = {}
+    for use_kf in (False, True):
+        rng = np.random.default_rng(11)
+        tracker = ISAM2FlowTracker(make_cfg(warmup_frames=0))
+        uv_prev, d_prev = observe(lms, 0)
+        uv1, d1 = np.rint(uv_prev), d_prev
+        walk = np.zeros_like(uv_prev)
+        err = []
+        for k in range(1, n_pairs + 1):
+            uv2, d2 = observe(lms, k)
+            walk += rng.normal(scale=0.8, size=walk.shape)
+            job = make_job(k, uv1, d1, uv2 + walk, d2)
+            if use_kf and k >= 2:
+                job = with_kf(job, 0, lms)
+            pose = tracker.step(job)
+            err.append(np.linalg.norm(_translation(pose) - pose_gt(k)[:3, 3]))
+            uv1, d1 = np.rint(uv2 + walk), d2
+        errors[use_kf] = float(np.mean(err))
+    assert errors[True] <= errors[False] * 1.05, errors
+
+
+def test_keyframe_pose_survives_marg_lag_until_keyframe_moves():
+    """Under marg_lag the keyframe pose is re-stamped every frame it anchors rows
+    (inverse of test_marg_lag_plateaus: p_0 must NOT expire), and expires once the
+    keyframe moves on. Eight pairs: the camera closes on the landmark plane at frame 10
+    and rows start failing the depth gates from frame 9."""
+    pytest.importorskip("gtsam_unstable")
+    lms = landmarks()
+    tracker = ISAM2FlowTracker(make_cfg(marg_lag=2, warmup_frames=0))
+    jobs = chained_jobs(8, lms)
+    tracker.step(jobs[0])
+    for job in jobs[1:5]:
+        pose = tracker.step(with_kf(job, 0, lms))
+        assert np.linalg.norm(_translation(pose) - pose_gt(job.frame_idx)[:3, 3]) < 0.05
+        assert tracker.stats[-1]["n_kf_obs"] == len(lms)
+    est = tracker.isam.calculateEstimate()
+    assert est.exists(gtsam.symbol("p", 0))                  # keyframe kept alive (stamped 5)
+    assert not est.exists(gtsam.symbol("p", 2))              # intermediate poses still expire
+    for job in jobs[5:]:                                     # keyframe moves to frame 4
+        tracker.step(with_kf(job, 4, lms))
+        assert tracker.stats[-1]["n_kf_obs"] == len(lms)
+    est = tracker.isam.calculateEstimate()
+    assert not est.exists(gtsam.symbol("p", 0))              # old keyframe expired (5 < 8 - 2)
+    assert est.exists(gtsam.symbol("p", 4))
+    assert 0 not in tracker.frame_lm and 4 in tracker.frame_lm
+
+
+def test_keyframe_rows_under_gnc():
+    lms = landmarks()
+    tracker = ISAM2FlowTracker(make_cfg(factor_type="bearingrange", kernel="none",
+                                        gnc_rounds=3, gnc_c=0.4, gnc_mu_rate=5.0))
+    jobs = chained_jobs(3, lms)
+    tracker.step(jobs[0])
+    for job in jobs[1:]:
+        pose = tracker.step(with_kf(job, 0, lms))
+        assert np.isfinite(pose.numpy()).all()
+    assert tracker.n_gnc_rollback == 0
+    assert tracker.n_kf_total == 2 * len(lms)
+
+
+def test_frame_stats_rectangular_with_mixed_keyframe_frames():
+    lms = landmarks()
+    optimizer = ISAM2_Graph(make_cfg())
+    jobs = chained_jobs(3, lms)
+    optimizer.start_optimize(jobs[0])
+    optimizer.start_optimize(with_kf(jobs[1], 0, lms))
+    optimizer.start_optimize(jobs[2])
+    stats = optimizer.frame_stats()
+    assert stats is not None
+    assert list(stats["n_kf_obs"]) == [0, len(lms), 0]
+    assert list(stats["kf_idx"]) == [-1, 0, -1]
+    assert all(len(v) == 3 for v in stats.values())
+
+
+def test_kf_cov_scale_config():
+    ISAM2_Graph.is_valid_config(make_cfg(kf_cov_scale=4.0))
+    with pytest.raises(ValueError):
+        ISAM2_Graph.is_valid_config(make_cfg(kf_cov_scale=0.0))
+    assert ISAM2FlowTracker(make_cfg(kf_cov_scale=4.0)).kf_cov_scale == 4.0
+
+
 def make_map(n_frames: int) -> VisualMap:
     vmap = VisualMap()
     for i in range(n_frames):
@@ -266,6 +422,60 @@ def make_map(n_frames: int) -> VisualMap:
             "baseline"   : torch.tensor([0.1]),
         }))
     return vmap
+
+
+def _match_rows(n: int, uv1: np.ndarray, uv2: np.ndarray, d2: np.ndarray) -> MatchObs:
+    one = lambda v: torch.full((n, 1), v)
+    return MatchObs.init({
+        "pixel1_uv": torch.from_numpy(uv1).float(), "pixel2_uv": torch.from_numpy(uv2).float(),
+        "pixel1_d": one(3.0), "pixel2_d": torch.from_numpy(d2).float().unsqueeze(-1),
+        "pixel1_disp": one(-1.), "pixel2_disp": one(-1.),
+        "pixel1_disp_cov": one(-1.), "pixel2_disp_cov": one(-1.),
+        "pixel1_uv_cov": torch.tensor([0.09, 0.09, 0.0]).repeat(n, 1),
+        "pixel2_uv_cov": torch.tensor([0.04, 0.04, 0.0]).repeat(n, 1),
+        "pixel1_d_cov": one(0.01), "pixel2_d_cov": one(0.02),
+        "obs1_covTc": torch.eye(3).double().repeat(n, 1, 1),
+        "obs2_covTc": torch.eye(3).double().repeat(n, 1, 1),
+    })
+
+
+def test_get_graph_data_reads_keyframe_rows():
+    """The odometry stores keyframe rows in VisualMap.kf_match with kfmatch2frame1 =
+    keyframe; get_graph_data must surface them as ISAM2_GraphInput.kf (None when absent)."""
+    lms = landmarks()
+    optimizer = ISAM2_Graph(make_cfg())
+    vmap = make_map(4)
+    n = len(lms)
+    uv0, _ = observe(lms, 0)
+    uv3, d3 = observe(lms, 3)
+    uv2, d2 = observe(lms, 2)
+    frame3 = torch.tensor([3])
+
+    # consecutive pair (2, 3) as MACVO.run_pair registers it
+    n_orig = len(vmap.match)
+    point_idx = vmap.points.push(PointNode.init({
+        "pos_Tw": torch.zeros((n, 3)), "cov_Tw": torch.eye(3).double().repeat(n, 1, 1),
+        "color": torch.zeros((n, 3), dtype=torch.uint8)}))
+    match_idx = vmap.match.push(_match_rows(n, np.rint(uv2), uv3, d3))
+    vmap.match2point.set(match_idx, point_idx)
+    vmap.frame2match.add(torch.tensor([2]), torch.tensor([n_orig]), torch.tensor([n]))
+    vmap.frame2match.add(frame3, torch.tensor([n_orig]), torch.tensor([n]))
+    assert optimizer.get_graph_data(vmap, frame3).kf is None
+
+    # keyframe rows (0 -> 3)
+    kf_idx = vmap.kf_match.push(_match_rows(n, np.rint(uv0), uv3, d3))
+    vmap.kfmatch2point.set(kf_idx, point_idx)
+    vmap.kfmatch2frame1.set(kf_idx, torch.zeros(n, dtype=torch.long))
+    vmap.kfmatch2frame2.set(kf_idx, torch.full((n,), 3, dtype=torch.long))
+    vmap.frame2kfmatch.add(frame3, torch.tensor([0]), torch.tensor([n]))
+
+    data = optimizer.get_graph_data(vmap, frame3)
+    assert data.frame_idx == 3 and data.from_idx == 2
+    assert data.kf is not None and data.kf.kf_idx == 0
+    assert data.kf.pixel1_uv.shape == (n, 2) and data.kf.pixel2_d.shape == (n,)
+    assert torch.allclose(data.kf.pixel1_uv, torch.from_numpy(np.rint(uv0)).float())
+    assert torch.allclose(data.kf.pixel2_d_cov, torch.full((n,), 0.02))
+    assert data.pixel1_uv.shape == (n, 2)                     # chain rows untouched
 
 
 def test_write_graph_data_is_idempotent():
@@ -295,3 +505,203 @@ def test_config_validation():
         ISAM2_Graph.is_valid_config(make_cfg(factor_type="reprojection"))
     with pytest.raises(ValueError):
         ISAM2_Graph.is_valid_config(make_cfg(readout="smoothed"))
+
+
+# ---- fixed-lag marginalization (marg_lag) -------------------------------------
+
+def _translation(pose: torch.Tensor) -> np.ndarray:
+    return pp.SE3(pose.double()).matrix().numpy().reshape(4, 4)[:3, 3]
+
+
+def test_marg_lag_zero_is_plain_isam2():
+    assert type(ISAM2FlowTracker(make_cfg()).isam) is gtsam.ISAM2
+    pytest.importorskip("gtsam_unstable")
+    from Module.Optimization.GTSAM.Marginalization import FixedLagIsam2
+    assert isinstance(ISAM2FlowTracker(make_cfg(marg_lag=3)).isam, FixedLagIsam2)
+
+
+def test_marg_lag_plateaus_and_expires_old_poses():
+    pytest.importorskip("gtsam_unstable")
+    lms = landmarks()
+    tracker = ISAM2FlowTracker(make_cfg(marg_lag=3, warmup_frames=0))
+    for job in chained_jobs(8, lms):        # the camera reaches the landmark plane at frame 10
+        pose = tracker.step(job)
+        err = np.linalg.norm(_translation(pose) - pose_gt(job.frame_idx)[:3, 3])
+        assert err < 0.05, f"frame {job.frame_idx}: translation error {err:.4f} m"
+
+    est = tracker.isam.calculateEstimate()
+    assert not est.exists(gtsam.symbol("p", 0))          # expired
+    assert est.exists(gtsam.symbol("p", 7)) and est.exists(gtsam.symbol("p", 8))
+    live = [s["live_vars"] for s in tracker.stats]
+    assert live[-1] == live[-4] == 12 + 4, f"live variables did not plateau at 12 landmarks + 4 poses: {live}"
+    assert live[-1] < len(tracker.pose_keys) + tracker.next_lm_id
+
+
+def test_marg_lag_huge_reproduces_unbounded():
+    """Lag 200 never expires anything over 5 pairs, so every readout must match
+    the unbounded arm — proof that the extra updates run through the smoother
+    itself (getISAM2() is a copy; wired that way the arms would diverge)."""
+    pytest.importorskip("gtsam_unstable")
+    lms = landmarks()
+    poses = {}
+    for lag in (0, 200):
+        tracker = ISAM2FlowTracker(make_cfg(marg_lag=lag))
+        poses[lag] = [tracker.step(job).numpy() for job in chained_jobs(5, lms)]
+    for a, b in zip(poses[0], poses[200]):
+        assert np.allclose(a, b, atol=1e-6)
+
+
+def test_lost_track_gap_coasts_under_marg_lag():
+    """Pairs (1,2)..(3,4) never reach the backend; pair (4,5) coasts p_4 in and
+    the readout still reads p_1, which the gap rule re-stamps across the jump
+    (the clock moves 1 -> 5, so with lag 2 an un-refreshed p_1 would expire).
+    The coast itself is the same one-step extrapolation as the unbounded arm."""
+    pytest.importorskip("gtsam_unstable")
+    lms = landmarks()
+    poses = {}
+    for lag in (0, 2):
+        tracker = ISAM2FlowTracker(make_cfg(marg_lag=lag, warmup_frames=0))
+        tracker.step(chained_jobs(1, lms)[0])
+        uv1, d1 = observe(lms, 4)
+        uv2, d2 = observe(lms, 5)
+        poses[lag] = tracker.step(make_job(5, np.rint(uv1), d1, uv2, d2)).numpy()
+        assert tracker.pose_keys == {0, 1, 4, 5}
+    est = tracker.isam.calculateEstimate()
+    assert est.exists(gtsam.symbol("p", 1)) and not est.exists(gtsam.symbol("p", 0))
+    assert np.isfinite(poses[2]).all()
+    assert np.allclose(poses[0], poses[2], atol=1e-4)
+
+
+def test_marg_lag_config_rules():
+    ISAM2_Graph.is_valid_config(make_cfg(marg_lag=0))
+    ISAM2_Graph.is_valid_config(make_cfg(marg_lag=5))
+    for bad in (dict(marg_lag=1), dict(marg_lag=-1), dict(marg_lag=2.5),
+                dict(marg_lag=3, gnc_rounds=2, gnc_c=0.4, gnc_mu_rate=5.0)):
+        with pytest.raises(ValueError):
+            ISAM2_Graph.is_valid_config(make_cfg(**bad))
+    with pytest.raises(ValueError):
+        ISAM2FlowTracker(make_cfg(marg_lag=1))
+
+
+# ---- gtsam_unstable semantics the design rests on -----------------------------
+
+def _fixedlag(lag: int):
+    from Module.Optimization.GTSAM.Marginalization import FixedLagIsam2
+    p = gtsam.ISAM2Params()
+    p.setRelinearizeThreshold(0.0)
+    p.relinearizeSkip = 1
+    p.setFactorization("QR")
+    return FixedLagIsam2(p, lag)
+
+
+def test_timestamp_map_tuple_insert_and_refresh():
+    pytest.importorskip("gtsam_unstable")
+    from Module.Optimization.GTSAM.Marginalization import timestamp_map
+    n6 = gtsam.noiseModel.Isotropic.Sigma(6, 0.1)
+    s = _fixedlag(3)
+    x0 = gtsam.symbol("p", 0)
+    g, v = gtsam.NonlinearFactorGraph(), gtsam.Values()
+    v.insert(x0, gtsam.Pose3())
+    g.add(gtsam.PriorFactorPose3(x0, gtsam.Pose3(), n6))
+    s.update(g, v, timestamp_map({x0: 0.0}))
+    for k in range(1, 9):
+        xk = gtsam.symbol("p", k)
+        g, v = gtsam.NonlinearFactorGraph(), gtsam.Values()
+        v.insert(xk, gtsam.Pose3(gtsam.Rot3(), gtsam.Point3(k * 1.0, 0, 0)))
+        g.add(gtsam.BetweenFactorPose3(gtsam.symbol("p", k - 1), xk,
+                                       gtsam.Pose3(gtsam.Rot3(), gtsam.Point3(1, 0, 0)), n6))
+        s.update(g, v, timestamp_map({xk: float(k), x0: float(k)}))   # x0 refreshed every frame
+    assert s.calculateEstimate().exists(x0)                           # refresh honoured
+    assert not s.calculateEstimate().exists(gtsam.symbol("p", 4))     # un-refreshed key expired
+
+
+def test_bare_update_is_real_pass_and_expires_nothing():
+    pytest.importorskip("gtsam_unstable")
+    from Module.Optimization.GTSAM.Marginalization import timestamp_map
+    n6 = gtsam.noiseModel.Isotropic.Sigma(6, 0.1)
+    s = _fixedlag(100)
+    g, v, st = gtsam.NonlinearFactorGraph(), gtsam.Values(), {}
+    x0 = gtsam.symbol("p", 0)
+    g.add(gtsam.PriorFactorPose3(x0, gtsam.Pose3(), gtsam.noiseModel.Isotropic.Sigma(6, 1e-4)))
+    for k in range(3):
+        xk = gtsam.symbol("p", k)
+        v.insert(xk, gtsam.Pose3(gtsam.Rot3.Rodrigues(0.3, 0.2, 0.1), gtsam.Point3(k * 3.0, 1.7, -2.2)))
+        st[xk] = float(k)
+        if k:
+            g.add(gtsam.BetweenFactorPose3(gtsam.symbol("p", k - 1), xk,
+                                           gtsam.Pose3(gtsam.Rot3(), gtsam.Point3(1, 0, 0)), n6))
+    s.update(g, v, timestamp_map(st))
+
+    def snap():
+        est = s.calculateEstimate()
+        return np.concatenate([est.atPose3(gtsam.symbol("p", k)).translation() for k in range(3)])
+
+    before = snap()
+    for _ in range(3):
+        s.smoother.getISAM2().update()                 # a COPY: must move nothing
+    assert np.abs(snap() - before).max() == 0.0
+    before = snap()
+    for _ in range(3):
+        s.update()                                     # bare pass: real work
+    assert np.abs(snap() - before).max() > 1e-6
+    assert s.calculateEstimate().size() == 3           # empty stamps expire nothing
+
+
+def test_index_error_becomes_marginalization_failure(monkeypatch):
+    pytest.importorskip("gtsam_unstable")
+    from Module.Optimization.GTSAM.Marginalization import MarginalizationFailure
+    s = _fixedlag(5)
+
+    def boom(*_):
+        raise IndexError("Requested variable 'p7' is not in this VectorValues")
+    monkeypatch.setattr(s, "smoother", SimpleNamespace(update=boom))   # pybind methods are read-only
+    with pytest.raises(MarginalizationFailure, match="marg_lag"):
+        s.update()
+
+
+# ---- marginalization mitigations -----------------------------------------------
+
+def test_marg_touch_is_information_free():
+    """A 1e4 m prior on every expiring key must not move the readout (it exists
+    only to force the clique through the constrained re-elimination)."""
+    pytest.importorskip("gtsam_unstable")
+    lms = landmarks()
+    poses = {}
+    for sigma in (0.0, 1e4):
+        tracker = ISAM2FlowTracker(make_cfg(marg_lag=3, warmup_frames=0, marg_touch_sigma=sigma))
+        poses[sigma] = [tracker.step(job).numpy() for job in chained_jobs(8, lms)]
+        assert not tracker.isam.calculateEstimate().exists(gtsam.symbol("p", 0))
+    for a, b in zip(poses[0.0], poses[1e4]):
+        assert np.allclose(a, b, atol=1e-4)
+
+
+def test_marg_dead_at_birth_expires_dead_landmark_early():
+    """A track that dies is re-stamped to its birth frame: once that frame is
+    outside the window the landmark is gone, while the same landmark lingers
+    under the plain policy until its own last stamp expires."""
+    pytest.importorskip("gtsam_unstable")
+    lms = landmarks()
+    jobs = chained_jobs(8, lms)
+    gone = {}
+    for dab in (False, True):
+        tracker = ISAM2FlowTracker(make_cfg(marg_lag=3, warmup_frames=0, marg_dead_at_birth=dab))
+        for job in jobs[:4]:
+            tracker.step(job)
+        victim = tracker.tracks[(int(np.rint(jobs[4].pixel1_uv[0, 0])), int(np.rint(jobs[4].pixel1_uv[0, 1])))].lm_key
+        for job in jobs[4:]:                        # drop row 0 from now on: its track dies at frame 5
+            j = make_job(job.frame_idx, job.pixel1_uv.numpy()[1:], job.pixel1_d.numpy()[1:],
+                         job.pixel2_uv.numpy()[1:], job.pixel2_d.numpy()[1:])
+            tracker.step(j)
+            if not tracker.isam.calculateEstimate().exists(victim):
+                gone[dab] = job.frame_idx
+                break
+    assert gone[True] == 5                          # born at frame 0, already outside the window: leaves at once
+    assert gone[False] == 8                         # last stamped 4 (lag 3): survives until the clock passes 7
+
+
+def test_marg_mitigation_config_rules():
+    ISAM2_Graph.is_valid_config(make_cfg(marg_lag=5, marg_dead_at_birth=True, marg_touch_sigma=1e4))
+    with pytest.raises(ValueError):
+        ISAM2_Graph.is_valid_config(make_cfg(marg_lag=5, marg_dead_at_birth="yes"))
+    with pytest.raises(ValueError):
+        ISAM2_Graph.is_valid_config(make_cfg(marg_lag=5, marg_touch_sigma=-1.0))

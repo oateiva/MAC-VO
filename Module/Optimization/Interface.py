@@ -221,6 +221,11 @@ class IOptimizer(ABC, T.Generic[T_GraphInput, T_Context, T_GraphOutput], ConfigT
         if self.child_proc and self.child_proc.is_alive():
             self.child_proc.terminate()
 
+    def frame_stats(self) -> dict[str, T.Any] | None:
+        """Optional per-frame backend statistics (column arrays keyed by name),
+        saved by MACVO.py as optimizer_stats.npz. Default: none."""
+        return None
+
 
 def IOptimizerParallelWorker(
     config: SimpleNamespace,
