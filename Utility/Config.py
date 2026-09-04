@@ -39,7 +39,7 @@ class IncludeLoader(yaml.SafeLoader):
                 f"Tried to include file {filename} to *.yaml, but cannot find it."
             )
 
-        with open(filename, "r") as f:
+        with open(filename, "r", encoding="utf-8") as f:
             return yaml.load(f, IncludeLoader)
 
 
@@ -58,7 +58,7 @@ def __build_dynamic_config(spec: DynamicConfigSpec):
             )
         assert spec.path.exists()
 
-        with open(spec.path, "r") as f:
+        with open(spec.path, "r", encoding="utf-8") as f:
             data = yaml.load(f, IncludeLoader)
         return data
 
@@ -79,7 +79,7 @@ def build_dynamic_config(spec: DynamicConfigSpec):
 def load_config(path: Path):
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         data = yaml.load(f, IncludeLoader)
     return asNamespace(data), data
 
