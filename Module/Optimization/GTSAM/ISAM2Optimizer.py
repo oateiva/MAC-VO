@@ -125,6 +125,29 @@ kernel (`tukey`, `welsch`) on the keyframe row alone can down-weight its heavy
 tail without touching the chain's Huber. Under GNC (`gnc_rounds` > 0) the
 kernel is forced to `none` for every row, keyframe included, exactly as before.
 
+`kf_max_obs_per_landmark` (default 0 = unlimited, bit-identical to today) caps
+how many keyframe factors a single landmark key can accumulate over the whole
+run. A landmark normally touches the chain only twice — its birth pose and the
+pose that continues its track — so a bad depth sample at birth is weak evidence
+that dies with the track. Keyframe re-observation breaks that: it couples the
+SAME landmark to every frame while its keyframe stays live, AND that coupling
+is inherited by every successor keyframe once the tracker moves on (the
+keyframe table lookup resolves to the same `frame_lm` entry regardless of which
+keyframe is currently live), so one bad landmark's influence compounds with the
+sequence instead of dying with its track. Measured on plane_nose: the 15 of
+1169 landmarks with a gross monocular-depth error carried a median of 33
+keyframe factors (population median 0), each with a tight covariance, so a
+handful of outliers can dominate the graph's information budget and destabilize
+the solve run-to-run. The cap counts keyframe factors added per landmark
+(`kf_obs_count`, incremented in `_keyframe_factors` immediately after
+`add_point`), checked after the existing per-row gates (dedupe `seen`,
+marg_lag liveness, chain-alive / consistency gates) and before `add_point`: once
+a landmark's count reaches N, further keyframe rows on it are skipped
+(`n_kf_capped`) for the rest of the run, bounding its total keyframe influence
+to N factors regardless of how long it stays under a live keyframe. Harmless
+under marg_lag: a count kept against an already-expired landmark can never
+receive another factor anyway.
+
 `final_lm` (default false) is the port of isam2_tracker.finalize(lm_polish=True)
 and run_isam2.py's `--final-lm`: ONE offline batch Levenberg-Marquardt solve over
 the ENTIRE accumulated graph from the iSAM2 estimate, after the last frame
@@ -430,6 +453,7 @@ class ISAM2FlowTracker:
         self.kf_kernel: str = getattr(cfg, "kf_kernel", "same")
         if self.kf_kernel == "same":
             self.kf_kernel = cfg.kernel
+        self.kf_max_obs_per_landmark: int = int(getattr(cfg, "kf_max_obs_per_landmark", 0))
         self.final_lm          : bool  = bool(getattr(cfg, "final_lm", False))
         self.final_lm_max_iters: int   = int(getattr(cfg, "final_lm_max_iters", 100))
         _check_marg_lag(self.marg_lag, self.gnc_rounds)
@@ -465,6 +489,7 @@ class ISAM2FlowTracker:
         self.tracks: dict[tuple[int, int], _TrackState] = {}
         # frame -> {integer pixel1 -> landmark key}, the association keyframe rows look up
         self.frame_lm: dict[int, dict[tuple[int, int], int]] = {}
+        self.kf_obs_count: dict[int, int] = {}   # landmark key -> keyframe factors added so far
         self.n_kf_total  : int = 0
         self.next_lm_id  : int = 0
         self.pose_keys   : set[int] = set()
@@ -605,10 +630,10 @@ class ISAM2FlowTracker:
 
     def _keyframe_factors(self, kf: ISAM2_KeyframeRows, K: np.ndarray, p_k: int,
                           add_point, alive_px: dict[int, tuple[int, int]]
-                          ) -> tuple[int, list[int], int, int]:
+                          ) -> tuple[int, list[int], int, int, int]:
         """Add p_k -> l for every keyframe row whose integer keyframe pixel resolves
         to a live landmark; return (count, [p_kf, *landmark keys], n_dead,
-        n_inconsistent) for stamping and stats.
+        n_inconsistent, n_capped) for stamping and stats.
 
         `alive_px` is the chain's CURRENT integer pixel for every landmark still
         tracked at frame k (lm_key -> pixel), the redundant second measurement
@@ -618,11 +643,11 @@ class ISAM2FlowTracker:
         cfg = self.cfg
         table = self.frame_lm.get(kf.kf_idx)
         if table is None or kf.kf_idx not in self.pose_keys:
-            return 0, [], 0, 0
+            return 0, [], 0, 0, 0
         p_kf = gtsam.symbol("p", kf.kf_idx)
         est = self.isam.calculateEstimate() if self.marg_lag else None
         if est is not None and not est.exists(p_kf):
-            return 0, [], 0, 0
+            return 0, [], 0, 0, 0
 
         m = kf.pixel1_uv.shape[0]
         uv1 = kf.pixel1_uv.detach().cpu().numpy().astype(np.float64)
@@ -639,6 +664,7 @@ class ISAM2FlowTracker:
         seen: set[int] = set()
         n_dead = 0
         n_inconsistent = 0
+        n_capped = 0
         for j in range(m):
             if not valid[j]:
                 continue
@@ -655,10 +681,15 @@ class ISAM2FlowTracker:
                 if e > self.kf_consistency_px:
                     n_inconsistent += 1
                     continue
+            if (self.kf_max_obs_per_landmark > 0
+                    and self.kf_obs_count.get(lm, 0) >= self.kf_max_obs_per_landmark):
+                n_capped += 1
+                continue
             add_point(p_k, lm, obs2[j], cov2[j], self.kf_factor_type, self.kf_kernel)
+            self.kf_obs_count[lm] = self.kf_obs_count.get(lm, 0) + 1
             seen.add(lm)
             keys.append(lm)
-        return len(seen), keys, n_dead, n_inconsistent
+        return len(seen), keys, n_dead, n_inconsistent, n_capped
 
     # -- the per-frame step ----------------------------------------------------
 
@@ -764,7 +795,7 @@ class ISAM2FlowTracker:
 
         # -- keyframe rows: extra p_k -> l on the keyframe's landmarks
         n_kf, kf_keys, kf_gate, kf_gap = 0, [], 0, -1
-        n_kf_dead, n_kf_inconsistent = 0, 0
+        n_kf_dead, n_kf_inconsistent, n_kf_capped = 0, 0, 0
         if data.kf is not None:
             keep_from = data.kf.kf_idx        # must survive even a gated frame
             kf_gap = k - data.kf.kf_idx
@@ -775,7 +806,7 @@ class ISAM2FlowTracker:
             elif self.kf_max_gap > 0 and kf_gap > self.kf_max_gap:
                 kf_gate = 3
             else:
-                n_kf, kf_keys, n_kf_dead, n_kf_inconsistent = self._keyframe_factors(
+                n_kf, kf_keys, n_kf_dead, n_kf_inconsistent, n_kf_capped = self._keyframe_factors(
                     data.kf, K, p_k, add_point, alive_px)
         else:
             keep_from = data.from_idx - self.FRAME_LM_KEEP
@@ -839,6 +870,7 @@ class ISAM2FlowTracker:
                                kf_idx=(data.kf.kf_idx if data.kf is not None else -1),
                                kf_gap=kf_gap, kf_gate=kf_gate,
                                n_kf_dead=n_kf_dead, n_kf_inconsistent=n_kf_inconsistent,
+                               n_kf_capped=n_kf_capped,
                                ms=(time.perf_counter() - t_start) * 1e3))
 
         return _matrix_to_se3(self.T_chain if cfg.readout == "chain" else T_k)
@@ -1051,7 +1083,7 @@ class ISAM2_Graph(IOptimizer[ISAM2_GraphInput, dict, ISAM2_GraphOutput]):
     def frame_stats(self) -> dict[str, np.ndarray] | None:
         """Per-frame backend stats as column arrays (frame, live_vars, n_tracks,
         n_in_graph, n_kf_obs, kf_idx, kf_gap, kf_gate, n_kf_dead,
-        n_kf_inconsistent, ms), or None before the first step."""
+        n_kf_inconsistent, n_kf_capped, ms), or None before the first step."""
         tracker = self._tracker()
         if tracker is None or not tracker.stats:
             return None
@@ -1067,6 +1099,7 @@ class ISAM2_Graph(IOptimizer[ISAM2_GraphInput, dict, ISAM2_GraphOutput]):
         n_gated = int(sum(1 for s in tracker.stats if s["kf_gate"] > 0))
         n_dead = int(sum(s["n_kf_dead"] for s in tracker.stats))
         n_inconsistent = int(sum(s["n_kf_inconsistent"] for s in tracker.stats))
+        n_capped = int(sum(s["n_kf_capped"] for s in tracker.stats))
         # the plateau is the result: unbounded climbs with the frame index, marginalized levels off
         Logger.write("info",
             f"ISAM2_Graph marg_lag={tracker.marg_lag}: live variables peak {lv.max()}, "
@@ -1075,7 +1108,7 @@ class ISAM2_Graph(IOptimizer[ISAM2_GraphInput, dict, ISAM2_GraphOutput]):
             f"max {ms.max():.0f} | {tracker.next_lm_id} landmarks minted over {len(lv)} frames"
             f" | {tracker.n_kf_total} keyframe re-observations, {n_gated} keyframe frames gated "
             f"(support/gap/max_gap), {n_dead} rows dead-landmark-skipped, "
-            f"{n_inconsistent} rows consistency-skipped")
+            f"{n_inconsistent} rows consistency-skipped, {n_capped} rows kf_max_obs_per_landmark-capped")
 
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
@@ -1125,6 +1158,7 @@ class ISAM2_Graph(IOptimizer[ISAM2_GraphInput, dict, ISAM2_GraphOutput]):
             "kf_consistency_px" : lambda v: isinstance(v, (int, float)) and v >= 0.,
             "kf_require_chain_alive": lambda b: isinstance(b, bool),
             "kf_kernel"         : lambda s: s == "same" or s in _KERNELS,
+            "kf_max_obs_per_landmark": lambda v: isinstance(v, int) and v >= 0,
             "final_lm"          : lambda b: isinstance(b, bool),
             "final_lm_max_iters": lambda v: isinstance(v, int) and v >= 1,
         }

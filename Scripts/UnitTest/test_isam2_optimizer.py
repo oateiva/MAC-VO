@@ -546,6 +546,50 @@ def test_kf_factor_type_config():
                                      kf_factor_type="bearing")).kf_factor_type == "bearing"
 
 
+def test_kf_max_obs_per_landmark_config():
+    ISAM2_Graph.is_valid_config(make_cfg(kf_max_obs_per_landmark=3))
+    with pytest.raises(ValueError):
+        ISAM2_Graph.is_valid_config(make_cfg(kf_max_obs_per_landmark=-1))
+    with pytest.raises(ValueError):
+        ISAM2_Graph.is_valid_config(make_cfg(kf_max_obs_per_landmark=2.5))
+    assert ISAM2FlowTracker(make_cfg(kf_max_obs_per_landmark=3)).kf_max_obs_per_landmark == 3
+    assert ISAM2FlowTracker(make_cfg()).kf_max_obs_per_landmark == 0
+
+
+def test_kf_max_obs_per_landmark_caps_factors():
+    """4 keyframe frames (2..5) would each add one factor per landmark on the
+    SAME keyframe (0); kf_max_obs_per_landmark=2 must let the first two through
+    and cap every row on the last two, while the default (0 = unlimited) lets
+    all four through with n_kf_capped == 0 everywhere."""
+    lms = landmarks()
+
+    tracker = ISAM2FlowTracker(make_cfg(kf_max_obs_per_landmark=2))
+    jobs = chained_jobs(5, lms)
+    tracker.step(jobs[0])                                    # frame 1: builds frame_lm[0]
+    pose = None
+    for job in jobs[1:]:                                      # frames 2..5
+        pose = tracker.step(with_kf(job, 0, lms))
+        if job.frame_idx <= 3:
+            assert tracker.stats[-1]["n_kf_obs"] == len(lms)
+            assert tracker.stats[-1]["n_kf_capped"] == 0
+        else:
+            assert tracker.stats[-1]["n_kf_obs"] == 0
+            assert tracker.stats[-1]["n_kf_capped"] == len(lms)
+    assert tracker.n_kf_total == 2 * len(lms)
+    assert pose is not None
+    err = np.linalg.norm(_translation(pose) - pose_gt(5)[:3, 3])
+    assert err < 0.02, f"final pose translation error {err:.4f} m"
+
+    tracker_default = ISAM2FlowTracker(make_cfg())
+    jobs = chained_jobs(5, lms)
+    tracker_default.step(jobs[0])
+    for job in jobs[1:]:
+        tracker_default.step(with_kf(job, 0, lms))
+        assert tracker_default.stats[-1]["n_kf_obs"] == len(lms)
+        assert tracker_default.stats[-1]["n_kf_capped"] == 0
+    assert tracker_default.n_kf_total == 4 * len(lms)
+
+
 @pytest.mark.skipif(_NATIVE_P2P is None,
                     reason="gtsam wheel lacks the PoseToPointFactor wrapper patch "
                            "(Scripts/patches/gtsam-posetopoint-wrapper.patch)")
