@@ -1,14 +1,17 @@
 #
-# Keyframe rows gated off for gap < 4 frames (gates gaps 2-3): suppresses near-duplicate short-baseline keyframe connections.
+# Keyframe rows use a Tukey (redescending) kernel instead of the chain's Huber:
+# down-weights the keyframe connection's heavy-tailed disagreements without
+# touching the chain's own kernel.
 #
 # Diagnostic arm for the keyframe-tracker degradation on plane_nose
-# (2026-09-04). Base: MACVO_ISAM2_p2p_kf.yaml
+# (2026-09-04). Base: MACVO_ISAM2_br_kf.yaml
 #
+
 Common:
   device: &device cuda
 
 Odometry:
-  name: MACVO-ISAM2-p2p-kf-gap4
+  name: MACVO-ISAM2-br-kf-tukey
   args:
     device: *device
     edgewidth: 32
@@ -97,7 +100,7 @@ Odometry:
     args:
       device: cpu
       parallel: false           # stateful persistent graph — sequential only
-      factor_type: pose2point_native
+      factor_type: bearingrange
       kernel: huber
       kernel_delta: 0.1
       relin_threshold: 0.05
@@ -108,7 +111,7 @@ Odometry:
       depth_var_scale: 2.5
       accumulate_fvar: true
       motion_init: cv
-      motion_prior_sigma: 0.2
+      motion_prior_sigma: 0.3
       coast_sigma: 0.1
       min_support: 6
       readout: chain
@@ -116,7 +119,7 @@ Odometry:
       min_depth_cov: 0.01
       match_cov_default: 0.25
       kf_cov_scale: 1.0
-      kf_min_gap: 4
+      kf_kernel: tukey
 
 Datas: !include ../../Common/DeepODO_mono_experiments.yaml
 Preprocess: !include ../../Common/Preprocess.yaml

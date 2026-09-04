@@ -1,14 +1,18 @@
 #
-# Both mitigations together: bearing-only keyframe connection AND a chain-support gate at 10.
+# Combines the consistency gate (rejects keyframe rows disagreeing with the
+# chain's own current pixel by more than 3 px, or whose landmark the chain has
+# already lost) with the max-gap gate (drops the whole keyframe block once the
+# keyframe is more than 6 frames stale).
 #
 # Diagnostic arm for the keyframe-tracker degradation on plane_nose
 # (2026-09-04). Base: MACVO_ISAM2_br_kf.yaml
 #
+
 Common:
   device: &device cuda
 
 Odometry:
-  name: MACVO-ISAM2-br-kf-bearing-sup10
+  name: MACVO-ISAM2-br-kf-cons3_maxgap6
   args:
     device: *device
     edgewidth: 32
@@ -116,8 +120,9 @@ Odometry:
       min_depth_cov: 0.01
       match_cov_default: 0.25
       kf_cov_scale: 1.0
-      kf_factor_type: bearing
-      kf_min_support: 10
+      kf_consistency_px: 3.0
+      kf_require_chain_alive: true
+      kf_max_gap: 6
 
 Datas: !include ../../Common/DeepODO_mono_experiments.yaml
 Preprocess: !include ../../Common/Preprocess.yaml

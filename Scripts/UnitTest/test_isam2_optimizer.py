@@ -18,8 +18,8 @@ import pypose as pp
 from Module.Map import VisualMap, FrameNode, MatchObs, PointNode
 from Module.Optimization.GTSAM.ISAM2Optimizer import (
     ISAM2FlowTracker, ISAM2_Graph, ISAM2_GraphInput, ISAM2_GraphOutput, ISAM2_KeyframeRows,
-    _matrix_to_se3, _NATIVE_P2P, gnc_weights, make_native_bearing_factor, make_native_point_factor,
-    make_native_pose_to_point_factor)
+    _KERNELS, _matrix_to_se3, _NATIVE_P2P, gnc_weights, make_native_bearing_factor,
+    make_native_point_factor, make_native_pose_to_point_factor)
 from Utility.GTSAM_Utils import make_pose_to_point_factor
 
 FX = FY = 320.0
@@ -553,6 +553,118 @@ def test_kf_factor_type_native_config():
     ISAM2_Graph.is_valid_config(make_cfg(kf_factor_type="pose2point_native"))
     assert ISAM2FlowTracker(
         make_cfg(kf_factor_type="pose2point_native")).kf_factor_type == "pose2point_native"
+
+
+def test_kf_consistency_gate_rejects_disagreeing_rows():
+    """3 of 12 keyframe rows land 25 px off the chain's own current pixel for the
+    same landmark: kf_consistency_px=3.0 must reject exactly those rows and keep
+    the pose near GT, while the gate off lets them corrupt the pose more."""
+    lms = landmarks()
+    jobs = chained_jobs(3, lms)
+
+    def run(consistency_px: float) -> tuple[torch.Tensor, ISAM2FlowTracker]:
+        tracker = ISAM2FlowTracker(make_cfg(kf_consistency_px=consistency_px))
+        tracker.step(jobs[0])
+        tracker.step(with_kf(jobs[1], 0, lms))
+        job = with_kf(jobs[2], 0, lms)
+        assert job.kf is not None
+        job.kf.pixel2_uv[:3] += 25.0
+        pose = tracker.step(job)
+        return pose, tracker
+
+    pose_gated, tracker_gated = run(3.0)
+    pose_off, tracker_off = run(0.0)
+
+    assert tracker_gated.stats[-1]["n_kf_inconsistent"] == 3
+    assert tracker_gated.stats[-1]["n_kf_obs"] == len(lms) - 3
+    assert tracker_off.stats[-1]["n_kf_inconsistent"] == 0
+    assert tracker_off.stats[-1]["n_kf_obs"] == len(lms)
+
+    err_gated = np.linalg.norm(_translation(pose_gated) - pose_gt(3)[:3, 3])
+    err_off = np.linalg.norm(_translation(pose_off) - pose_gt(3)[:3, 3])
+    assert err_gated < 0.02, f"gated translation error {err_gated:.4f} m"
+    assert err_off > err_gated
+
+    ISAM2_Graph.is_valid_config(make_cfg(kf_consistency_px=0.0))
+    with pytest.raises(ValueError):
+        ISAM2_Graph.is_valid_config(make_cfg(kf_consistency_px=-1.0))
+
+
+def test_kf_require_chain_alive_skips_dead_landmarks():
+    """Landmark index 0's chain row is dropped from pair (2,3), killing its track;
+    a keyframe row still tries to re-observe it. kf_require_chain_alive=True must
+    skip that one row (n_kf_dead == 1); the default adds it."""
+    lms = landmarks()
+    jobs = chained_jobs(3, lms)
+
+    def run(require_alive: bool) -> ISAM2FlowTracker:
+        tracker = ISAM2FlowTracker(make_cfg(kf_require_chain_alive=require_alive))
+        tracker.step(jobs[0])
+        tracker.step(jobs[1])
+        job = make_job(3, jobs[2].pixel1_uv.numpy()[1:], jobs[2].pixel1_d.numpy()[1:],
+                       jobs[2].pixel2_uv.numpy()[1:], jobs[2].pixel2_d.numpy()[1:])
+        tracker.step(with_kf(job, 0, lms))
+        return tracker
+
+    tracker_gated = run(True)
+    tracker_off = run(False)
+
+    assert tracker_gated.stats[-1]["n_kf_dead"] == 1
+    assert tracker_gated.stats[-1]["n_kf_obs"] == len(lms) - 1
+    assert tracker_off.stats[-1]["n_kf_dead"] == 0
+    assert tracker_off.stats[-1]["n_kf_obs"] == len(lms)
+
+    ISAM2_Graph.is_valid_config(make_cfg(kf_require_chain_alive=True))
+    with pytest.raises(ValueError):
+        ISAM2_Graph.is_valid_config(make_cfg(kf_require_chain_alive="yes"))
+
+
+def test_kf_max_gap_gates_block():
+    """kf_max_gap=2 with keyframe 0: gap 2 (frame 2) still adds rows, gaps 3+
+    (frames 3, 4) gate the whole block; the keyframe table stays alive."""
+    lms = landmarks()
+    tracker = ISAM2FlowTracker(make_cfg(kf_max_gap=2))
+    jobs = chained_jobs(4, lms)
+    tracker.step(jobs[0])
+    for job in jobs[1:]:
+        tracker.step(with_kf(job, 0, lms))
+        if job.frame_idx == 2:
+            assert tracker.stats[-1]["kf_gate"] == 0
+            assert tracker.stats[-1]["n_kf_obs"] == len(lms)
+        else:
+            assert tracker.stats[-1]["kf_gate"] == 3
+            assert tracker.stats[-1]["n_kf_obs"] == 0
+    assert 0 in tracker.frame_lm
+
+    ISAM2_Graph.is_valid_config(make_cfg(kf_max_gap=0))
+    with pytest.raises(ValueError):
+        ISAM2_Graph.is_valid_config(make_cfg(kf_max_gap=-1))
+    with pytest.raises(ValueError):
+        ISAM2_Graph.is_valid_config(make_cfg(kf_max_gap=1.5))
+
+
+def test_kf_kernel_config_and_dispatch():
+    for v in ("same", *_KERNELS):
+        ISAM2_Graph.is_valid_config(make_cfg(kf_kernel=v))
+    with pytest.raises(ValueError):
+        ISAM2_Graph.is_valid_config(make_cfg(kf_kernel="biweight"))
+
+    assert ISAM2FlowTracker(make_cfg(kernel="huber")).kf_kernel == "huber"     # "same" resolves
+    assert ISAM2FlowTracker(make_cfg(kernel="huber", kf_kernel="none")).kf_kernel == "none"
+
+    lms = landmarks()
+    jobs = chained_jobs(2, lms)
+    tracker = ISAM2FlowTracker(make_cfg(kernel="huber", kf_kernel="none"))
+    tracker.step(jobs[0])
+    tracker.step(with_kf(jobs[1], 0, lms))
+
+    fg = tracker.isam.getFactorsUnsafe()
+    p2 = gtsam.symbol("p", 2)
+    on_p2 = [fg.at(i) for i in range(fg.size()) if fg.at(i) is not None and p2 in fg.at(i).keys()]
+    assert len(on_p2) == 2 * len(lms)                          # chain + keyframe rows on p_2
+    n_robust = sum(1 for f in on_p2 if isinstance(f.noiseModel(), gtsam.noiseModel.Robust))
+    assert n_robust == len(lms)                                # chain rows: Huber-wrapped
+    assert len(on_p2) - n_robust == len(lms)                   # keyframe rows: not wrapped
 
 
 def make_map(n_frames: int) -> VisualMap:
