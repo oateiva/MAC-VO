@@ -1,6 +1,17 @@
 import torch
 import pypose as pp
 
+# Camera-axis convention. Internally MAC-VO uses NED camera axes [forward, right, down]
+# (see pixel2point_NED below); several datasets ship ground truth in OpenCV/EDN
+# [right, down, forward]. EDN2NED converts EDN coordinates into NED; NED2EDN is its inverse
+# and is what you right-multiply onto a camera->world pose to rebase its BODY axes into NED.
+EDN2NED = pp.from_matrix(torch.tensor([
+    [0., 0., 1., 0.],
+    [1., 0., 0., 0.],
+    [0., 1., 0., 0.],
+    [0., 0., 0., 1.],
+]), pp.SE3_type)
+NED2EDN = EDN2NED.Inv()
 
 def filterPointsInRange(pts1:torch.Tensor, u_range: tuple[int, int], v_range: tuple[int, int]) -> torch.Tensor:
     u_min, u_max = u_range

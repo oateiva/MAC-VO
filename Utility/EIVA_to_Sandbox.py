@@ -8,6 +8,16 @@ from typing import List, Optional, Tuple
 from scipy.spatial.transform import Rotation as R
 import matplotlib.pyplot as plt
 
+from Utility.Point import NED2EDN
+
+# Mirrors the body-axis fix in DataLoader/Dataset/EIVA.py::loadEIVAGT: this script is a
+# second, standalone producer of EIVA ground-truth poses (ref_poses.npy) from the same
+# source data, so it needs the same EDN->NED camera/body-axis rebase. Precompute the 4x4
+# homogeneous matrix once; right-multiplying a camera->world pose by it only replaces the
+# rotation block (NED2EDN is a pure rotation), so translations are left bit-identical.
+# Check the output convention with Scripts/AdHoc/audit_gt_convention.py.
+_NED2EDN_MAT = NED2EDN.matrix().double().numpy()
+
 
 def detect_delimiter(sample_line: str) -> str | None:
     if "," in sample_line:
@@ -59,9 +69,9 @@ def inverse_transform(T: np.ndarray) -> np.ndarray:
 
 
 def rotation_to_quaternion(Rot: np.ndarray) -> np.ndarray:
-    """Convert 3x3 rotation matrix to quaternion (w,x,y,z)."""
+    """Convert 3x3 rotation matrix to quaternion (x,y,z,w)."""
     r = R.from_matrix(Rot)
-    q = r.as_quat(scalar_first=False)  # (w,x,y,z)
+    q = r.as_quat(scalar_first=False)  # (x,y,z,w) -- this is what pp.SE3 and the downstream loaders expect
     return np.array(q, dtype=np.float64)
 
 
@@ -121,11 +131,12 @@ def main():
             # T[:3, 3] = [tx, ty, tz]
             T = np.array(list(map(float, parts[1:17]))).reshape(4, 4)
             T_inv = inverse_transform(T)
+            T_inv = T_inv @ _NED2EDN_MAT  # rebase camera/body axes EDN -> NED (see Utility.Point.NED2EDN)
 
             R_inv = T_inv[:3, :3]
             t_inv = T_inv[:3, 3]
 
-            quat = rotation_to_quaternion(R_inv)  # [qw,qx,qy,qz]
+            quat = rotation_to_quaternion(R_inv)  # [qx,qy,qz,qw]
             poses.append([t_ns, *t_inv, *quat])
 
     poses = np.array(poses, dtype=np.float64)

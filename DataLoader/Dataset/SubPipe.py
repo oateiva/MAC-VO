@@ -17,6 +17,7 @@ from django.db.models import QuerySet, OuterRef, Subquery
 from ..SequenceBase import SequenceBase
 from ..Interface    import Frame, CameraData
 from ..Django_Sequence import DjangoORMSequence, ensure_django
+from Utility.Point import NED2EDN
 
 
 def load_poses_from_txt_subpipe(file_name: str):
@@ -207,4 +208,7 @@ def loadSubPipeGT(path: Path) -> pp.LieTensor:
     poses = torch.tensor(pose_list, dtype=torch.float32)
     se3_data = pp.SE3(poses)
 
-    return se3_data
+    # World frame is already NED-like; only the camera/body axes are EDN (OpenCV).
+    # Right-multiplying by NED2EDN rebases the body axes into NED without touching
+    # translations.
+    return se3_data @ NED2EDN

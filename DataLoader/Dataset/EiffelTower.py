@@ -17,6 +17,7 @@ from django.db.models import QuerySet, OuterRef, Subquery
 from ..SequenceBase import SequenceBase
 from ..Interface    import Frame, CameraData
 from Utility.Config import load_config
+from Utility.Point import NED2EDN
 
 
 def load_poses_from_txt_eiffeltower(file_name: str):
@@ -261,8 +262,13 @@ def loadEiffelTowerGT(path: Path) -> dict:
     # After normalization the world frame aligns with the initial camera frame
     # (COLMAP/OpenCV: X right, Y down, Z forward).
     # R_ned maps: X_ned=Z_cam, Y_ned=X_cam, Z_ned=Y_cam  →  q=[0.5, 0.5, 0.5, 0.5]
+    # (this rotation is exactly EDN2NED from Utility.Point, applied here in the WORLD
+    # frame since the world frame is the initial camera frame).
+    # Completing the sandwich with NED2EDN also rebases the BODY/camera axes from
+    # EDN into NED; since ned_R @ NED2EDN == identity, pose 0 stays identity and the
+    # first-pose normalization above is preserved.
     ned_R = pp.SE3(torch.tensor([0., 0., 0., 0.5, 0.5, 0.5, 0.5]))
     for k in poses:
-        poses[k] = ned_R @ poses[k]
+        poses[k] = ned_R @ poses[k] @ NED2EDN
 
     return poses

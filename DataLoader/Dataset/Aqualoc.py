@@ -19,6 +19,8 @@ from ..Interface import Frame, CameraData
 from ..SequenceBase import SequenceBase
 
 
+# Canonical definition lives in Utility.Point.EDN2NED / NED2EDN; duplicated here to avoid
+# refactoring this already-correct dataloader.
 # Keep the same convention you used in EuRoC, even if Aqualoc is already in some ENU/EDN.
 # If you later discover Aqualoc's coordinate convention, you can swap this to the correct transform.
 EDN2NED = pp.from_matrix(torch.tensor([

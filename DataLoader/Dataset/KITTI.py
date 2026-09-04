@@ -10,6 +10,8 @@ from torch.utils.data import Dataset
 from ..Interface import Frame
 from ..SequenceBase import SequenceBase
 
+# Canonical definition lives in Utility.Point.EDN2NED / NED2EDN; duplicated here to avoid
+# refactoring this already-correct dataloader.
 EDN2NED = pp.from_matrix(torch.tensor([
     [0., 0., 1., 0.],
     [1., 0., 0., 0.],
