@@ -1,14 +1,14 @@
 #
-# Stereo frontend (metric depth from FlowFormerCov disparity) instead of monocular DAv3 WITH the keyframe tracker. Paired with MACVO_ISAM2_p2p_stereo.yaml: if the keyframe damage vanishes on metric depth, monocular depth bias was the cause.
+# Keyframe -> current connection made bearing-only (depth unconstrained). Tests the 'biased depth double-counted at tight covariance' hypothesis for the plane_nose keyframe-tracker degradation.
 #
 # Diagnostic arm for the keyframe-tracker degradation on plane_nose
-# (2026-09-04). Base: MACVO_ISAM2_p2p_kf.yaml
+# (2026-09-04). Base: MACVO_ISAM2_br_kf.yaml
 #
 Common:
   device: &device cuda
 
 Odometry:
-  name: MACVO-ISAM2-p2p-stereo-kf
+  name: MACVO-ISAM2-br-kf-bearing
   args:
     device: *device
     edgewidth: 32
@@ -49,14 +49,24 @@ Odometry:
       mask_width: 32
 
   frontend:
-    type: FlowFormerCovFrontend
+    type: MonocularFrontend
     args:
       device: *device
-      weight: ./Model/MACVO_FrontendCov.pth
-      enc_dtype: fp32
-      dec_dtype: fp32
-      decoder_depth: 12
-      enforce_positive_disparity: false
+      parallel: false     # one CUDA stream = one allocator pool; parallel:true + the keyframe flow paged VRAM (24 GB card)
+      match:
+        type: FlowFormerCovMatcher
+        args:
+          weight: ./Model/MACVO_FrontendCov.pth
+          device: *device
+          enc_dtype: fp32
+          dec_dtype: fp32
+      monodepth:
+        type: DepthAnythingV3
+        args:
+          model_name: da3nested-giant-large
+          weight: depth-anything/DA3NESTED-GIANT-LARGE-1.1
+          device: *device
+          q90: 1.
 
   motion:
     type: StaticMotionModel
@@ -87,7 +97,7 @@ Odometry:
     args:
       device: cpu
       parallel: false           # stateful persistent graph — sequential only
-      factor_type: pose2point_native
+      factor_type: bearingrange
       kernel: huber
       kernel_delta: 0.1
       relin_threshold: 0.05
@@ -98,7 +108,7 @@ Odometry:
       depth_var_scale: 2.5
       accumulate_fvar: true
       motion_init: cv
-      motion_prior_sigma: 0.2
+      motion_prior_sigma: 0.3
       coast_sigma: 0.1
       min_support: 6
       readout: chain
@@ -106,6 +116,7 @@ Odometry:
       min_depth_cov: 0.01
       match_cov_default: 0.25
       kf_cov_scale: 1.0
+      kf_factor_type: bearing
 
-Datas: !include ../../../Sequence/EIVA_stereo_datasets.yaml
+Datas: !include ../../Common/DeepODO_mono_experiments.yaml
 Preprocess: !include ../../Common/Preprocess.yaml

@@ -1,14 +1,14 @@
 #
-# Stereo frontend (metric depth from FlowFormerCov disparity) instead of monocular DAv3. Plain control for the stereo keyframe arm.
+# Keyframe rows gated off for gap < 4 frames (gates gaps 2-3): suppresses near-duplicate short-baseline keyframe connections.
 #
 # Diagnostic arm for the keyframe-tracker degradation on plane_nose
-# (2026-09-04). Base: MACVO_ISAM2_p2p.yaml
+# (2026-09-04). Base: MACVO_ISAM2_p2p_kf.yaml
 #
 Common:
   device: &device cuda
 
 Odometry:
-  name: MACVO-ISAM2-p2p-stereo
+  name: MACVO-ISAM2-p2p-kf-gap4
   args:
     device: *device
     edgewidth: 32
@@ -49,14 +49,24 @@ Odometry:
       mask_width: 32
 
   frontend:
-    type: FlowFormerCovFrontend
+    type: MonocularFrontend
     args:
       device: *device
-      weight: ./Model/MACVO_FrontendCov.pth
-      enc_dtype: fp32
-      dec_dtype: fp32
-      decoder_depth: 12
-      enforce_positive_disparity: false
+      parallel: false     # one CUDA stream = one allocator pool; parallel:true + the keyframe flow paged VRAM (24 GB card)
+      match:
+        type: FlowFormerCovMatcher
+        args:
+          weight: ./Model/MACVO_FrontendCov.pth
+          device: *device
+          enc_dtype: fp32
+          dec_dtype: fp32
+      monodepth:
+        type: DepthAnythingV3
+        args:
+          model_name: da3nested-giant-large
+          weight: depth-anything/DA3NESTED-GIANT-LARGE-1.1
+          device: *device
+          q90: 1.
 
   motion:
     type: StaticMotionModel
@@ -75,6 +85,12 @@ Odometry:
   keyframe:
     type: AllKeyframe
     args:
+
+  keyframe_tracker:
+    type: Parallax
+    args:
+      px: 100.0
+      max_gap: 20
 
   optimizer:
     type: ISAM2_Graph
@@ -99,6 +115,8 @@ Odometry:
       min_flow_cov: 0.25
       min_depth_cov: 0.01
       match_cov_default: 0.25
+      kf_cov_scale: 1.0
+      kf_min_gap: 4
 
-Datas: !include ../../../Sequence/EIVA_stereo_datasets.yaml
+Datas: !include ../../Common/DeepODO_mono_experiments.yaml
 Preprocess: !include ../../Common/Preprocess.yaml

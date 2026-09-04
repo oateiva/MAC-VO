@@ -1,14 +1,14 @@
 #
-# Keyframe switches at 40 px parallax, i.e. almost every frame: the keyframe factor degenerates toward a duplicate of the chain factor. Isolates double-counting from baseline length.
+# Keyframe factor covariance inflated 4x (covariance curve, tier 2).
 #
 # Diagnostic arm for the keyframe-tracker degradation on plane_nose
-# (2026-09-04). Base: MACVO_ISAM2_p2p_ft_kf.yaml
+# (2026-09-04). Base: MACVO_ISAM2_br_kf.yaml
 #
 Common:
   device: &device cuda
 
 Odometry:
-  name: MACVO-ISAM2-p2p-ft-kf-px40
+  name: MACVO-ISAM2-br-kf-cov4
   args:
     device: *device
     edgewidth: 32
@@ -63,19 +63,10 @@ Odometry:
       monodepth:
         type: DepthAnythingV3
         args:
-          # Fine-tuned AITraining checkpoint: a single da3-giant (backbone+head
-          # keys only; loading it into the nested base arch matches 0 keys and
-          # silently leaves the net at random init).
-          model_name: da3-giant
-          weight: D:/aitraining_sweeps/final_da3_ssi_conf/epoch=12-val_absrel=0.0522.ckpt
+          model_name: da3nested-giant-large
+          weight: depth-anything/DA3NESTED-GIANT-LARGE-1.1
           device: *device
-          # ssi_confidence_l1 training makes the raw output scale/shift
-          # ambiguous; this is the global affine learningUAVO pinned on 3DF
-          # Zephyr GT (71 frames of plane_nose_full). q90 = depth_scale^2 puts
-          # the NLL variance in the same metric units (still uncalibrated).
-          depth_scale: 2.935553
-          depth_shift: 0.108397
-          q90: 8.61747
+          q90: 1.
 
   motion:
     type: StaticMotionModel
@@ -98,7 +89,7 @@ Odometry:
   keyframe_tracker:
     type: Parallax
     args:
-      px: 40.0
+      px: 100.0
       max_gap: 20
 
   optimizer:
@@ -106,7 +97,7 @@ Odometry:
     args:
       device: cpu
       parallel: false           # stateful persistent graph — sequential only
-      factor_type: pose2point_native
+      factor_type: bearingrange
       kernel: huber
       kernel_delta: 0.1
       relin_threshold: 0.05
@@ -117,14 +108,14 @@ Odometry:
       depth_var_scale: 2.5
       accumulate_fvar: true
       motion_init: cv
-      motion_prior_sigma: 0.2
+      motion_prior_sigma: 0.3
       coast_sigma: 0.1
       min_support: 6
       readout: chain
       min_flow_cov: 0.25
       min_depth_cov: 0.01
       match_cov_default: 0.25
-      kf_cov_scale: 1.0
+      kf_cov_scale: 4.0
 
 Datas: !include ../../Common/DeepODO_mono_experiments.yaml
 Preprocess: !include ../../Common/Preprocess.yaml

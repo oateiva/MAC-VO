@@ -75,6 +75,28 @@ marginalized (chain-dead for marg_lag frames, or at once under
 marg_dead_at_birth) is skipped, so keyframe rows then only reach chain-alive
 tracks.
 
+`kf_factor_type` (default `same`, i.e. whatever the chain's `factor_type` is)
+picks the family for the keyframe's p_k -> l connection independently of the
+chain rows: `bearing` uses a native `BearingFactor3D` on exactly the bearing
+block of the same (bearing, range) covariance a `bearingrange` factor on this
+observation would use (`make_native_bearing_factor`), which is depth-free by
+construction — under `_covariance_2to3_full`, dp/dd is parallel to the bearing
+direction, so var_d drops out of that 2x2 block entirely. This does NOT remove
+the residual bearing double-count between the keyframe and chain connections
+(both still constrain the same landmark's direction from p_k); it only removes
+the DEPTH double-count that made a biased monocular depth sample on the
+keyframe connection dominate the pose whenever chain support was thin (`bearing`
+is deliberately not offered for the chain's own `factor_type`: it would leave
+every landmark's depth unconstrained and lose the mono scale gauge). Two gates,
+both off by default (0), skip a frame's keyframe rows entirely without dropping
+the frame itself: `kf_min_support` (skip if this frame's OWN chain support
+`n_in_graph` is below it — checked first) and `kf_min_gap` (skip if
+`k - kf_idx` is below it, i.e. suppress near-duplicate short-baseline
+connections). A gated frame still counts `n_kf_obs = 0` toward `n_obs`, so it
+coasts through the existing `min_support` branch exactly like the plain
+(no-keyframe) arm, and `frame_lm[kf_idx]` is still kept alive (the keyframe
+table is not evicted just because this frame's rows were gated).
+
 `final_lm` (default false) is the port of isam2_tracker.finalize(lm_polish=True)
 and run_isam2.py's `--final-lm`: ONE offline batch Levenberg-Marquardt solve over
 the ENTIRE accumulated graph from the iSAM2 estimate, after the last frame
@@ -214,17 +236,17 @@ def robustify(base, kernel: str, delta: float):
     return gtsam.noiseModel.Robust.Create(m, base)
 
 
-def make_native_point_factor(pose_key: int, landmark_key: int, obs_Tc: np.ndarray,
-                             cov: np.ndarray, kernel: str, delta: float):
-    """BearingRangeFactor3D carrying the same information as the pose-to-point
-    CustomFactor.
+def _bearing_range_cov(obs_Tc: np.ndarray, cov: np.ndarray) -> tuple[gtsam.Unit3, float, np.ndarray]:
+    """(bearing, range, 3x3 cov_br) shared by the bearing-only and bearing-range
+    factor builders.
 
     (bearing, range) is a bijective reparametrization of the 3D observation; the
     3x3 covariance is propagated through the exact Jacobian at the measurement,
-    J = [B^T (I - bb^T)/r ; b^T] with B the Unit3 tangent basis, so the
-    Mahalanobis metric matches the 3D factor's to first order. The factor
-    relinearizes in C++ — the Python callback is the dominant per-frame cost of
-    a persistent graph.
+    J = [B^T (I - bb^T)/r ; b^T] with B the Unit3 tangent basis, so cov_br = J
+    cov J^T carries the SAME information as the 3D factor's Mahalanobis metric to
+    first order. The top-left 2x2 block of cov_br is, by construction, "the
+    bearing block of bearingrange," and its basis is the .basis() of the very
+    Unit3 handed to both factors.
     """
     m = np.asarray(obs_Tc, dtype=np.float64)
     r = float(np.linalg.norm(m))
@@ -233,8 +255,31 @@ def make_native_point_factor(pose_key: int, landmark_key: int, obs_Tc: np.ndarra
     J = np.vstack([bearing.basis().T @ (np.eye(3) - np.outer(b, b)) / r, b])
     cov_br = J @ cov @ J.T
     cov_br = 0.5 * (cov_br + cov_br.T)
+    return bearing, r, cov_br
+
+
+def make_native_point_factor(pose_key: int, landmark_key: int, obs_Tc: np.ndarray,
+                             cov: np.ndarray, kernel: str, delta: float):
+    """BearingRangeFactor3D carrying the same information as the pose-to-point
+    CustomFactor (see _bearing_range_cov). The factor relinearizes in C++ — the
+    Python callback is the dominant per-frame cost of a persistent graph.
+    """
+    bearing, r, cov_br = _bearing_range_cov(obs_Tc, cov)
     noise = robustify(gtsam.noiseModel.Gaussian.Covariance(cov_br), kernel, delta)
     return gtsam.BearingRangeFactor3D(pose_key, landmark_key, bearing, r, noise)
+
+
+def make_native_bearing_factor(pose_key: int, landmark_key: int, obs_Tc: np.ndarray,
+                               cov: np.ndarray, kernel: str, delta: float):
+    """BearingFactor3D on exactly the bearing block of the same cov_br a
+    BearingRangeFactor3D on this observation would use (_bearing_range_cov).
+
+    Depth-free by construction: under _covariance_2to3_full, dp/dd is parallel
+    to b, so var_d drops out of the bearing block entirely.
+    """
+    bearing, _, cov_br = _bearing_range_cov(obs_Tc, cov)
+    noise = robustify(gtsam.noiseModel.Gaussian.Covariance(cov_br[:2, :2]), kernel, delta)
+    return gtsam.BearingFactor3D(pose_key, landmark_key, bearing, noise)
 
 
 def require_native_p2p():
@@ -255,6 +300,29 @@ def make_native_pose_to_point_factor(pose_key: int, landmark_key: int, obs_Tc: n
     C++ — no Python callback per iSAM2 update."""
     noise = robustify(gtsam.noiseModel.Gaussian.Covariance(np.asarray(cov, dtype=np.float64)), kernel, delta)
     return require_native_p2p()(pose_key, landmark_key, np.asarray(obs_Tc, dtype=np.float64), noise)
+
+
+def make_point_factor(ftype: str, pose_key: int, landmark_key: int, obs_Tc: np.ndarray,
+                      cov: np.ndarray, kernel: str, delta: float):
+    """Single dispatch over factor families, shared by step()'s add_point closure
+    and _gnc_replace — which must rebuild each GNC row with its OWN ftype (a
+    2-dof bearing row rebuilt as a 3-dof factor with a 2x2 noise model fails a
+    gtsam dimension assertion).
+    """
+    match ftype:
+        case "bearing":
+            return make_native_bearing_factor(pose_key, landmark_key, obs_Tc, cov, kernel, delta)
+        case "bearingrange":
+            return make_native_point_factor(pose_key, landmark_key, obs_Tc, cov, kernel, delta)
+        case "pose2point_native":
+            return make_native_pose_to_point_factor(pose_key, landmark_key, obs_Tc, cov, kernel, delta)
+        case "pose2point":
+            return make_pose_to_point_factor(
+                pose_key, landmark_key, obs_Tc,
+                robustify(gtsam.noiseModel.Gaussian.Covariance(cov), kernel, delta))
+        case _:
+            raise ValueError(f"unknown factor_type '{ftype}', expected one of "
+                             f"'bearing', 'bearingrange', 'pose2point_native', 'pose2point'")
 
 
 def _covariance_2to3_full(var_u: np.ndarray, var_v: np.ndarray, var_d: np.ndarray,
@@ -321,6 +389,13 @@ class ISAM2FlowTracker:
         self.marg_dead_at_birth: bool = bool(getattr(cfg, "marg_dead_at_birth", False))
         self.marg_touch_sigma  : float = float(getattr(cfg, "marg_touch_sigma", 1e4))
         self.kf_cov_scale      : float = float(getattr(cfg, "kf_cov_scale", 1.0))
+        self.kf_factor_type: str = getattr(cfg, "kf_factor_type", "same")
+        if self.kf_factor_type == "same":
+            self.kf_factor_type = cfg.factor_type
+        if self.kf_factor_type == "pose2point_native":
+            require_native_p2p()     # fail at construction, not mid-sequence
+        self.kf_min_support: int = int(getattr(cfg, "kf_min_support", 0))
+        self.kf_min_gap    : int = int(getattr(cfg, "kf_min_gap", 0))
         self.final_lm          : bool  = bool(getattr(cfg, "final_lm", False))
         self.final_lm_max_iters: int   = int(getattr(cfg, "final_lm_max_iters", 100))
         _check_marg_lag(self.marg_lag, self.gnc_rounds)
@@ -526,7 +601,7 @@ class ISAM2FlowTracker:
             lm = table.get((int(np.rint(uv1[j, 0])), int(np.rint(uv1[j, 1]))))
             if lm is None or lm in seen or (est is not None and not est.exists(lm)):
                 continue
-            add_point(p_k, lm, obs2[j], cov2[j])
+            add_point(p_k, lm, obs2[j], cov2[j], self.kf_factor_type)
             seen.add(lm)
             keys.append(lm)
         return len(seen), keys
@@ -595,19 +670,12 @@ class ISAM2FlowTracker:
 
         gnc_on = self.gnc_rounds > 0
         kernel = "none" if gnc_on else cfg.kernel       # GNC replaces the kernel
-        reweight: list[tuple] = []                      # (graph slot, pose key, lm key, obs, cov)
+        reweight: list[tuple] = []            # (graph slot, pose key, lm key, obs, cov, ftype)
 
-        def add_point(pose_key: int, lm_key: int, obs: np.ndarray, cov: np.ndarray):
+        def add_point(pose_key: int, lm_key: int, obs: np.ndarray, cov: np.ndarray, ftype: str):
             if gnc_on:
-                reweight.append((graph.size(), pose_key, lm_key, obs, cov))
-            if cfg.factor_type == "bearingrange":
-                graph.add(make_native_point_factor(pose_key, lm_key, obs, cov, kernel, cfg.kernel_delta))
-            elif cfg.factor_type == "pose2point_native":
-                graph.add(make_native_pose_to_point_factor(pose_key, lm_key, obs, cov, kernel, cfg.kernel_delta))
-            else:
-                graph.add(make_pose_to_point_factor(
-                    pose_key, lm_key, obs,
-                    robustify(gtsam.noiseModel.Gaussian.Covariance(cov), kernel, cfg.kernel_delta)))
+                reweight.append((graph.size(), pose_key, lm_key, obs, cov, ftype))
+            graph.add(make_point_factor(ftype, pose_key, lm_key, obs, cov, kernel, cfg.kernel_delta))
 
         surviving: dict[tuple[int, int], _TrackState] = {}
         dead: list[_TrackState] = list(self.tracks.values())    # un-popped = no row carried them
@@ -623,12 +691,12 @@ class ISAM2FlowTracker:
                 lm_key = gtsam.symbol("l", self.next_lm_id)
                 self.next_lm_id += 1
                 values.insert(lm_key, gtsam.Point3(*(T_f_est[:3, :3] @ obs1[i] + T_f_est[:3, 3])))
-                add_point(p_f, lm_key, obs1[i], cov1[i])
+                add_point(p_f, lm_key, obs1[i], cov1[i], cfg.factor_type)
                 track = _TrackState(lm_key=lm_key, fvar=fvar2[i].copy(), n_obs=2, born=data.from_idx)
             else:
                 track = _TrackState(lm_key=track.lm_key, fvar=fvar2[i].copy(), n_obs=track.n_obs + 1,
                                     born=track.born)
-            add_point(p_k, track.lm_key, obs2[i], cov2[i])
+            add_point(p_k, track.lm_key, obs2[i], cov2[i], cfg.factor_type)
             n_in_graph += 1
             key1 = (int(np.rint(uv1[i, 0])), int(np.rint(uv1[i, 1])))
             lm_table.setdefault(key1, track.lm_key)
@@ -638,10 +706,16 @@ class ISAM2FlowTracker:
         self.frame_lm[data.from_idx] = lm_table
 
         # -- keyframe rows: extra p_k -> l on the keyframe's landmarks
-        n_kf, kf_keys = 0, []
+        n_kf, kf_keys, kf_gate, kf_gap = 0, [], 0, -1
         if data.kf is not None:
-            keep_from = data.kf.kf_idx
-            n_kf, kf_keys = self._keyframe_factors(data.kf, K, p_k, add_point)
+            keep_from = data.kf.kf_idx        # must survive even a gated frame
+            kf_gap = k - data.kf.kf_idx
+            if n_in_graph < self.kf_min_support:
+                kf_gate = 1
+            elif kf_gap < self.kf_min_gap:
+                kf_gate = 2
+            else:
+                n_kf, kf_keys = self._keyframe_factors(data.kf, K, p_k, add_point)
         else:
             keep_from = data.from_idx - self.FRAME_LM_KEEP
         self.frame_lm = {f: t for f, t in self.frame_lm.items() if f >= keep_from}
@@ -702,6 +776,7 @@ class ISAM2FlowTracker:
         self.stats.append(dict(frame=k, live_vars=live_vars, n_tracks=len(surviving),
                                n_in_graph=n_in_graph, n_kf_obs=n_kf,
                                kf_idx=(data.kf.kf_idx if data.kf is not None else -1),
+                               kf_gap=kf_gap, kf_gate=kf_gate,
                                ms=(time.perf_counter() - t_start) * 1e3))
 
         return _matrix_to_se3(self.T_chain if cfg.readout == "chain" else T_k)
@@ -752,7 +827,7 @@ class ISAM2FlowTracker:
     def _gnc_reweight(self, reweight: list, new_idx: list, p_k: int) -> None:
         """Anneal the GM surrogate over this frame's point factors (see module
         docstring). Earlier frames keep the weight they were frozen with."""
-        rows = [(new_idx[slot], pk, lk, o, c) for slot, pk, lk, o, c in reweight]
+        rows = [(new_idx[slot], pk, lk, o, c, ft) for slot, pk, lk, o, c, ft in reweight]
         w = np.ones(len(rows))
         mu: float | None = None
         rollback = ""
@@ -761,7 +836,7 @@ class ISAM2FlowTracker:
             fg = self.isam.getFactorsUnsafe()
             # the factor carries cov/w, so its error is w/2 * r^2 unweighted
             r2 = np.array([2.0 * fg.at(i).error(est) / w[j]
-                           for j, (i, _, _, _, _) in enumerate(rows)])
+                           for j, (i, _, _, _, _, _) in enumerate(rows)])
             if mu is None:
                 mu = max(2.0 * float(r2.max()) / self.gnc_c ** 2, 2.0)
             w = gnc_weights(r2, mu, self.gnc_c, self.gnc_w_floor)
@@ -776,23 +851,24 @@ class ISAM2FlowTracker:
             self.n_gnc_rollback += 1
 
     def _gnc_replace(self, rows: list, w: np.ndarray) -> list:
-        """Rebuild this frame's point factors at covariance cov/w, in place."""
+        """Rebuild this frame's point factors at covariance cov/w, in place.
+
+        Each row is rebuilt with its OWN ftype (not self.cfg.factor_type): a
+        keyframe row carries whatever kf_factor_type resolved to, which may
+        differ from the chain's factor_type (e.g. a 2-dof bearing row must not
+        be rebuilt as a 3-dof factor with a 2x2 noise model — gtsam dimension
+        assertion).
+        """
         g = gtsam.NonlinearFactorGraph()
         remove = []
-        for j, (i, pk, lk, o, c) in enumerate(rows):
+        for j, (i, pk, lk, o, c, ft) in enumerate(rows):
             remove.append(i)
-            cw = c / w[j]
-            if self.cfg.factor_type == "bearingrange":
-                g.add(make_native_point_factor(pk, lk, o, cw, "none", 0.0))
-            elif self.cfg.factor_type == "pose2point_native":
-                g.add(make_native_pose_to_point_factor(pk, lk, o, cw, "none", 0.0))
-            else:
-                g.add(make_pose_to_point_factor(pk, lk, o, gtsam.noiseModel.Gaussian.Covariance(cw)))
+            g.add(make_point_factor(ft, pk, lk, o, c / w[j], "none", 0.0))
         res = self.isam.update(g, gtsam.Values(), remove)
         assert isinstance(res, gtsam.ISAM2Result), "GNC requires plain gtsam.ISAM2 (not marg_lag)"
         fresh = list(res.getNewFactorsIndices())
         assert len(fresh) == len(rows), f"factor index drift {len(fresh)} != {len(rows)}"
-        return [(fresh[j], pk, lk, o, c) for j, (_, pk, lk, o, c) in enumerate(rows)]
+        return [(fresh[j], pk, lk, o, c, ft) for j, (_, pk, lk, o, c, ft) in enumerate(rows)]
 
     def _gnc_diverged(self, rows: list, p_k: int) -> str:
         """Reason string if this frame's estimate has run away, else ''.
@@ -912,7 +988,8 @@ class ISAM2_Graph(IOptimizer[ISAM2_GraphInput, dict, ISAM2_GraphOutput]):
 
     def frame_stats(self) -> dict[str, np.ndarray] | None:
         """Per-frame backend stats as column arrays (frame, live_vars, n_tracks,
-        n_in_graph, ms), or None before the first step."""
+        n_in_graph, n_kf_obs, kf_idx, kf_gap, kf_gate, ms), or None before the
+        first step."""
         tracker = self._tracker()
         if tracker is None or not tracker.stats:
             return None
@@ -925,13 +1002,15 @@ class ISAM2_Graph(IOptimizer[ISAM2_GraphInput, dict, ISAM2_GraphOutput]):
             return
         lv = np.array([s["live_vars"] for s in tracker.stats])
         ms = np.array([s["ms"] for s in tracker.stats])
+        n_gated = int(sum(1 for s in tracker.stats if s["kf_gate"] > 0))
         # the plateau is the result: unbounded climbs with the frame index, marginalized levels off
         Logger.write("info",
             f"ISAM2_Graph marg_lag={tracker.marg_lag}: live variables peak {lv.max()}, "
             f"last {lv[-1]}, median over the last half {np.median(lv[len(lv) // 2:]):.0f} | "
             f"step ms median {np.median(ms):.0f}, p90 {np.percentile(ms, 90):.0f}, "
             f"max {ms.max():.0f} | {tracker.next_lm_id} landmarks minted over {len(lv)} frames"
-            f" | {tracker.n_kf_total} keyframe re-observations")
+            f" | {tracker.n_kf_total} keyframe re-observations, {n_gated} keyframe frames gated "
+            f"(support/gap)")
 
     @classmethod
     def is_valid_config(cls, config: SimpleNamespace | None) -> None:
@@ -973,6 +1052,10 @@ class ISAM2_Graph(IOptimizer[ISAM2_GraphInput, dict, ISAM2_GraphOutput]):
             "marg_dead_at_birth": lambda b: isinstance(b, bool),
             "marg_touch_sigma"  : lambda v: isinstance(v, (int, float)) and v >= 0.,
             "kf_cov_scale"      : lambda v: isinstance(v, (int, float)) and v > 0.,
+            "kf_factor_type"    : lambda s: s in {"same", "bearing", "bearingrange",
+                                                  "pose2point_native", "pose2point"},
+            "kf_min_support"    : lambda v: isinstance(v, int) and v >= 0,
+            "kf_min_gap"        : lambda v: isinstance(v, int) and v >= 0,
             "final_lm"          : lambda b: isinstance(b, bool),
             "final_lm_max_iters": lambda v: isinstance(v, int) and v >= 1,
         }

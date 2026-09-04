@@ -18,7 +18,7 @@ import pypose as pp
 from Module.Map import VisualMap, FrameNode, MatchObs, PointNode
 from Module.Optimization.GTSAM.ISAM2Optimizer import (
     ISAM2FlowTracker, ISAM2_Graph, ISAM2_GraphInput, ISAM2_GraphOutput, ISAM2_KeyframeRows,
-    _matrix_to_se3, _NATIVE_P2P, gnc_weights, make_native_point_factor,
+    _matrix_to_se3, _NATIVE_P2P, gnc_weights, make_native_bearing_factor, make_native_point_factor,
     make_native_pose_to_point_factor)
 from Utility.GTSAM_Utils import make_pose_to_point_factor
 
@@ -253,6 +253,53 @@ def test_bearingrange_carries_same_information():
             <= 1e-3 * max(f_python.error(values), 1e-12)
 
 
+def test_bearing_factor_is_bearing_block_of_bearingrange():
+    """The bearing-only factor must be exactly the bearing block of the same
+    (bearing, range) covariance a BearingRangeFactor3D on this observation would
+    use: zero residual on-ray at any positive scale (bearingrange still sees
+    the range mismatch), decoupled-and-equal to bearingrange off-ray under
+    isotropic noise (where the range residual vanishes and the cross term is
+    identically zero), dim() == 2, and finite under Huber.
+    """
+    rng = np.random.default_rng(5)
+    pose_key, lm_key = gtsam.symbol("p", 0), gtsam.symbol("l", 0)
+    m = np.array([2.3, 0.4, -0.6])
+    A = rng.normal(size=(3, 3)) * 0.05
+    cov = A @ A.T + 0.01 * np.eye(3)
+    f_bear = make_native_bearing_factor(pose_key, lm_key, m, cov, "none", 0.1)
+    f_br = make_native_point_factor(pose_key, lm_key, m, cov, "none", 0.1)
+    assert f_bear.dim() == 2
+
+    for s in (0.5, 2.0):
+        values = gtsam.Values()
+        values.insert(pose_key, gtsam.Pose3())
+        values.insert(lm_key, gtsam.Point3(*(s * m)))
+        assert f_bear.error(values) < 1e-9, f"scale {s}: bearing error should vanish on-ray"
+        assert f_br.error(values) > 1e-6, f"scale {s}: bearingrange error should NOT vanish"
+
+    # cov_br's bearing/range cross term is 0 for isotropic noise (B^T(I-bb^T)b/r == 0)
+    iso_cov = 0.02 * np.eye(3)
+    f_bear_iso = make_native_bearing_factor(pose_key, lm_key, m, iso_cov, "none", 0.1)
+    f_br_iso = make_native_point_factor(pose_key, lm_key, m, iso_cov, "none", 0.1)
+    r = np.linalg.norm(m)
+    u = m / r
+    off_ray = rng.normal(size=3)
+    off_ray -= (off_ray @ u) * u
+    p_off = u + 0.3 * off_ray / np.linalg.norm(off_ray)
+    p_off = p_off * (r / np.linalg.norm(p_off))          # |p_off| == |m| exactly
+    values_off = gtsam.Values()
+    values_off.insert(pose_key, gtsam.Pose3())
+    values_off.insert(lm_key, gtsam.Point3(*p_off))
+    assert f_bear_iso.error(values_off) == pytest.approx(f_br_iso.error(values_off), rel=1e-9, abs=1e-12)
+    assert f_bear_iso.error(values_off) > 1e-9           # a nontrivial check, not 0 == 0
+
+    f_bear_huber = make_native_bearing_factor(pose_key, lm_key, m, cov, "huber", 0.1)
+    values_pert = gtsam.Values()
+    values_pert.insert(pose_key, gtsam.Pose3())
+    values_pert.insert(lm_key, gtsam.Point3(*(m + rng.normal(scale=0.05, size=3))))
+    assert np.isfinite(f_bear_huber.error(values_pert))
+
+
 @pytest.mark.skipif(_NATIVE_P2P is None,
                     reason="gtsam wheel lacks the PoseToPointFactor wrapper patch "
                            "(Scripts/patches/gtsam-posetopoint-wrapper.patch)")
@@ -305,6 +352,45 @@ def test_keyframe_rows_reuse_landmark_keys():
     p3 = gtsam.symbol("p", 3)
     on_p3 = [fg.at(i) for i in range(fg.size()) if fg.at(i) is not None and p3 in fg.at(i).keys()]
     assert len(on_p3) == 2 * len(lms)                          # motion prior off (sigma 0)
+
+
+def test_kf_bearing_rows_leave_depth_free():
+    """A biased keyframe depth sample must not move the pose under
+    kf_factor_type='bearing' (depth-free by construction), while 'same' (the
+    chain's own 3D factor family) is sensitive to it."""
+    lms = landmarks()
+    jobs = chained_jobs(4, lms)
+
+    def run(kf_factor_type: str, biased: bool):
+        tracker = ISAM2FlowTracker(make_cfg(kf_factor_type=kf_factor_type))
+        tracker.step(jobs[0])
+        errs = []
+        for job in jobs[1:]:
+            job = with_kf(job, 0, lms)
+            assert job.kf is not None
+            if biased:
+                job.kf.pixel2_d = job.kf.pixel2_d * 1.3
+            pose = tracker.step(job)
+            errs.append(np.linalg.norm(_translation(pose) - pose_gt(job.frame_idx)[:3, 3]))
+            assert tracker.stats[-1]["n_kf_obs"] == len(lms)
+        return errs, tracker
+
+    errs_same_clean, _ = run("same", False)
+    errs_same_biased, _ = run("same", True)
+    errs_bear_clean, _ = run("bearing", False)
+    errs_bear_biased, tracker_bear = run("bearing", True)
+
+    d_same = float(np.mean(np.abs(np.array(errs_same_biased) - np.array(errs_same_clean))))
+    d_bear = float(np.mean(np.abs(np.array(errs_bear_biased) - np.array(errs_bear_clean))))
+    assert d_bear < 1e-3, f"bearing kf rows should be ~insensitive to a keyframe depth bias: {d_bear}"
+    assert d_same > 10 * d_bear, f"same-family kf rows should be far more sensitive: {d_same} vs {d_bear}"
+    assert errs_bear_biased[-1] < 0.02
+
+    fg = tracker_bear.isam.getFactorsUnsafe()
+    p3 = gtsam.symbol("p", 3)
+    on_p3 = [fg.at(i) for i in range(fg.size()) if fg.at(i) is not None and p3 in fg.at(i).keys()]
+    assert sum(1 for f in on_p3 if f.dim() == 3) == len(lms)   # chain rows (pose2point)
+    assert sum(1 for f in on_p3 if f.dim() == 2) == len(lms)   # bearing keyframe rows
 
 
 def test_keyframe_rows_ignore_unknown_pixels_and_stale_tables():
@@ -376,10 +462,12 @@ def test_keyframe_pose_survives_marg_lag_until_keyframe_moves():
     assert 0 not in tracker.frame_lm and 4 in tracker.frame_lm
 
 
-def test_keyframe_rows_under_gnc():
+@pytest.mark.parametrize("kf_factor_type", ["same", "bearing"])
+def test_keyframe_rows_under_gnc(kf_factor_type):
     lms = landmarks()
     tracker = ISAM2FlowTracker(make_cfg(factor_type="bearingrange", kernel="none",
-                                        gnc_rounds=3, gnc_c=0.4, gnc_mu_rate=5.0))
+                                        gnc_rounds=3, gnc_c=0.4, gnc_mu_rate=5.0,
+                                        kf_factor_type=kf_factor_type))
     jobs = chained_jobs(3, lms)
     tracker.step(jobs[0])
     for job in jobs[1:]:
@@ -408,6 +496,63 @@ def test_kf_cov_scale_config():
     with pytest.raises(ValueError):
         ISAM2_Graph.is_valid_config(make_cfg(kf_cov_scale=0.0))
     assert ISAM2FlowTracker(make_cfg(kf_cov_scale=4.0)).kf_cov_scale == 4.0
+
+
+def test_kf_gates_skip_as_specified():
+    lms = landmarks()
+    jobs = chained_jobs(4, lms)
+
+    # support gate: chain support (== len(lms)) never reaches kf_min_support -> every kf frame gated
+    tracker = ISAM2FlowTracker(make_cfg(kf_min_support=len(lms) + 1))
+    tracker.step(jobs[0])
+    for job in jobs[1:]:
+        tracker.step(with_kf(job, 0, lms))
+        assert tracker.stats[-1]["kf_gate"] == 1
+        assert tracker.stats[-1]["n_kf_obs"] == 0
+    assert 0 in tracker.frame_lm                          # kept alive despite being gated every frame
+
+    # gap gate: kf_min_gap=4 gates gaps 2-3, gaps 4-5 add rows
+    jobs5 = chained_jobs(5, lms)
+    tracker = ISAM2FlowTracker(make_cfg(kf_min_gap=4))
+    tracker.step(jobs5[0])
+    gates, gaps = [], []
+    for job in jobs5[1:]:
+        tracker.step(with_kf(job, 0, lms))
+        gates.append(tracker.stats[-1]["kf_gate"])
+        gaps.append(tracker.stats[-1]["kf_gap"])
+    assert gaps == [2, 3, 4, 5]
+    assert gates == [2, 2, 0, 0]
+    assert tracker.stats[-1]["n_kf_obs"] == len(lms)
+
+    # precedence: support gate wins even when the gap gate alone would have passed
+    tracker = ISAM2FlowTracker(make_cfg(kf_min_support=len(lms) + 1, kf_min_gap=1))
+    tracker.step(jobs[0])
+    tracker.step(with_kf(jobs[1], 0, lms))                 # gap 2, satisfies kf_min_gap=1 alone
+    assert tracker.stats[-1]["kf_gate"] == 1
+
+
+def test_kf_factor_type_config():
+    for v in ("same", "bearing", "bearingrange", "pose2point"):
+        ISAM2_Graph.is_valid_config(make_cfg(kf_factor_type=v))
+    with pytest.raises(ValueError):
+        ISAM2_Graph.is_valid_config(make_cfg(kf_factor_type="reprojection"))
+    with pytest.raises(ValueError):
+        ISAM2_Graph.is_valid_config(make_cfg(kf_min_support=-1))
+    with pytest.raises(ValueError):
+        ISAM2_Graph.is_valid_config(make_cfg(kf_min_gap=1.5))
+
+    assert ISAM2FlowTracker(make_cfg(factor_type="bearingrange")).kf_factor_type == "bearingrange"
+    assert ISAM2FlowTracker(make_cfg(factor_type="bearingrange",
+                                     kf_factor_type="bearing")).kf_factor_type == "bearing"
+
+
+@pytest.mark.skipif(_NATIVE_P2P is None,
+                    reason="gtsam wheel lacks the PoseToPointFactor wrapper patch "
+                           "(Scripts/patches/gtsam-posetopoint-wrapper.patch)")
+def test_kf_factor_type_native_config():
+    ISAM2_Graph.is_valid_config(make_cfg(kf_factor_type="pose2point_native"))
+    assert ISAM2FlowTracker(
+        make_cfg(kf_factor_type="pose2point_native")).kf_factor_type == "pose2point_native"
 
 
 def make_map(n_frames: int) -> VisualMap:

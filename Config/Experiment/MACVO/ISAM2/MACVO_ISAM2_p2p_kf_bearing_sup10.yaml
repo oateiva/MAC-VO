@@ -1,14 +1,14 @@
 #
-# Keyframe factor covariance inflated 64x. If ATE recovers toward the plain arm as this rises, the damage is over-weighted / biased keyframe evidence rather than wrong data association.
+# Both mitigations together: bearing-only keyframe connection AND a chain-support gate at 10.
 #
 # Diagnostic arm for the keyframe-tracker degradation on plane_nose
-# (2026-09-04). Base: MACVO_ISAM2_p2p_ft_kf.yaml
+# (2026-09-04). Base: MACVO_ISAM2_p2p_kf.yaml
 #
 Common:
   device: &device cuda
 
 Odometry:
-  name: MACVO-ISAM2-p2p-ft-kf-cov64
+  name: MACVO-ISAM2-p2p-kf-bearing-sup10
   args:
     device: *device
     edgewidth: 32
@@ -63,19 +63,10 @@ Odometry:
       monodepth:
         type: DepthAnythingV3
         args:
-          # Fine-tuned AITraining checkpoint: a single da3-giant (backbone+head
-          # keys only; loading it into the nested base arch matches 0 keys and
-          # silently leaves the net at random init).
-          model_name: da3-giant
-          weight: D:/aitraining_sweeps/final_da3_ssi_conf/epoch=12-val_absrel=0.0522.ckpt
+          model_name: da3nested-giant-large
+          weight: depth-anything/DA3NESTED-GIANT-LARGE-1.1
           device: *device
-          # ssi_confidence_l1 training makes the raw output scale/shift
-          # ambiguous; this is the global affine learningUAVO pinned on 3DF
-          # Zephyr GT (71 frames of plane_nose_full). q90 = depth_scale^2 puts
-          # the NLL variance in the same metric units (still uncalibrated).
-          depth_scale: 2.935553
-          depth_shift: 0.108397
-          q90: 8.61747
+          q90: 1.
 
   motion:
     type: StaticMotionModel
@@ -124,7 +115,9 @@ Odometry:
       min_flow_cov: 0.25
       min_depth_cov: 0.01
       match_cov_default: 0.25
-      kf_cov_scale: 64.0
+      kf_cov_scale: 1.0
+      kf_factor_type: bearing
+      kf_min_support: 10
 
 Datas: !include ../../Common/DeepODO_mono_experiments.yaml
 Preprocess: !include ../../Common/Preprocess.yaml
