@@ -444,6 +444,11 @@ class MonocularFrontend(ParallelEstimateMixin, IFrontend):
             monodepth_model.device = self._device_depth  # type: ignore[assignment]
         self.depth_model: DepthModelProtocol = monodepth_model
 
+        self.depth_seed: int | None = getattr(config, "depth_seed", None)
+        """Reseeds torch right before each depth inference, so unseeded RNG draws inside the
+        monodepth backbone become reproducible and configs sharing the same seed see identical
+        depth (also determinizes a `torch.randperm`-based selector run right after, e.g. `CovAwareSelector_NoDepth`)."""
+
     @Timer.cpu_timeit("Frontend.estimate")
     @Timer.gpu_timeit("Frontend.estimate")
     def estimate_pair(self, frame_t1: CameraData, frame_t2: CameraData) -> tuple[IDepth.Output, IMatcher.Output]:
@@ -455,6 +460,9 @@ class MonocularFrontend(ParallelEstimateMixin, IFrontend):
         return self.estimate_depth(frame_t2), self.estimate_flowcov(frame_t1, frame_t2)
 
     def estimate_depth(self, frame: CameraData) -> IDepth.Output:
+        if self.depth_seed is not None:
+            torch.manual_seed(self.depth_seed)
+            torch.cuda.manual_seed_all(self.depth_seed)
         out = self.depth_model.deepodo_inference(frame)
         if self._device_depth != self.config.device:
             return out.to(self.config.device)
@@ -483,6 +491,9 @@ class MonocularFrontend(ParallelEstimateMixin, IFrontend):
         if hasattr(config, "device_depth"):
             assert isinstance(config.device_depth, str) and "cuda" in config.device_depth, \
                 "device_depth must be a CUDA device string (e.g. 'cuda:1')"
+        if hasattr(config, "depth_seed"):
+            assert isinstance(config.depth_seed, int) and not isinstance(config.depth_seed, bool) and config.depth_seed >= 0, \
+                "depth_seed must be an int >= 0"
 
 
 class CUDAGraph_MonocularFrontend(CUDAGraphMixin, MonocularFrontend):
