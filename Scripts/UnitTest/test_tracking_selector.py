@@ -217,6 +217,58 @@ def test_fallback_without_covariance():
     assert bool((dist2 > 8.0 ** 2).all())
 
 
+def make_depth_masked(mask: torch.Tensor, value: float = 3.0) -> IDepth.Output:
+    return IDepth.Output(depth=torch.full((1, 1, H, W), value), mask=mask)
+
+
+def test_track_killed_by_mask():
+    """A carried track landing on a masked-out pixel must not reappear, mirroring
+    the existing invalid-depth kill."""
+    quality = 100.0 + dither()
+    quality[24, 30] = 0.01
+    selector = make_selector(max_match_cov=1.0, seed_radius=8.0)
+    selector.select_point(None, 50, make_depth(), make_depth(), make_match(quality, flow_u=5.0))  # type: ignore[arg-type]
+
+    mask = torch.ones((1, 1, H, W), dtype=torch.bool)
+    mask[0, 0, 24, 35] = False    # the carried track lands here (30 + flow_u=5)
+    depth_masked = make_depth_masked(mask)
+    out = selector.select_point(None, 50, depth_masked, depth_masked, make_match(quality))  # type: ignore[arg-type]
+    assert not bool(((out[:, 0] == 35) & (out[:, 1] == 24)).any())
+
+
+def test_seed_never_lands_on_masked_pixel():
+    """The global-minimum-quality pixel is masked out: it must never be seeded,
+    while an unmasked runner-up still is."""
+    quality = 100.0 + dither()
+    quality[24, 30] = 0.001
+    quality[24, 60] = 0.01
+    mask = torch.ones((1, 1, H, W), dtype=torch.bool)
+    mask[0, 0, 24, 30] = False
+    depth_masked = make_depth_masked(mask)
+
+    out = make_selector(max_match_cov=1.0).select_point(
+        None, 50, depth_masked, depth_masked, make_match(quality))  # type: ignore[arg-type]
+
+    assert not bool(((out[:, 0] == 30) & (out[:, 1] == 24)).any())
+    assert bool(((out[:, 0] == 60) & (out[:, 1] == 24)).any())
+
+
+def test_mask_none_matches_unmasked_baseline():
+    """Explicit `mask=None` must behave identically to omitting it (the default
+    code path stays exactly what it was before the mask feature existed)."""
+    quality = 100.0 + dither()
+    quality[24, 30] = 0.01
+    quality[40, 60] = 0.02
+    match = make_match(quality)
+
+    out_plain = make_selector(max_match_cov=1.0).select_point(
+        None, 50, make_depth(), make_depth(), match)  # type: ignore[arg-type]
+    depth_explicit_none = IDepth.Output(depth=torch.full((1, 1, H, W), 3.0), mask=None)
+    out_explicit_none = make_selector(max_match_cov=1.0).select_point(
+        None, 50, depth_explicit_none, depth_explicit_none, match)  # type: ignore[arg-type]
+    assert torch.equal(out_plain, out_explicit_none)
+
+
 def test_config_validation():
     TrackingCovAwareSelector.is_valid_config(make_cfg())
     with pytest.raises(KeyError):

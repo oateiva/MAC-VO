@@ -437,8 +437,9 @@ class TrackingCovAwareSelector(IKeypointSelector):
     pair equals `round(pixel2_uv)` of the previous pair for a surviving track.
 
     Per call (pair frame0 -> frame1, `match_est` = the OUTGOING flow of frame0):
-      1. Carried tracks are gated at frame0: inside the `mask_width` border and on
-         finite positive depth. No max-age and no per-step-cov kill (both measured
+      1. Carried tracks are gated at frame0: inside the `mask_width` border, on
+         finite positive depth, and (when the depth model provides one) on the
+         depth validity mask. No max-age and no per-step-cov kill (both measured
          harmful in learningUAVO's FINDINGS.md; identical gate sets for tracks and
          seeds also keep the downstream association airtight).
       2. New tracks are seeded where no live track sits within `seed_radius`:
@@ -459,8 +460,10 @@ class TrackingCovAwareSelector(IKeypointSelector):
         self.track_uv: torch.Tensor | None = None
         self.fallback_grid_selector = GridSelector(SimpleNamespace(mask_width=self.config.mask_width, device=self.config.device))
 
-    def _gate_carried(self, depth0_map: torch.Tensor) -> torch.Tensor:
-        """Round carried tracks to pixels, kill those at the border or on invalid depth."""
+    def _gate_carried(self, depth0_est: IDepth.Output) -> torch.Tensor:
+        """Round carried tracks to pixels, kill those at the border, on invalid depth,
+        or (when provided) on an invalid depth-mask pixel."""
+        depth0_map = depth0_est.depth.to(self.config.device)
         height, width = depth0_map.shape[-2:]
         border = int(self.config.mask_width)
         if self.track_uv is None or self.track_uv.numel() == 0:
@@ -473,12 +476,16 @@ class TrackingCovAwareSelector(IKeypointSelector):
         )
         kp = kp[inbound]
         depth = depth0_map[0, 0, kp[:, 1], kp[:, 0]]
-        return kp[torch.isfinite(depth) & (depth > 0)]
+        valid = torch.isfinite(depth) & (depth > 0)
+        if depth0_est.mask is not None:
+            valid = valid & depth0_est.mask.to(depth0_map.device)[0, 0, kp[:, 1], kp[:, 0]]
+        return kp[valid]
 
-    def _seed(self, carried: torch.Tensor, numPoint: int, depth0_map: torch.Tensor,
+    def _seed(self, carried: torch.Tensor, numPoint: int, depth0_est: IDepth.Output,
               match_est: IMatcher.Output) -> torch.Tensor:
         """Cov-aware seeds, spaced against `carried` and each other at seed_radius."""
         assert match_est.cov is not None
+        depth0_map = depth0_est.depth.to(self.config.device)
         # Batch 0 only: a paired-window matcher returns B=2 while depth is B=1, and
         # every downstream sample of the selected pixels reads batch 0. Same
         # convention as CovAwareSelector / CovAwareSelector_NoDepth.
@@ -506,9 +513,10 @@ class TrackingCovAwareSelector(IKeypointSelector):
         flow_cov_thresh = min(self.config.max_match_cov, candidate_q.nanmedian().item() * self.config.median_rel)
         point_mask = candidates & (quality_map < flow_cov_thresh)
 
-        # Must stay the same depth gate _gate_carried applies: identical gate sets
-        # keep the downstream pixel association free of seed-resurrection aliasing.
+        # Same depth + mask gate as _gate_carried (identical gate sets).
         point_mask = point_mask & torch.isfinite(depth0_map) & (depth0_map > 0)
+        if depth0_est.mask is not None:
+            point_mask &= depth0_est.mask[:1].to(point_mask.device)
 
         if match_est.mask is not None:
             point_mask = torch.logical_and(point_mask, match_est.mask[:1].to(point_mask.device))
@@ -527,8 +535,7 @@ class TrackingCovAwareSelector(IKeypointSelector):
     @Timer.gpu_timeit("KPSelector.select")
     @torch.inference_mode()
     def select_point(self, frame: CameraData, numPoint: int, depth0_est: IDepth.Output, depth1_est: IDepth.Output, match_est: IMatcher.Output | None) -> torch.Tensor:
-        depth0_map = depth0_est.depth.to(self.config.device)
-        carried = self._gate_carried(depth0_map)
+        carried = self._gate_carried(depth0_est)
 
         if match_est is None or match_est.cov is None:
             # No covariance map: grid fallback, still spaced against live tracks.
@@ -536,7 +543,7 @@ class TrackingCovAwareSelector(IKeypointSelector):
             seeds = spaced_greedy(grid, carried.float(), float(self.config.seed_radius), cap=numPoint)
             seeds = seeds.to(device=self.config.device, dtype=torch.long)
         else:
-            seeds = self._seed(carried, numPoint, depth0_map, match_est)
+            seeds = self._seed(carried, numPoint, depth0_est, match_est)
 
         keypoints = torch.cat([carried, seeds], dim=0)
 

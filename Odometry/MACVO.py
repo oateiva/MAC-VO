@@ -503,6 +503,16 @@ class MACVO(IOdometry[T_SensorFrame], ConfigTestable):
             (self.edge_width, frame1.camera.width - self.edge_width),
             (self.edge_width, frame1.camera.height - self.edge_width)
         )
+        if depth1.mask is not None:
+            kp_k_px = kp_k.round().long()
+            u = kp_k_px[:, 0].clamp(0, frame1.camera.width  - 1)
+            v = kp_k_px[:, 1].clamp(0, frame1.camera.height - 1)
+            depth_valid = depth1.mask.to(self.device)[0, 0, v, u]
+            n_dropped = int((inbound & ~depth_valid).sum().item())
+            if n_dropped > 0:
+                Logger.write("info", f"_observe_keyframe @ {frame_idx}: dropped {n_dropped} "
+                                     f"re-observations on invalid-depth (sky) pixels")
+            inbound = inbound & depth_valid
         inbound_cpu = inbound.cpu()
         kp_kf, kp_k = kp_kf[inbound], kp_k[inbound]
         kf_obs, kf_point_idx = kf_obs[inbound_cpu], kf_point_idx[inbound_cpu]

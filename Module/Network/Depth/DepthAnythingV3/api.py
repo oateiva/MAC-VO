@@ -38,10 +38,11 @@ from Module.Network.Depth.DepthAnythingV3.src.depth_anything_3.utils.io.input_pr
 from Module.Network.Depth.DepthAnythingV3.src.depth_anything_3.utils.io.output_processor import OutputProcessor
 from Module.Network.Depth.DepthAnythingV3.src.depth_anything_3.utils.logger import logger
 from Module.Network.Depth.DepthAnythingV3.src.depth_anything_3.utils.pose_align import align_poses_umeyama
-from Module.Network.Depth.DepthAnythingV3.src.depth_anything_3.utils.alignment import apply_metric_scaling
+from Module.Network.Depth.DepthAnythingV3.src.depth_anything_3.utils.alignment import apply_metric_scaling, compute_sky_mask
 
 from DataLoader import CameraData
 from Module.Frontend.StereoDepth import IDepth
+from Utility.PrettyPrint import Logger
 
 torch.backends.cudnn.benchmark = False
 # logger.info("CUDNN Benchmark Disabled")
@@ -49,6 +50,24 @@ import torchvision.transforms as T
 
 SAFETENSORS_NAME = "model.safetensors"
 CONFIG_NAME = "config.json"
+
+
+def dilate_invalid(valid: torch.Tensor, margin: int) -> torch.Tensor:
+    """
+    Grow the INVALID (False) region of a `[B, 1, H, W]` boolean validity map by
+    `margin` pixels in every direction (a margin of 0 is an exact identity).
+
+    Implemented as a max-pool over the invalid indicator: max-pooling a binary
+    mask with a `(2*margin+1)`-sized kernel is exactly morphological dilation,
+    clipped at the tensor border by the matching `padding=margin`.
+    """
+    if margin <= 0:
+        return valid
+    invalid = (~valid).float()
+    dilated_invalid = torch.nn.functional.max_pool2d(
+        invalid, kernel_size=2 * margin + 1, stride=1, padding=margin
+    )
+    return dilated_invalid < 0.5
 
 
 class DepthAnything3(nn.Module, PyTorchModelHubMixin):
@@ -125,7 +144,37 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
             raise ValueError("`config.weight` must be set for DepthAnything3")
         self._load_weight(weight_path)
         self.to(self.device)
+
+        # sky_margin_px == 0 (default) keeps `mask=None` always - bit-identical.
+        sky_margin_px = getattr(config, "sky_margin_px", 0)
+        if not isinstance(sky_margin_px, int) or isinstance(sky_margin_px, bool) or sky_margin_px < 0:
+            raise ValueError("`config.sky_margin_px` must be an int >= 0")
+        self.sky_margin_px: int = sky_margin_px
+
+        sky_prob_thresh = getattr(config, "sky_prob_thresh", 0.3)
+        if not isinstance(sky_prob_thresh, (int, float)) or isinstance(sky_prob_thresh, bool):
+            raise ValueError("`config.sky_prob_thresh` must be a float")
+        self.sky_prob_thresh: float = float(sky_prob_thresh)
+
+        self._last_sky: torch.Tensor | None = None
+        self._warned_no_sky_head: bool = False
+        if self.sky_margin_px > 0:
+            metric_branch = getattr(self.model, "da3_metric", None)
+            if metric_branch is not None:
+                metric_branch.register_forward_hook(self._capture_sky_output)
         return
+
+    def _capture_sky_output(self, module: nn.Module, inputs: tuple, output: object) -> None:
+        """Forward hook on the nested model's metric branch (`self.model.da3_metric`,
+        `NestedDepthAnything3Net.forward`'s `metric_output = self.da3_metric(x)`).
+
+        Stashes the raw sky-probability map (`output.sky`, shape `(B, S, h', w')`,
+        `h'/w'` possibly downsampled relative to the depth map) for
+        `deepodo_inference` to turn into a validity mask. Only installed when
+        `sky_margin_px > 0`.
+        """
+        sky = getattr(output, "sky", None)
+        self._last_sky = sky.detach() if sky is not None else None
 
     def _load_weight(self, weight: str) -> None:
         """Load weights from either a Hugging Face source or a local checkpoint file.
@@ -397,10 +446,25 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
                 scale_factor=300.,
             )
 
+        mask: torch.Tensor | None = None
+        if self.sky_margin_px > 0:
+            if self._last_sky is None:
+                if not self._warned_no_sky_head:
+                    Logger.write("warn", "[DepthAnything3] sky_margin_px > 0 but no sky prediction was "
+                                         "captured (no da3_metric sky head) - depth validity mask disabled.")
+                    self._warned_no_sky_head = True
+            else:
+                sky = self._last_sky[:, 1:2]
+                if sky.shape[-2:] != scaled_depth.shape[-2:]:
+                    sky = torch.nn.functional.interpolate(sky, size=scaled_depth.shape[-2:], mode="nearest")
+                valid = compute_sky_mask(sky, threshold=self.sky_prob_thresh)
+                mask = dilate_invalid(valid, self.sky_margin_px)
+
         return IDepth.Output(
             depth=scaled_depth,
             disparity=None,
             cov=variance,
+            mask=mask,
             disparity_uncertainty=None
             )
 
