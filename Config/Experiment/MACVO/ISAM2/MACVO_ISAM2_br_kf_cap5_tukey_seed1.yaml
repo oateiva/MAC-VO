@@ -1,0 +1,133 @@
+# seeded depth: identical depth maps across all *_seed1 arms, so differences are attributable to the arm
+#
+# kf_max_obs_per_landmark: 5 -- caps how many keyframe factors any single
+# landmark can accumulate over the whole run. Measured on plane_nose: a rare
+# gross monocular-depth error (15 of 1169 landmarks) touches the chain only
+# twice normally, but keyframe re-observation couples it to every frame while
+# its keyframe (and every inheriting keyframe) stays live -- those 15 landmarks
+# carried a median of 33 keyframe factors (population median 0) with tight
+# covariance, amplifying the outlier and destabilizing the solve run-to-run
+# (RMSE_ATE 4.72 vs 7.14 m across two identical runs). This arm bounds that
+# influence to 5 keyframe factors per landmark.
+#
+# Diagnostic arm for the keyframe-tracker degradation on plane_nose
+# (2026-09-04). Base: MACVO_ISAM2_br_kf.yaml
+#
+Common:
+  device: &device cuda
+
+Odometry:
+  name: MACVO-ISAM2-br-kf-cap5-tukey-seed1
+  args:
+    device: *device
+    edgewidth: 32
+    num_point: 200        # Caps the SEEDS per frame; carried tracks are never dropped
+    match_cov_default: 0.25
+    profile: false
+    mapping: true
+    # Persistent graph: let nearly every frame reach the optimizer; the
+    # backend's own min_support coast handles low-support frames.
+    min_num_point: 1
+
+  cov:
+    obs:
+      type: MatchCovariance
+      args:
+        device: *device
+        kernel_size: 31
+        match_cov_default: 0.25
+        min_depth_cov: 0.01
+        min_flow_cov: 0.25
+
+  keypoint:
+    type: TrackingCovAwareSelector
+    args:
+      device: *device
+      mask_width: 32      # must stay >= edgewidth and > cov kernel_size // 2
+      kernel_size: 7
+      max_match_cov: 0.5
+      median_rel: 1.5
+      seed_radius: 90.0
+
+  mappoint:
+    type: MappingPointSelector
+    args:
+      device: *device
+      max_depth: 7.0
+      max_depth_cov: 1.0
+      mask_width: 32
+
+  frontend:
+    type: MonocularFrontend
+    args:
+      depth_seed: 1
+      device: *device
+      parallel: false     # one CUDA stream = one allocator pool; parallel:true + the keyframe flow paged VRAM (24 GB card)
+      match:
+        type: FlowFormerCovMatcher
+        args:
+          weight: ./Model/MACVO_FrontendCov.pth
+          device: *device
+          enc_dtype: fp32
+          dec_dtype: fp32
+      monodepth:
+        type: DepthAnythingV3
+        args:
+          model_name: da3nested-giant-large
+          weight: depth-anything/DA3NESTED-GIANT-LARGE-1.1
+          device: *device
+          q90: 1.
+
+  motion:
+    type: StaticMotionModel
+    args:
+
+  outlier:
+    # Identity on purpose: any row dropped between selector and map splits a
+    # track; the ISAM2 backend applies its own depth/PSD gates per row.
+    type: IdentityFilter
+    args:
+
+  postprocess:
+    type: MotionInterpolate
+    args:
+
+  keyframe:
+    type: AllKeyframe
+    args:
+
+  keyframe_tracker:
+    type: Parallax
+    args:
+      px: 100.0
+      max_gap: 20
+
+  optimizer:
+    type: ISAM2_Graph
+    args:
+      device: cpu
+      parallel: false           # stateful persistent graph — sequential only
+      factor_type: bearingrange
+      kernel: huber
+      kernel_delta: 0.1
+      relin_threshold: 0.05
+      relin_skip: 1
+      extra_updates: 3
+      warmup_frames: 10
+      warmup_extra: 5
+      depth_var_scale: 2.5
+      accumulate_fvar: true
+      motion_init: cv
+      motion_prior_sigma: 0.3
+      coast_sigma: 0.1
+      min_support: 6
+      readout: chain
+      min_flow_cov: 0.25
+      min_depth_cov: 0.01
+      match_cov_default: 0.25
+      kf_cov_scale: 1.0
+      kf_max_obs_per_landmark: 5
+      kf_kernel: tukey
+
+Datas: !include ../../Common/DeepODO_mono_experiments.yaml
+Preprocess: !include ../../Common/Preprocess.yaml
